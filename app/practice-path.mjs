@@ -1,5 +1,5 @@
 export function phraseKey(word) {
-  return `${word.telugu}::${word.english}`;
+  return word.progressKey ?? `${word.telugu}::${word.english}`;
 }
 
 export function resolvePracticePath(packs, confidence) {

@@ -17,6 +17,7 @@ import {
   situationGroups,
   type Lesson,
   type SituationGroup,
+  type TeluguAlternative,
   type TeluguWord,
 } from "./course-data";
 import {
@@ -95,6 +96,60 @@ function SpokenGuide({
         </span>
       ) : null}
     </span>
+  );
+}
+
+function RegisterAlternatives({
+  alternatives,
+  notify,
+  showPronunciation = true,
+  className = "",
+}: {
+  alternatives: TeluguAlternative[] | undefined;
+  notify: (message: string) => void;
+  showPronunciation?: boolean;
+  className?: string;
+}) {
+  if (!alternatives?.length) return null;
+
+  return (
+    <section
+      className={`register-alternatives ${className}`.trim()}
+      aria-label="Other useful ways to say this"
+    >
+      {alternatives.map((alternative) => (
+        <div
+          className="register-alternative"
+          key={`${alternative.label}:${alternative.telugu}`}
+        >
+          <div className="register-alternative-copy">
+            <span className="register-label">{alternative.label}</span>
+            <SpokenGuide
+              word={alternative}
+              showPronunciation={showPronunciation}
+            />
+            <span className="phrase-telugu" lang="te">
+              {alternative.telugu}
+            </span>
+          </div>
+          {alternative.audioSrc ? (
+            <button
+              className="register-audio-button"
+              onClick={() =>
+                playAudioSource(
+                  alternative.audioSrc,
+                  notify,
+                  "That recording could not play. Try again in a moment.",
+                )
+              }
+              aria-label={`Listen to “${alternative.telugu}” (${alternative.label})`}
+            >
+              <Icon name="audio" />
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </section>
   );
 }
 
@@ -384,15 +439,23 @@ function PhraseStack({
   );
 }
 
-function playWordAudio(word: TeluguWord, notify: (message: string) => void) {
-  if (!word.audioSrc) {
-    notify("Family recording coming soon.");
+function playAudioSource(
+  audioSrc: string | undefined,
+  notify: (message: string) => void,
+  unavailableMessage = "Family recording coming soon.",
+) {
+  if (!audioSrc) {
+    notify(unavailableMessage);
     return;
   }
 
-  new Audio(word.audioSrc).play().catch(() => {
+  new Audio(audioSrc).play().catch(() => {
     notify("That recording could not play. Try again in a moment.");
   });
+}
+
+function playWordAudio(word: TeluguWord, notify: (message: string) => void) {
+  playAudioSource(word.audioSrc, notify);
 }
 
 function AudioButton({
@@ -868,8 +931,16 @@ function PhrasebookView({
       }
       if (!normalizedQuery) return true;
 
+      const alternatives =
+        word.alternatives
+          ?.map(
+            (alternative) =>
+              `${alternative.telugu} ${alternative.roman} ${alternative.pronunciation} ${alternative.label}`,
+          )
+          .join(" ") ?? "";
+
       return normalize(
-        `${word.telugu} ${word.roman} ${word.pronunciation} ${word.english}`,
+        `${word.telugu} ${word.roman} ${word.pronunciation} ${word.english} ${alternatives}`,
       ).includes(normalizedQuery);
     });
   }, [query, savedWords, situationFilter, tab, todayKeys]);
@@ -1077,6 +1148,12 @@ function PhrasebookView({
               size="hero"
               headingAs="h2"
               headingId="word-sheet-title"
+            />
+            <RegisterAlternatives
+              alternatives={selectedWord.alternatives}
+              notify={notify}
+              showPronunciation={preferences.showPronunciation}
+              className="sheet-register-alternatives"
             />
 
             <AudioButton
@@ -1297,6 +1374,12 @@ function DailySession({
             <>
               <h2>Use it here</h2>
               <strong>{current.note ?? pack.outcome}</strong>
+              <RegisterAlternatives
+                alternatives={current.alternatives}
+                notify={notify}
+                showPronunciation={preferences.showPronunciation}
+                className="daily-register-alternatives"
+              />
             </>
           ) : (
             <p>Hear the phrase, say it once, then see where it fits.</p>
@@ -1845,11 +1928,19 @@ function LessonView({
           <section className="introduce-exercise">
             <h1>Say this out loud.</h1>
             <div className="lesson-word-card">
-              <PhraseStack
-                word={step.word}
-                showPronunciation={preferences.showPronunciation}
-                size="lesson"
-              />
+              <div className="lesson-word-copy">
+                <PhraseStack
+                  word={step.word}
+                  showPronunciation={preferences.showPronunciation}
+                  size="lesson"
+                />
+                <RegisterAlternatives
+                  alternatives={step.word.alternatives}
+                  notify={notify}
+                  showPronunciation={preferences.showPronunciation}
+                  className="lesson-register-alternatives"
+                />
+              </div>
               <AudioButton word={step.word} notify={notify} />
             </div>
             <p>Say it once as if you needed the phrase right now.</p>

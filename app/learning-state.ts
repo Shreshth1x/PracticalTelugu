@@ -40,6 +40,16 @@ export const defaultSnapshot: LearningSnapshot = {
 
 const APP_PATH_ORIGIN = "https://practicaltelugu.invalid";
 
+const LEGACY_PHRASE_KEY_ALIASES: Readonly<Record<string, string>> = {
+  "మీరు ఎలా ఉన్నారు?::how are you?":
+    "మీరు ఎలా ఉన్నారు?::how are you? (respectful)",
+  "మళ్లీ కలుద్దాం::let’s meet again": "మళ్లీ కలుద్దాం::see you again",
+};
+
+export function canonicalPhraseKey(value: string): string {
+  return LEGACY_PHRASE_KEY_ALIASES[value] ?? value;
+}
+
 export function safeAppPath(value: string | null | undefined): string {
   if (
     !value ||
@@ -70,12 +80,18 @@ function uniqueStrings(value: unknown): string[] {
 function confidenceFrom(value: unknown): Record<string, Confidence> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, Confidence] =>
-        entry[1] === "learning" || entry[1] === "ready",
-    ),
-  );
+  const confidence: Record<string, Confidence> = {};
+
+  Object.entries(value).forEach(([rawKey, rawConfidence]) => {
+    if (rawConfidence !== "learning" && rawConfidence !== "ready") return;
+
+    const key = canonicalPhraseKey(rawKey);
+    if (rawConfidence === "ready" || !confidence[key]) {
+      confidence[key] = rawConfidence;
+    }
+  });
+
+  return confidence;
 }
 
 export function parseCurrentProgress(value: unknown): SavedState | null {
@@ -121,7 +137,20 @@ export function parsePreferences(value: unknown): Preferences {
 }
 
 export function parseSavedWords(value: unknown): string[] {
-  return uniqueStrings(value);
+  return Array.from(new Set(uniqueStrings(value).map(canonicalPhraseKey)));
+}
+
+export function normalizeLearningSnapshot(
+  snapshot: LearningSnapshot,
+): LearningSnapshot {
+  return {
+    state: {
+      completed: uniqueStrings(snapshot.state.completed),
+      confidence: confidenceFrom(snapshot.state.confidence),
+    },
+    preferences: parsePreferences(snapshot.preferences),
+    savedWords: parseSavedWords(snapshot.savedWords),
+  };
 }
 
 export function parseLearningSnapshot(value: unknown): LearningSnapshot | null {

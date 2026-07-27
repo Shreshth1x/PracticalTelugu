@@ -21,6 +21,7 @@ import {
   defaultSnapshot,
   defaultState,
   mergeSnapshots,
+  normalizeLearningSnapshot,
   parseCloudSnapshot,
   parseCurrentProgress,
   parseLegacyProgress,
@@ -149,6 +150,7 @@ function readUserSnapshot(userId: string): LearningSnapshot {
 }
 
 function writeSnapshot(snapshot: LearningSnapshot, userId?: string) {
+  const normalized = normalizeLearningSnapshot(snapshot);
   const keys = userId
     ? userStorageKeys(userId)
     : {
@@ -157,19 +159,19 @@ function writeSnapshot(snapshot: LearningSnapshot, userId?: string) {
         savedWords: SAVED_WORDS_KEY,
       };
 
-  window.localStorage.setItem(keys.progress, JSON.stringify(snapshot.state));
+  window.localStorage.setItem(keys.progress, JSON.stringify(normalized.state));
   window.localStorage.setItem(
     keys.preferences,
-    JSON.stringify(snapshot.preferences),
+    JSON.stringify(normalized.preferences),
   );
   window.localStorage.setItem(
     keys.savedWords,
-    JSON.stringify(snapshot.savedWords),
+    JSON.stringify(normalized.savedWords),
   );
 }
 
 function serializeSnapshot(snapshot: LearningSnapshot) {
-  return JSON.stringify(snapshot);
+  return JSON.stringify(normalizeLearningSnapshot(snapshot));
 }
 
 export function LearningProvider({ children }: { children: React.ReactNode }) {
@@ -216,11 +218,12 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
   }, [snapshot]);
 
   const applySnapshot = useCallback((next: LearningSnapshot) => {
-    lastSerializedRef.current = serializeSnapshot(next);
-    currentSnapshotRef.current = next;
-    setState(next.state);
-    setPreferences(next.preferences);
-    setSavedWords(next.savedWords);
+    const normalized = normalizeLearningSnapshot(next);
+    lastSerializedRef.current = serializeSnapshot(normalized);
+    currentSnapshotRef.current = normalized;
+    setState(normalized.state);
+    setPreferences(normalized.preferences);
+    setSavedWords(normalized.savedWords);
   }, []);
 
   useEffect(() => {
@@ -265,6 +268,7 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       targetUser: User,
       version: number,
     ) => {
+      const normalizedNext = normalizeLearningSnapshot(next);
       const keys = userStorageKeys(targetUser.id);
       setSyncStatus("saving");
       setSyncMessage("Backing up your progress…");
@@ -311,18 +315,19 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
 
           const merged = applySnapshotChanges(
             baseline.snapshot,
-            next,
+            normalizedNext,
             latestSnapshot,
           );
+          const normalizedMerged = normalizeLearningSnapshot(merged);
           const nextRevision =
             typeof latestRevision === "number" ? latestRevision + 1 : 1;
           const payload = {
             user_id: targetUser.id,
             schema_version: 1,
             revision: nextRevision,
-            progress: merged.state,
-            preferences: merged.preferences,
-            saved_words: merged.savedWords,
+            progress: normalizedMerged.state,
+            preferences: normalizedMerged.preferences,
+            saved_words: normalizedMerged.savedWords,
           };
 
           if (latestRow) {
@@ -352,13 +357,13 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
           }
 
           cloudBaselinesRef.current.set(targetUser.id, {
-            snapshot: cloneSnapshot(next),
+            snapshot: cloneSnapshot(normalizedNext),
             revision: nextRevision,
           });
           try {
             window.localStorage.setItem(
               keys.cloudBaseline,
-              serializeSnapshot(next),
+              serializeSnapshot(normalizedNext),
             );
           } catch {
             // Cloud remains authoritative when browser storage is unavailable.

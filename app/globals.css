@@ -647,6 +647,89 @@ svg {
   column-gap: 6px;
 }
 
+.register-alternatives {
+  display: grid;
+  width: 100%;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+
+.register-alternative {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.register-alternative-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.register-alternative + .register-alternative {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.register-label {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.register-alternative .phrase-spoken {
+  overflow-wrap: anywhere;
+}
+
+.register-alternative .phrase-roman {
+  font-size: 16px;
+}
+
+.register-alternative .phrase-pronunciation,
+.register-alternative .phrase-telugu {
+  font-size: 14px;
+}
+
+.register-audio-button {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--green);
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+.register-audio-button:hover {
+  border-color: var(--green);
+  background: var(--mint);
+  transform: translateY(-1px);
+}
+
+.register-audio-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--green) 22%, transparent);
+  outline-offset: 2px;
+}
+
+.register-audio-button svg {
+  width: 18px;
+  height: 18px;
+}
+
 .home-page {
   width: min(1040px, calc(100% - 48px));
   padding-top: 86px;
@@ -1384,6 +1467,10 @@ svg {
   font-size: 28px;
 }
 
+.sheet-register-alternatives {
+  margin-top: 32px;
+}
+
 .sheet-audio {
   margin-top: 28px;
 }
@@ -1548,7 +1635,12 @@ svg {
   text-wrap: pretty;
 }
 
-.example-panel span {
+.daily-register-alternatives {
+  width: min(500px, 100%);
+  margin-top: 24px;
+}
+
+.example-panel > span {
   margin-top: 5px;
   color: var(--green);
   font-family: var(--font-telugu);
@@ -2346,6 +2438,16 @@ svg {
   border-radius: 22px;
   background: var(--green-soft);
   box-shadow: var(--shadow-card);
+}
+
+.lesson-word-copy {
+  width: 100%;
+  min-width: 0;
+}
+
+.lesson-register-alternatives {
+  max-width: 520px;
+  margin-top: 24px;
 }
 
 .introduce-exercise > p,

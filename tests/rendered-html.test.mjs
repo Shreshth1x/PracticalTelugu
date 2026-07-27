@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
-import { allLessons, practicePacks } from "../app/course-data.ts";
+import {
+  allLessons,
+  findLesson,
+  practicePacks,
+} from "../app/course-data.ts";
 import {
   applySnapshotChanges,
+  canonicalPhraseKey,
   mergeSnapshots,
+  normalizeLearningSnapshot,
   parseCloudSnapshot,
+  parseCurrentProgress,
+  parseSavedWords,
   safeAppPath,
   snapshotAdditionsSince,
 } from "../app/learning-state.ts";
@@ -17,6 +25,60 @@ import {
 
 const templateRoot = new URL("../", import.meta.url);
 let renderCount = 0;
+
+const previousPhrasebookKeys = [
+  "నమస్కారం::hello",
+  "ఎలా ఉన్నారు?::how are you? (respectful)",
+  "బాగున్నాను::I’m well",
+  "మళ్లీ కలుద్దాం::see you again",
+  "ధన్యవాదాలు::thank you",
+  "దయచేసి::please",
+  "పరవాలేదు::it’s okay / no problem",
+  "క్షమించండి::sorry / excuse me",
+  "అవును::yes",
+  "కాదు::no",
+  "సరే::okay",
+  "తెలియదు::I don’t know",
+  "మీ పేరు ఏంటి?::what is your name?",
+  "నా పేరు…::my name is…",
+  "మిమ్మల్ని కలవడం సంతోషం::nice to meet you",
+  "మీరు ఎక్కడి నుంచి?::where are you from?",
+  "తిన్నారా?::have you eaten?",
+  "మీరు ఎలా ఉన్నారు?::how are you? (respectful)",
+  "మీరు ఎక్కడ ఉన్నారు?::where are you?",
+  "అమ్మ ఇంట్లో ఉన్నారా?::is mom at home?",
+  "నీళ్లు కావాలి::I would like water",
+  "ఇది చాలా బాగుంది::this is very good",
+  "ఇంకొంచెం::a little more",
+  "చాలు::that’s enough",
+  "నాకు అర్థం కాలేదు::I didn’t understand",
+  "మెల్లగా చెప్పండి::please say it slowly",
+  "మళ్లీ చెప్పండి::please say it again",
+  "నాకు తెలుగు బాగా రాదు::I don’t know Telugu well",
+  "నేను బాగున్నాను::I am well",
+  "నాకు అలసటగా ఉంది::I am tired",
+  "నాకు సంతోషంగా ఉంది::I am happy",
+  "మీరు ఎలా ఉన్నారు?::how are you?",
+  "నేను రేపు వస్తాను::I’ll come tomorrow",
+  "మీరు ఎప్పుడు ఇంట్లో ఉంటారు?::when will you be home?",
+  "నేను ఇప్పుడు బయల్దేరాను::I’m leaving now",
+  "మళ్లీ కలుద్దాం::let’s meet again",
+  "నాకు ఇది కావాలి::I want this",
+  "నాకు ఇది వద్దు::I don’t want this",
+  "ఇది ఎంత?::how much is this?",
+  "అది::that one",
+  "బస్ స్టాప్ ఎక్కడ ఉంది?::where is the bus stop?",
+  "ఇక్కడ ఆపండి దయచేసి::stop here, please",
+  "సూటిగా వెళ్ళండి::go straight",
+  "ఇది అక్కడికి వెళ్లే దారినా?::is this the way there?",
+  "చాలా ఖరీదు::too expensive",
+  "ధర తగ్గించగలరా?::can you reduce the price?",
+  "చేంజ్ ఉందా?::do you have change?",
+  "నాకు ఒంట్లో బాగా లేదు::I’m not feeling well",
+  "నాకు కొంచెం జ్వరంగా ఉంది::I have a slight fever",
+  "నాకు డాక్టర్ కావాలి::I need a doctor",
+  "నాకు సహాయం కావాలి::I need help",
+];
 
 async function readSourceTree(directory) {
   const sources = [];
@@ -208,7 +270,7 @@ test("moves through the practical path five phrases at a time", () => {
       "hello",
       "thank you",
       "what is your name?",
-      "I would like water",
+      "could I have some water?",
       "please say it again",
     ],
   );
@@ -216,10 +278,14 @@ test("moves through the practical path five phrases at a time", () => {
   const pathKeys = practicePacks.flatMap((pack) =>
     pack.words.map((word) => phraseKey(word)),
   );
+  const phraseIds = practicePacks.flatMap((pack) =>
+    pack.words.map((word) => word.id),
+  );
   const teluguPhrases = practicePacks.flatMap((pack) =>
     pack.words.map((word) => word.telugu),
   );
   assert.equal(new Set(pathKeys).size, 49);
+  assert.equal(new Set(phraseIds).size, 49);
   assert.equal(new Set(teluguPhrases).size, 49);
 
   const empty = resolvePracticePath(practicePacks, {});
@@ -549,18 +615,24 @@ test("keeps meaning, romanized Telugu, pronunciation, and script distinct", asyn
       `${pathname}: Telugu follows pronunciation`,
     );
     assert.ok(
-      html.indexOf("(nuh-muh-SKAA-rum)", pronunciationIndex) >
+      html.indexOf("(HI)", pronunciationIndex) >
         pronunciationIndex,
       `${pathname}: easy pronunciation is enclosed in parentheses`,
     );
-    assert.doesNotMatch(html, /\(namaskaaram\)/);
+    assert.doesNotMatch(html, /\(haay\)/);
   }
 });
 
 test("every phrase has a separate curated speaking cue", () => {
   const seenByTelugu = new Map();
+  const seenById = new Map();
 
   for (const word of allLessons.flatMap((lesson) => lesson.words)) {
+    assert.ok(word.id.trim(), `${word.telugu}: stable id is present`);
+    assert.ok(
+      word.progressKey.trim(),
+      `${word.telugu}: progress key is present`,
+    );
     assert.ok(word.roman.trim(), `${word.telugu}: romanization is present`);
     assert.ok(
       word.pronunciation.trim(),
@@ -573,6 +645,17 @@ test("every phrase has a separate curated speaking cue", () => {
     );
     assert.doesNotMatch(word.roman, /^\(.*\)$/);
     assert.doesNotMatch(word.pronunciation, /^\(.*\)$/);
+
+    const existingById = seenById.get(word.id);
+    if (existingById) {
+      assert.equal(
+        word.progressKey,
+        existingById,
+        `${word.id}: repeated lesson entries keep the same progress identity`,
+      );
+    } else {
+      seenById.set(word.id, word.progressKey);
+    }
 
     const existing = seenByTelugu.get(word.telugu);
     if (existing) {
@@ -587,9 +670,140 @@ test("every phrase has a separate curated speaking cue", () => {
         pronunciation: word.pronunciation,
       });
     }
+
+    for (const alternative of word.alternatives ?? []) {
+      assert.ok(alternative.label.trim(), `${word.id}: alternative is labeled`);
+      assert.ok(
+        alternative.telugu.trim(),
+        `${word.id}: alternative Telugu is present`,
+      );
+      assert.ok(
+        alternative.roman.trim(),
+        `${word.id}: alternative romanization is present`,
+      );
+      assert.ok(
+        alternative.pronunciation.trim(),
+        `${word.id}: alternative pronunciation is present`,
+      );
+      assert.notEqual(
+        alternative.telugu,
+        word.telugu,
+        `${word.id}: alternative differs from the primary phrase`,
+      );
+    }
   }
 
   assert.equal(seenByTelugu.size, 49);
+  assert.equal(seenById.size, 49);
+});
+
+test("leads with everyday Telugu while preserving earlier progress keys", async () => {
+  const hello = findLesson("hello-goodbye")?.words[0];
+  const thankYou = findLesson("please-thank-you")?.words[0];
+  const water = findLesson("food-water")?.words[0];
+
+  assert.ok(hello);
+  assert.ok(thankYou);
+  assert.ok(water);
+  assert.equal(hello.telugu, "హాయ్");
+  assert.equal(phraseKey(hello), "నమస్కారం::hello");
+  assert.equal(thankYou.telugu, "థ్యాంక్స్");
+  assert.equal(phraseKey(thankYou), "ధన్యవాదాలు::thank you");
+  assert.equal(water.telugu, "నీళ్లు ఇస్తారా?");
+  assert.equal(
+    phraseKey(water),
+    "నీళ్లు కావాలి::I would like water",
+  );
+
+  const firstPackAfterHello = resolvePracticePath(practicePacks, {
+    "నమస్కారం::hello": "ready",
+  });
+  assert.equal(firstPackAfterHello.packIndex, 0);
+  assert.equal(firstPackAfterHello.phraseIndex, 1);
+
+  const response = await render("/lesson/hello-goodbye");
+  const html = await response.text();
+  const everydayIndex = html.indexOf("హాయ్");
+  const registerIndex = html.indexOf("With elders or someone new");
+  const respectfulIndex = html.indexOf("నమస్కారం అండి");
+
+  assert.ok(everydayIndex >= 0, "everyday greeting is taught first");
+  assert.ok(registerIndex > everydayIndex, "register guidance follows it");
+  assert.ok(
+    respectfulIndex > registerIndex,
+    "respectful greeting is clearly secondary",
+  );
+});
+
+test("migrates every phrasebook key from the previous course", () => {
+  const currentKeys = new Set(
+    allLessons
+      .flatMap((lesson) => lesson.words)
+      .map((word) => phraseKey(word)),
+  );
+  const previousConfidence = Object.fromEntries(
+    previousPhrasebookKeys.map((key) => [key, "learning"]),
+  );
+
+  assert.equal(previousPhrasebookKeys.length, 51);
+  assert.equal(currentKeys.size, 49);
+
+  previousPhrasebookKeys.forEach((key) => {
+    assert.ok(
+      currentKeys.has(canonicalPhraseKey(key)),
+      `${key}: previous phrase still resolves to the current phrasebook`,
+    );
+  });
+
+  const expectedKeys = new Set(
+    previousPhrasebookKeys.map(canonicalPhraseKey),
+  );
+  assert.deepEqual(expectedKeys, currentKeys);
+  assert.deepEqual(
+    new Set(parseSavedWords(previousPhrasebookKeys)),
+    currentKeys,
+    "local saved phrases are canonicalized",
+  );
+
+  const localProgress = parseCurrentProgress({
+    completed: [],
+    confidence: previousConfidence,
+  });
+  assert.ok(localProgress);
+  assert.deepEqual(
+    new Set(Object.keys(localProgress.confidence)),
+    currentKeys,
+    "local confidence is canonicalized",
+  );
+
+  const cloud = parseCloudSnapshot({
+    progress: {
+      completed: [],
+      confidence: previousConfidence,
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    saved_words: previousPhrasebookKeys,
+  });
+  assert.ok(cloud);
+  assert.deepEqual(new Set(cloud.savedWords), currentKeys);
+  assert.deepEqual(new Set(Object.keys(cloud.state.confidence)), currentKeys);
+
+  const normalizedBeforeWrite = normalizeLearningSnapshot({
+    state: {
+      completed: [],
+      confidence: previousConfidence,
+    },
+    preferences: cloud.preferences,
+    savedWords: previousPhrasebookKeys,
+  });
+  assert.deepEqual(new Set(normalizedBeforeWrite.savedWords), currentKeys);
+  assert.deepEqual(
+    new Set(Object.keys(normalizedBeforeWrite.state.confidence)),
+    currentKeys,
+  );
 });
 
 test("unknown lesson URLs return a real not-found response", async () => {
@@ -674,7 +888,7 @@ test("merges concurrent device writes with optimistic revisions", async () => {
   assert.match(revisionMigration, /check \(revision >= 0\)/i);
   assert.match(
     learningProvider,
-    /applySnapshotChanges\(\s*baseline\.snapshot,\s*next,\s*latestSnapshot/s,
+    /applySnapshotChanges\(\s*baseline\.snapshot,\s*normalizedNext,\s*latestSnapshot/s,
   );
   assert.match(learningProvider, /\.eq\("revision", latestRevision\)/);
   assert.match(learningProvider, /for \(let attempt = 0; attempt < 4/);
@@ -800,6 +1014,10 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     /current\.completed\.includes\(lesson\.id\)[\s\S]*\[\.\.\.current\.completed, lesson\.id\]/,
   );
   assert.match(app, /resolvePracticePath\(practicePacks, state\.confidence\)/);
+  assert.match(app, /word\.alternatives/);
+  assert.match(app, /alternative\.pronunciation/);
+  assert.match(app, /alternative\.audioSrc/);
+  assert.match(app, /Other useful ways to say this/);
   assert.match(app, /key=\{hydrated \? "daily-restored" : "daily-initial"\}/);
   assert.match(
     app,
@@ -838,6 +1056,11 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     learningState,
     /legacyShowRomanization = candidate\.showRomanization/,
   );
+  assert.match(learningState, /LEGACY_PHRASE_KEY_ALIASES/);
+  assert.match(
+    learningProvider,
+    /const normalizedNext = normalizeLearningSnapshot\(next\)/,
+  );
   assert.doesNotMatch(app, /formatPronunciation\(word\.roman\)/);
   assert.doesNotMatch(app, /Choose the pronunciation in order/);
   assert.doesNotMatch(app, /teluguFirst|Show Telugu larger/);
@@ -850,6 +1073,8 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(courseData, /export const practicePacks/);
   assert.match(courseData, /learnerPronunciations/);
   assert.match(courseData, /Missing learner pronunciation/);
+  assert.match(courseData, /progressKey/);
+  assert.match(courseData, /findPracticeWord\(lessonId: string, wordId: string\)/);
 
   const productCopy = `${app}\n${courseData}\n${layout}\n${learningState}\n${learningProvider}\n${readme}`;
   assert.doesNotMatch(

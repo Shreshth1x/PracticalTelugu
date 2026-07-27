@@ -4,13 +4,24 @@ export type SituationGroup =
   | "out-and-about"
   | "backup";
 
+export type TeluguAlternative = {
+  label: string;
+  telugu: string;
+  roman: string;
+  pronunciation: string;
+  audioSrc?: string;
+};
+
 export type TeluguWord = {
+  id: string;
+  progressKey: string;
   telugu: string;
   roman: string;
   pronunciation: string;
   english: string;
   note?: string;
   audioSrc?: string;
+  alternatives?: TeluguAlternative[];
 };
 
 export type Lesson = {
@@ -32,7 +43,17 @@ export type PracticePack = {
   words: TeluguWord[];
 };
 
-type TeluguWordSource = Omit<TeluguWord, "pronunciation">;
+type TeluguAlternativeSource = Omit<TeluguAlternative, "pronunciation"> & {
+  pronunciation?: string;
+};
+
+type TeluguWordSource = Omit<
+  TeluguWord,
+  "pronunciation" | "alternatives"
+> & {
+  pronunciation?: string;
+  alternatives?: TeluguAlternativeSource[];
+};
 type LessonSource = Omit<Lesson, "words"> & {
   words: TeluguWordSource[];
 };
@@ -74,68 +95,110 @@ export const situationGroups: {
 ];
 
 const learnerPronunciations: Record<string, string> = {
-  "నమస్కారం": "nuh-muh-SKAA-rum",
+  "హాయ్": "HI",
+  "నమస్కారం అండి": "nuh-muh-SKAA-rum UN-dee",
+  "ఎలా ఉన్నావు?": "eh-LAA oon-NAA-voo?",
   "ఎలా ఉన్నారు?": "eh-LAA oon-NAA-roo?",
   "బాగున్నాను": "baa-goon-NAA-noo",
   "మళ్లీ కలుద్దాం": "mul-LEE kuh-lood-DAAM",
+  "థ్యాంక్స్": "THYANKS",
+  "థ్యాంక్స్ అండి": "THYANKS UN-dee",
   "ధన్యవాదాలు": "dun-yuh-VAA-daa-loo",
+  "ప్లీజ్": "PLEEZ",
   "దయచేసి": "duh-yuh-CHAY-see",
+  "పర్లేదు": "pur-LAY-doo",
   "పరవాలేదు": "puh-ruh-vaa-LAY-doo",
+  "సారీ": "SAA-ree",
+  "సారీ అండి": "SAA-ree UN-dee",
   "క్షమించండి": "kshuh-min-CHUN-dee",
   "అవును": "uh-VOO-noo",
   "కాదు": "KAA-doo",
   "సరే": "suh-RAY",
   "తెలియదు": "teh-lee-YUH-doo",
+  "నీ పేరు ఏంటి?": "NEE PAY-roo AYN-tee?",
   "మీ పేరు ఏంటి?": "MEE PAY-roo AYN-tee?",
   "నా పేరు…": "NAA PAY-roo…",
-  "మిమ్మల్ని కలవడం సంతోషం":
-    "mim-MUL-nee kuh-luh-VUH-dum sun-TOH-shum",
+  "చాలా సంతోషం": "CHAA-laa sun-TOH-shum",
+  "మిమ్మల్ని కలిసినందుకు సంతోషం":
+    "mim-MUL-nee kuh-lee-see-NUN-doo-koo sun-TOH-shum",
+  "ఎక్కడి నుంచి?": "ek-KUH-dee NOON-chee?",
   "మీరు ఎక్కడి నుంచి?": "MEE-roo ek-KUH-dee NOON-chee?",
+  "తిన్నావా?": "tin-NAA-vaa?",
   "తిన్నారా?": "tin-NAA-raa?",
-  "మీరు ఎలా ఉన్నారు?": "MEE-roo eh-LAA oon-NAA-roo?",
-  "మీరు ఎక్కడ ఉన్నారు?": "MEE-roo ek-KUH-duh oon-NAA-roo?",
+  "బాగున్నావా?": "baa-goon-NAA-vaa?",
+  "బాగున్నారా?": "baa-goon-NAA-raa?",
+  "ఎక్కడున్నావు?": "ek-kuh-DOON-naa-voo?",
+  "ఎక్కడున్నారు?": "ek-kuh-DOON-naa-roo?",
   "అమ్మ ఇంట్లో ఉన్నారా?": "UM-muh IN-tloh oon-NAA-raa?",
-  "నీళ్లు కావాలి": "NEE-lloo KAA-vaa-lee",
-  "ఇది చాలా బాగుంది": "IH-dee CHAA-laa BAA-goon-dee",
+  "నీళ్లు ఇస్తారా?": "NEE-lloo is-TAA-raa?",
+  "నీళ్లు ఇస్తావా?": "NEE-lloo is-TAA-vaa?",
+  "చాలా బాగుంది": "CHAA-laa BAA-goon-dee",
   "ఇంకొంచెం": "in-KON-chem",
   "చాలు": "CHAA-loo",
-  "నాకు అర్థం కాలేదు": "NAA-koo AR-thum kaa-LAY-doo",
-  "మెల్లగా చెప్పండి": "mel-luh-GAA chep-PUN-dee",
+  "అర్థం కాలేదు": "AR-thum kaa-LAY-doo",
+  "కొంచెం మెల్లగా చెప్పండి": "KON-chem mel-luh-GAA chep-PUN-dee",
+  "కొంచెం మెల్లగా చెప్పు": "KON-chem mel-luh-GAA CHEP-poo",
   "మళ్లీ చెప్పండి": "mul-LEE chep-PUN-dee",
-  "నాకు తెలుగు బాగా రాదు": "NAA-koo TEH-loo-goo BAA-gaa RAA-doo",
-  "నేను బాగున్నాను": "NAY-noo baa-goon-NAA-noo",
-  "నాకు అలసటగా ఉంది": "NAA-koo uh-luh-suh-tuh-GAA OON-dee",
-  "నాకు సంతోషంగా ఉంది": "NAA-koo sun-TOH-shum-gaa OON-dee",
-  "నేను రేపు వస్తాను": "NAY-noo RAY-poo vus-TAA-noo",
-  "మీరు ఎప్పుడు ఇంట్లో ఉంటారు?": "MEE-roo EP-poo-doo IN-tloh oon-TAA-roo?",
-  "నేను ఇప్పుడు బయల్దేరాను": "NAY-noo IP-poo-doo buh-yul-DAY-raa-noo",
-  "నాకు ఇది కావాలి": "NAA-koo IH-dee KAA-vaa-lee",
-  "నాకు ఇది వద్దు": "NAA-koo IH-dee VUD-doo",
+  "మళ్లీ చెప్పు": "mul-LEE CHEP-poo",
+  "తెలుగు బాగా రాదు": "TEH-loo-goo BAA-gaa RAA-doo",
+  "బాగానే ఉన్నాను": "baa-GAA-nay oon-NAA-noo",
+  "అలసిపోయాను": "uh-luh-see-poh-YAA-noo",
+  "చాలా హ్యాపీగా ఉన్నాను": "CHAA-laa HAP-pee-gaa oon-NAA-noo",
+  "చాలా సంతోషంగా ఉన్నాను": "CHAA-laa sun-TOH-shum-gaa oon-NAA-noo",
+  "రేపు వస్తా": "RAY-poo vus-TAA",
+  "రేపు వస్తాను": "RAY-poo vus-TAA-noo",
+  "ఎప్పుడు ఇంట్లో ఉంటావు?": "EP-poo-doo IN-tloh oon-TAA-voo?",
+  "ఎప్పుడు ఇంట్లో ఉంటారు?": "EP-poo-doo IN-tloh oon-TAA-roo?",
+  "ఇప్పుడే బయల్దేరుతున్నా":
+    "IP-poo-day buh-yul-day-roo-TOON-naa",
+  "ఇప్పుడే బయల్దేరుతున్నాను":
+    "IP-poo-day buh-yul-day-roo-TOON-naa-noo",
+  "ఇది కావాలి": "IH-dee KAA-vaa-lee",
+  "ఇది వద్దు": "IH-dee VUD-doo",
   "ఇది ఎంత?": "IH-dee EN-tuh?",
   "అది": "UH-dee",
+  "బస్ స్టాప్ ఎక్కడ?": "BUS STAAP ek-KUH-duh?",
   "బస్ స్టాప్ ఎక్కడ ఉంది?": "BUS STAAP ek-KUH-duh OON-dee?",
-  "ఇక్కడ ఆపండి దయచేసి": "ik-KUH-duh AA-pun-dee duh-yuh-CHAY-see",
-  "సూటిగా వెళ్ళండి": "SOO-tee-gaa vel-LUN-dee",
-  "ఇది అక్కడికి వెళ్లే దారినా?":
-    "IH-dee uk-KUH-dee-kee vel-LAY DAA-ree-naa?",
-  "చాలా ఖరీదు": "CHAA-laa khuh-REE-doo",
-  "ధర తగ్గించగలరా?": "dhuh-ruh tug-gin-chuh-guh-luh-RAA?",
+  "ఇక్కడ ఆపండి": "ik-KUH-duh AA-pun-dee",
+  "నేరుగా వెళ్లండి": "NAY-roo-gaa vel-LUN-dee",
+  "అక్కడికి ఇదే దారినా?": "uk-KUH-dee-kee ih-DAY DAA-ree-naa?",
+  "చాలా ఎక్కువ": "CHAA-laa EK-koo-vuh",
+  "కొంచెం తగ్గించండి": "KON-chem tug-gin-CHUN-dee",
+  "కొంచెం తగ్గిస్తారా?": "KON-chem tug-gis-TAA-raa?",
   "చేంజ్ ఉందా?": "CHAYNJ OON-daa?",
-  "నాకు ఒంట్లో బాగా లేదు": "NAA-koo ON-tloh BAA-gaa LAY-doo",
-  "నాకు కొంచెం జ్వరంగా ఉంది":
-    "NAA-koo KON-chem jwuh-RUM-gaa OON-dee",
-  "నాకు డాక్టర్ కావాలి": "NAA-koo DAAK-tur KAA-vaa-lee",
-  "నాకు సహాయం కావాలి": "NAA-koo suh-HAA-yum KAA-vaa-lee",
+  "ఒంట్లో బాగోలేదు": "ON-tloh BAA-goh-LAY-doo",
+  "కొంచెం జ్వరం ఉంది": "KON-chem JWUH-rum OON-dee",
+  "డాక్టర్ కావాలి": "DAAK-tur KAA-vaa-lee",
+  "సహాయం కావాలి": "suh-HAA-yum KAA-vaa-lee",
 };
 
-function addLearnerPronunciation(word: TeluguWordSource): TeluguWord {
-  const pronunciation = learnerPronunciations[word.telugu];
+function resolveLearnerPronunciation(
+  telugu: string,
+  pronunciation?: string,
+) {
+  const resolved = pronunciation ?? learnerPronunciations[telugu];
 
-  if (!pronunciation) {
-    throw new Error(`Missing learner pronunciation: ${word.telugu}`);
+  if (!resolved) {
+    throw new Error(`Missing learner pronunciation: ${telugu}`);
   }
 
-  return { ...word, pronunciation };
+  return resolved;
+}
+
+function addLearnerPronunciation(word: TeluguWordSource): TeluguWord {
+  const { alternatives, pronunciation, ...rest } = word;
+
+  return {
+    ...rest,
+    pronunciation: resolveLearnerPronunciation(word.telugu, pronunciation),
+    alternatives: alternatives?.map((alternative) => ({
+      ...alternative,
+      pronunciation: resolveLearnerPronunciation(
+        alternative.telugu,
+        alternative.pronunciation,
+      ),
+    })),
+  };
 }
 
 const practicalLessonSources: LessonSource[] = [
@@ -144,28 +207,51 @@ const practicalLessonSources: LessonSource[] = [
     group: "quick-start",
     title: "Arrive & leave warmly",
     eyebrow: "The first two minutes",
-    description: "Greet everyone, answer the first question, and say you’ll see them again.",
-    outcome: "Walk into a visit without waiting for someone else to start.",
+    description:
+      "Use the easy greeting you hear every day, then switch to the respectful form with elders.",
+    outcome: "Walk into a visit and start talking without sounding rehearsed.",
     minutes: 4,
     words: [
       {
-        telugu: "నమస్కారం",
-        roman: "namaskaaram",
+        id: "hello",
+        progressKey: "నమస్కారం::hello",
+        telugu: "హాయ్",
+        roman: "haay",
         english: "hello",
-        note: "A respectful greeting that is safe with elders and new people.",
+        note: "The natural everyday greeting with cousins, friends, and close family.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "నమస్కారం అండి",
+            roman: "namaskaaram andi",
+          },
+        ],
       },
       {
-        telugu: "ఎలా ఉన్నారు?",
-        roman: "elaa unnaaru?",
-        english: "how are you? (respectful)",
-        note: "Use this respectful form with elders, relatives, and people you just met.",
+        id: "how-are-you",
+        progressKey: "ఎలా ఉన్నారు?::how are you? (respectful)",
+        telugu: "ఎలా ఉన్నావు?",
+        roman: "elaa unnaavu?",
+        english: "how are you?",
+        note: "Use this with someone close to you or around your age.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "ఎలా ఉన్నారు?",
+            roman: "elaa unnaaru?",
+          },
+        ],
       },
       {
+        id: "im-well",
+        progressKey: "బాగున్నాను::I’m well",
         telugu: "బాగున్నాను",
         roman: "baagunnaanu",
         english: "I’m well",
       },
       {
+        id: "see-you-again",
+        progressKey: "మళ్లీ కలుద్దాం::see you again",
         telugu: "మళ్లీ కలుద్దాం",
         roman: "malli kaluddaam",
         english: "see you again",
@@ -177,32 +263,80 @@ const practicalLessonSources: LessonSource[] = [
     group: "quick-start",
     title: "Be polite right away",
     eyebrow: "The polite handful",
-    description: "Thank someone, ask kindly, apologize, and keep small moments easy.",
-    outcome: "Move through a visit without every request feeling abrupt.",
+    description:
+      "Use the short words Telugu speakers actually mix into everyday conversation.",
+    outcome: "Thank, ask, and apologize naturally without sounding overly formal.",
     minutes: 4,
     words: [
       {
-        telugu: "ధన్యవాదాలు",
-        roman: "dhanyavaadaalu",
+        id: "thank-you",
+        progressKey: "ధన్యవాదాలు::thank you",
+        telugu: "థ్యాంక్స్",
+        roman: "thanks",
         english: "thank you",
-        note: "Clear and respectful; your family may use a shorter local expression in casual speech.",
+        note: "English “thanks” is completely normal inside everyday Telugu.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "థ్యాంక్స్ అండి",
+            roman: "thanks andi",
+          },
+          {
+            label: "Formal Telugu",
+            telugu: "ధన్యవాదాలు",
+            roman: "dhanyavaadaalu",
+          },
+        ],
       },
       {
-        telugu: "దయచేసి",
-        roman: "dayachesi",
+        id: "please",
+        progressKey: "దయచేసి::please",
+        telugu: "ప్లీజ్",
+        roman: "please",
         english: "please",
-        note: "A polite form that can sound formal in some families.",
+        note: "Everyday requests often use “please,” a respectful verb ending, or a warm tone.",
+        alternatives: [
+          {
+            label: "Formal Telugu",
+            telugu: "దయచేసి",
+            roman: "dayachesi",
+          },
+        ],
       },
       {
-        telugu: "పరవాలేదు",
-        roman: "paravaaledu",
+        id: "no-problem",
+        progressKey: "పరవాలేదు::it’s okay / no problem",
+        telugu: "పర్లేదు",
+        roman: "parledu",
         english: "it’s okay / no problem",
+        note: "The quick spoken version you are most likely to hear.",
+        alternatives: [
+          {
+            label: "Full form",
+            telugu: "పరవాలేదు",
+            roman: "paravaaledu",
+          },
+        ],
       },
       {
-        telugu: "క్షమించండి",
-        roman: "kshaminchandi",
-        english: "sorry / excuse me",
-        note: "A respectful form for apologies or getting someone’s attention.",
+        id: "sorry",
+        progressKey: "క్షమించండి::sorry / excuse me",
+        telugu: "సారీ",
+        roman: "saari",
+        english: "sorry",
+        note: "The everyday apology. To get someone’s attention politely, begin with “andi.”",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "సారీ అండి",
+            roman: "saari andi",
+          },
+          {
+            label: "Formal Telugu",
+            telugu: "క్షమించండి",
+            roman: "kshaminchandi",
+          },
+        ],
       },
     ],
   },
@@ -215,10 +349,34 @@ const practicalLessonSources: LessonSource[] = [
     outcome: "Respond even when you are not ready for a full sentence.",
     minutes: 3,
     words: [
-      { telugu: "అవును", roman: "avunu", english: "yes" },
-      { telugu: "కాదు", roman: "kaadu", english: "no" },
-      { telugu: "సరే", roman: "sare", english: "okay" },
-      { telugu: "తెలియదు", roman: "teliyadu", english: "I don’t know" },
+      {
+        id: "yes",
+        progressKey: "అవును::yes",
+        telugu: "అవును",
+        roman: "avunu",
+        english: "yes",
+      },
+      {
+        id: "no",
+        progressKey: "కాదు::no",
+        telugu: "కాదు",
+        roman: "kaadu",
+        english: "no",
+      },
+      {
+        id: "okay",
+        progressKey: "సరే::okay",
+        telugu: "సరే",
+        roman: "sare",
+        english: "okay",
+      },
+      {
+        id: "dont-know",
+        progressKey: "తెలియదు::I don’t know",
+        telugu: "తెలియదు",
+        roman: "teliyadu",
+        english: "I don’t know",
+      },
     ],
   },
   {
@@ -231,26 +389,56 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "మీ పేరు ఏంటి?",
-        roman: "mee peru enti?",
+        id: "ask-name",
+        progressKey: "మీ పేరు ఏంటి?::what is your name?",
+        telugu: "నీ పేరు ఏంటి?",
+        roman: "nee peru enti?",
         english: "what is your name?",
-        note: "A common spoken form. “Mee peru emiti?” is a slightly more formal alternative.",
+        note: "Use this with someone close to your age. Switch to “mee” for an elder.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "మీ పేరు ఏంటి?",
+            roman: "mee peru enti?",
+          },
+        ],
       },
       {
+        id: "my-name",
+        progressKey: "నా పేరు…::my name is…",
         telugu: "నా పేరు…",
         roman: "naa peru…",
         english: "my name is…",
       },
       {
-        telugu: "మిమ్మల్ని కలవడం సంతోషం",
-        roman: "mimmalni kalavadam santosham",
-        english: "nice to meet you",
-        note: "Respectful and a little formal; ask your family how they shorten it.",
+        id: "happy-to-meet-you",
+        progressKey: "మిమ్మల్ని కలవడం సంతోషం::nice to meet you",
+        telugu: "చాలా సంతోషం",
+        roman: "chaalaa santosham",
+        english: "so nice to see you",
+        note: "Telugu has no obligatory fixed “nice to meet you” formula. This is a warm reaction, not a required script.",
+        alternatives: [
+          {
+            label: "Formal Telugu",
+            telugu: "మిమ్మల్ని కలిసినందుకు సంతోషం",
+            roman: "mimmalni kalisinanduku santosham",
+          },
+        ],
       },
       {
-        telugu: "మీరు ఎక్కడి నుంచి?",
-        roman: "meeru ekkadi nunchi?",
+        id: "where-from",
+        progressKey: "మీరు ఎక్కడి నుంచి?::where are you from?",
+        telugu: "ఎక్కడి నుంచి?",
+        roman: "ekkadi nunchi?",
         english: "where are you from?",
+        note: "Telugu often drops the pronoun when the person is already clear.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "మీరు ఎక్కడి నుంచి?",
+            roman: "meeru ekkadi nunchi?",
+          },
+        ],
       },
     ],
   },
@@ -264,22 +452,53 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "తిన్నారా?",
-        roman: "tinnaaraa?",
+        id: "have-you-eaten",
+        progressKey: "తిన్నారా?::have you eaten?",
+        telugu: "తిన్నావా?",
+        roman: "tinnaavaa?",
         english: "have you eaten?",
-        note: "A warm, everyday family check-in; especially common in casual speech.",
+        note: "A warm check-in with siblings, cousins, and close friends.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "తిన్నారా?",
+            roman: "tinnaaraa?",
+          },
+        ],
       },
       {
-        telugu: "మీరు ఎలా ఉన్నారు?",
-        roman: "meeru elaa unnaaru?",
-        english: "how are you? (respectful)",
+        id: "family-how-are-you",
+        progressKey: "మీరు ఎలా ఉన్నారు?::how are you? (respectful)",
+        telugu: "బాగున్నావా?",
+        roman: "baagunnaavaa?",
+        english: "are you doing well?",
+        note: "A very natural family check-in. Use the respectful ending with elders.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "బాగున్నారా?",
+            roman: "baagunnaaraa?",
+          },
+        ],
       },
       {
-        telugu: "మీరు ఎక్కడ ఉన్నారు?",
-        roman: "meeru ekkada unnaaru?",
+        id: "where-are-you",
+        progressKey: "మీరు ఎక్కడ ఉన్నారు?::where are you?",
+        telugu: "ఎక్కడున్నావు?",
+        roman: "ekkadunnaavu?",
         english: "where are you?",
+        note: "The words run together naturally in everyday speech.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "ఎక్కడున్నారు?",
+            roman: "ekkadunnaaru?",
+          },
+        ],
       },
       {
+        id: "is-mom-home",
+        progressKey: "అమ్మ ఇంట్లో ఉన్నారా?::is mom at home?",
         telugu: "అమ్మ ఇంట్లో ఉన్నారా?",
         roman: "amma intlo unnaaraa?",
         english: "is mom at home?",
@@ -296,21 +515,38 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "నీళ్లు కావాలి",
-        roman: "neellu kaavaali",
-        english: "I would like water",
+        id: "water",
+        progressKey: "నీళ్లు కావాలి::I would like water",
+        telugu: "నీళ్లు ఇస్తారా?",
+        roman: "neellu istaaraa?",
+        english: "could I have some water?",
+        note: "Literally, “Would you give me water?” It is a natural polite request.",
+        alternatives: [
+          {
+            label: "With family or friends",
+            telugu: "నీళ్లు ఇస్తావా?",
+            roman: "neellu istaavaa?",
+          },
+        ],
       },
       {
-        telugu: "ఇది చాలా బాగుంది",
-        roman: "idi chaalaa baagundi",
-        english: "this is very good",
+        id: "food-is-good",
+        progressKey: "ఇది చాలా బాగుంది::this is very good",
+        telugu: "చాలా బాగుంది",
+        roman: "chaalaa baagundi",
+        english: "this is really good",
+        note: "The subject is obvious at the table, so you can leave out “idi” (“this”).",
       },
       {
+        id: "little-more",
+        progressKey: "ఇంకొంచెం::a little more",
         telugu: "ఇంకొంచెం",
         roman: "inkonchem",
         english: "a little more",
       },
       {
+        id: "enough",
+        progressKey: "చాలు::that’s enough",
         telugu: "చాలు",
         roman: "chaalu",
         english: "that’s enough",
@@ -328,25 +564,48 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "నాకు అర్థం కాలేదు",
-        roman: "naaku artham kaaledu",
+        id: "didnt-understand",
+        progressKey: "నాకు అర్థం కాలేదు::I didn’t understand",
+        telugu: "అర్థం కాలేదు",
+        roman: "artham kaaledu",
         english: "I didn’t understand",
+        note: "The shorter version is what you will usually need in the moment.",
       },
       {
-        telugu: "మెల్లగా చెప్పండి",
-        roman: "mellagaa cheppandi",
+        id: "say-slowly",
+        progressKey: "మెల్లగా చెప్పండి::please say it slowly",
+        telugu: "కొంచెం మెల్లగా చెప్పండి",
+        roman: "konchem mellagaa cheppandi",
         english: "please say it slowly",
+        alternatives: [
+          {
+            label: "With family or friends",
+            telugu: "కొంచెం మెల్లగా చెప్పు",
+            roman: "konchem mellagaa cheppu",
+          },
+        ],
       },
       {
+        id: "say-again",
+        progressKey: "మళ్లీ చెప్పండి::please say it again",
         telugu: "మళ్లీ చెప్పండి",
         roman: "malli cheppandi",
         english: "please say it again",
+        alternatives: [
+          {
+            label: "With family or friends",
+            telugu: "మళ్లీ చెప్పు",
+            roman: "malli cheppu",
+          },
+        ],
       },
       {
-        telugu: "నాకు తెలుగు బాగా రాదు",
-        roman: "naaku telugu baagaa raadu",
+        id: "telugu-not-well",
+        progressKey: "నాకు తెలుగు బాగా రాదు::I don’t know Telugu well",
+        telugu: "తెలుగు బాగా రాదు",
+        roman: "telugu baagaa raadu",
         english: "I don’t know Telugu well",
-        note: "A practical way to set expectations without abandoning the conversation.",
+        note: "A natural way to set expectations without abandoning the conversation.",
       },
     ],
   },
@@ -360,17 +619,66 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 5,
     milestone: true,
     words: [
-      { telugu: "నమస్కారం", roman: "namaskaaram", english: "hello" },
-      { telugu: "ధన్యవాదాలు", roman: "dhanyavaadaalu", english: "thank you" },
       {
-        telugu: "మీ పేరు ఏంటి?",
-        roman: "mee peru enti?",
-        english: "what is your name?",
+        id: "hello",
+        progressKey: "నమస్కారం::hello",
+        telugu: "హాయ్",
+        roman: "haay",
+        english: "hello",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "నమస్కారం అండి",
+            roman: "namaskaaram andi",
+          },
+        ],
       },
       {
+        id: "thank-you",
+        progressKey: "ధన్యవాదాలు::thank you",
+        telugu: "థ్యాంక్స్",
+        roman: "thanks",
+        english: "thank you",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "థ్యాంక్స్ అండి",
+            roman: "thanks andi",
+          },
+          {
+            label: "Formal Telugu",
+            telugu: "ధన్యవాదాలు",
+            roman: "dhanyavaadaalu",
+          },
+        ],
+      },
+      {
+        id: "ask-name",
+        progressKey: "మీ పేరు ఏంటి?::what is your name?",
+        telugu: "నీ పేరు ఏంటి?",
+        roman: "nee peru enti?",
+        english: "what is your name?",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "మీ పేరు ఏంటి?",
+            roman: "mee peru enti?",
+          },
+        ],
+      },
+      {
+        id: "say-again",
+        progressKey: "మళ్లీ చెప్పండి::please say it again",
         telugu: "మళ్లీ చెప్పండి",
         roman: "malli cheppandi",
         english: "please say it again",
+        alternatives: [
+          {
+            label: "With family or friends",
+            telugu: "మళ్లీ చెప్పు",
+            roman: "malli cheppu",
+          },
+        ],
       },
     ],
   },
@@ -384,24 +692,49 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "నేను బాగున్నాను",
-        roman: "nenu baagunnaanu",
-        english: "I am well",
+        id: "doing-well",
+        progressKey: "నేను బాగున్నాను::I am well",
+        telugu: "బాగానే ఉన్నాను",
+        roman: "baagaane unnaanu",
+        english: "I’m doing okay",
+        note: "A relaxed “I’m doing okay” without the unnecessary pronoun.",
       },
       {
-        telugu: "నాకు అలసటగా ఉంది",
-        roman: "naaku alasatagaa undi",
-        english: "I am tired",
+        id: "tired",
+        progressKey: "నాకు అలసటగా ఉంది::I am tired",
+        telugu: "అలసిపోయాను",
+        roman: "alasipoyaanu",
+        english: "I’m tired",
       },
       {
-        telugu: "నాకు సంతోషంగా ఉంది",
-        roman: "naaku santoshamgaa undi",
-        english: "I am happy",
+        id: "happy",
+        progressKey: "నాకు సంతోషంగా ఉంది::I am happy",
+        telugu: "చాలా హ్యాపీగా ఉన్నాను",
+        roman: "chaalaa happigaa unnaanu",
+        english: "I’m really happy",
+        note: "Mixing “happy” into Telugu is normal in casual conversation.",
+        alternatives: [
+          {
+            label: "More Telugu",
+            telugu: "చాలా సంతోషంగా ఉన్నాను",
+            roman: "chaalaa santoshamgaa unnaanu",
+          },
+        ],
       },
       {
-        telugu: "మీరు ఎలా ఉన్నారు?",
-        roman: "meeru elaa unnaaru?",
-        english: "how are you?",
+        id: "family-how-are-you",
+        progressKey: "మీరు ఎలా ఉన్నారు?::how are you? (respectful)",
+        telugu: "బాగున్నావా?",
+        roman: "baagunnaavaa?",
+        english: "are you doing well?",
+        note: "A very natural family check-in. Use the respectful ending with elders.",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "బాగున్నారా?",
+            roman: "baagunnaaraa?",
+          },
+        ],
       },
     ],
   },
@@ -415,21 +748,52 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "నేను రేపు వస్తాను",
-        roman: "nenu repu vastaanu",
+        id: "come-tomorrow",
+        progressKey: "నేను రేపు వస్తాను::I’ll come tomorrow",
+        telugu: "రేపు వస్తా",
+        roman: "repu vastaa",
         english: "I’ll come tomorrow",
+        note: "The ending is commonly shortened in casual conversation.",
+        alternatives: [
+          {
+            label: "Full form",
+            telugu: "రేపు వస్తాను",
+            roman: "repu vastaanu",
+          },
+        ],
       },
       {
-        telugu: "మీరు ఎప్పుడు ఇంట్లో ఉంటారు?",
-        roman: "meeru eppudu intlo untaaru?",
+        id: "when-home",
+        progressKey: "మీరు ఎప్పుడు ఇంట్లో ఉంటారు?::when will you be home?",
+        telugu: "ఎప్పుడు ఇంట్లో ఉంటావు?",
+        roman: "eppudu intlo untaavu?",
         english: "when will you be home?",
+        alternatives: [
+          {
+            label: "With elders or someone new",
+            telugu: "ఎప్పుడు ఇంట్లో ఉంటారు?",
+            roman: "eppudu intlo untaaru?",
+          },
+        ],
       },
       {
-        telugu: "నేను ఇప్పుడు బయల్దేరాను",
-        roman: "nenu ippudu bayalderaanu",
+        id: "leaving-now",
+        progressKey: "నేను ఇప్పుడు బయల్దేరాను::I’m leaving now",
+        telugu: "ఇప్పుడే బయల్దేరుతున్నా",
+        roman: "ippude bayalderutunnaa",
         english: "I’m leaving now",
+        note: "This ongoing form matches “I’m leaving now” more closely.",
+        alternatives: [
+          {
+            label: "Full form",
+            telugu: "ఇప్పుడే బయల్దేరుతున్నాను",
+            roman: "ippude bayalderutunnaanu",
+          },
+        ],
       },
       {
+        id: "see-you-again",
+        progressKey: "మళ్లీ కలుద్దాం::see you again",
         telugu: "మళ్లీ కలుద్దాం",
         roman: "malli kaluddaam",
         english: "let’s meet again",
@@ -446,17 +810,33 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 3,
     words: [
       {
-        telugu: "నాకు ఇది కావాలి",
-        roman: "naaku idi kaavaali",
+        id: "want-this",
+        progressKey: "నాకు ఇది కావాలి::I want this",
+        telugu: "ఇది కావాలి",
+        roman: "idi kaavaali",
         english: "I want this",
       },
       {
-        telugu: "నాకు ఇది వద్దు",
-        roman: "naaku idi vaddu",
+        id: "dont-want-this",
+        progressKey: "నాకు ఇది వద్దు::I don’t want this",
+        telugu: "ఇది వద్దు",
+        roman: "idi vaddu",
         english: "I don’t want this",
       },
-      { telugu: "ఇది ఎంత?", roman: "idi enta?", english: "how much is this?" },
-      { telugu: "అది", roman: "adi", english: "that one" },
+      {
+        id: "how-much",
+        progressKey: "ఇది ఎంత?::how much is this?",
+        telugu: "ఇది ఎంత?",
+        roman: "idi enta?",
+        english: "how much is this?",
+      },
+      {
+        id: "that-one",
+        progressKey: "అది::that one",
+        telugu: "అది",
+        roman: "adi",
+        english: "that one",
+      },
     ],
   },
   {
@@ -469,23 +849,40 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "బస్ స్టాప్ ఎక్కడ ఉంది?",
-        roman: "bus stop ekkada undi?",
+        id: "bus-stop",
+        progressKey: "బస్ స్టాప్ ఎక్కడ ఉంది?::where is the bus stop?",
+        telugu: "బస్ స్టాప్ ఎక్కడ?",
+        roman: "bus stop ekkada?",
         english: "where is the bus stop?",
+        note: "In a quick question, the ending is usually understood and can be dropped.",
+        alternatives: [
+          {
+            label: "Full form",
+            telugu: "బస్ స్టాప్ ఎక్కడ ఉంది?",
+            roman: "bus stop ekkada undi?",
+          },
+        ],
       },
       {
-        telugu: "ఇక్కడ ఆపండి దయచేసి",
-        roman: "ikkada aapandi dayachesi",
+        id: "stop-here",
+        progressKey: "ఇక్కడ ఆపండి దయచేసి::stop here, please",
+        telugu: "ఇక్కడ ఆపండి",
+        roman: "ikkada aapandi",
         english: "stop here, please",
+        note: "The respectful “-andi” ending already makes this polite.",
       },
       {
-        telugu: "సూటిగా వెళ్ళండి",
-        roman: "sootigaa vellandi",
+        id: "go-straight",
+        progressKey: "సూటిగా వెళ్ళండి::go straight",
+        telugu: "నేరుగా వెళ్లండి",
+        roman: "nerugaa vellandi",
         english: "go straight",
       },
       {
-        telugu: "ఇది అక్కడికి వెళ్లే దారినా?",
-        roman: "idi akkadiki velle daarinaa?",
+        id: "way-there",
+        progressKey: "ఇది అక్కడికి వెళ్లే దారినా?::is this the way there?",
+        telugu: "అక్కడికి ఇదే దారినా?",
+        roman: "akkadiki ide daarinaa?",
         english: "is this the way there?",
       },
     ],
@@ -499,18 +896,39 @@ const practicalLessonSources: LessonSource[] = [
     outcome: "Handle a quick purchase without handing the whole interaction to English.",
     minutes: 4,
     words: [
-      { telugu: "ఇది ఎంత?", roman: "idi enta?", english: "how much is this?" },
       {
-        telugu: "చాలా ఖరీదు",
-        roman: "chaalaa khareedu",
+        id: "how-much",
+        progressKey: "ఇది ఎంత?::how much is this?",
+        telugu: "ఇది ఎంత?",
+        roman: "idi enta?",
+        english: "how much is this?",
+      },
+      {
+        id: "too-expensive",
+        progressKey: "చాలా ఖరీదు::too expensive",
+        telugu: "చాలా ఎక్కువ",
+        roman: "chaalaa ekkuva",
         english: "too expensive",
+        note: "Literally “too much,” and very natural when reacting to a price.",
       },
       {
-        telugu: "ధర తగ్గించగలరా?",
-        roman: "dhara tagginchagalaraa?",
-        english: "can you reduce the price?",
+        id: "lower-price",
+        progressKey: "ధర తగ్గించగలరా?::can you reduce the price?",
+        telugu: "కొంచెం తగ్గించండి",
+        roman: "konchem tagginchandi",
+        english: "please lower it a little",
+        note: "At a market, you may add “anna” or “akka” when addressing the seller warmly.",
+        alternatives: [
+          {
+            label: "Softer at a shop",
+            telugu: "కొంచెం తగ్గిస్తారా?",
+            roman: "konchem taggistaraa?",
+          },
+        ],
       },
       {
+        id: "have-change",
+        progressKey: "చేంజ్ ఉందా?::do you have change?",
         telugu: "చేంజ్ ఉందా?",
         roman: "change undaa?",
         english: "do you have change?",
@@ -528,23 +946,31 @@ const practicalLessonSources: LessonSource[] = [
     minutes: 4,
     words: [
       {
-        telugu: "నాకు ఒంట్లో బాగా లేదు",
-        roman: "naaku ontlo baagaa ledu",
+        id: "not-feeling-well",
+        progressKey: "నాకు ఒంట్లో బాగా లేదు::I’m not feeling well",
+        telugu: "ఒంట్లో బాగోలేదు",
+        roman: "ontlo baagoledu",
         english: "I’m not feeling well",
       },
       {
-        telugu: "నాకు కొంచెం జ్వరంగా ఉంది",
-        roman: "naaku konchem jwarangaa undi",
+        id: "slight-fever",
+        progressKey: "నాకు కొంచెం జ్వరంగా ఉంది::I have a slight fever",
+        telugu: "కొంచెం జ్వరం ఉంది",
+        roman: "konchem jwaram undi",
         english: "I have a slight fever",
       },
       {
-        telugu: "నాకు డాక్టర్ కావాలి",
-        roman: "naaku doctor kaavaali",
+        id: "need-doctor",
+        progressKey: "నాకు డాక్టర్ కావాలి::I need a doctor",
+        telugu: "డాక్టర్ కావాలి",
+        roman: "doctor kaavaali",
         english: "I need a doctor",
       },
       {
-        telugu: "నాకు సహాయం కావాలి",
-        roman: "naaku sahaayam kaavaali",
+        id: "need-help",
+        progressKey: "నాకు సహాయం కావాలి::I need help",
+        telugu: "సహాయం కావాలి",
+        roman: "sahaayam kaavaali",
         english: "I need help",
       },
     ],
@@ -568,12 +994,12 @@ export function findLesson(id: string | null | undefined) {
   return practicalLessons.find((lesson) => lesson.id === id);
 }
 
-function findPracticeWord(lessonId: string, english: string) {
+function findPracticeWord(lessonId: string, wordId: string) {
   const lesson = findLesson(lessonId);
-  const word = lesson?.words.find((candidate) => candidate.english === english);
+  const word = lesson?.words.find((candidate) => candidate.id === wordId);
 
   if (!word) {
-    throw new Error(`Missing practice phrase: ${lessonId}/${english}`);
+    throw new Error(`Missing practice phrase: ${lessonId}/${wordId}`);
   }
 
   return word;
@@ -587,10 +1013,10 @@ export const practicePacks: PracticePack[] = [
       "Greet someone, thank them, ask a name, request water, and ask for a repeat.",
     words: [
       findPracticeWord("hello-goodbye", "hello"),
-      findPracticeWord("please-thank-you", "thank you"),
-      findPracticeWord("names-introductions", "what is your name?"),
-      findPracticeWord("food-water", "I would like water"),
-      findPracticeWord("when-stuck", "please say it again"),
+      findPracticeWord("please-thank-you", "thank-you"),
+      findPracticeWord("names-introductions", "ask-name"),
+      findPracticeWord("food-water", "water"),
+      findPracticeWord("when-stuck", "say-again"),
     ],
   },
   {
@@ -599,8 +1025,8 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Answer the questions you hear first without dropping back into English.",
     words: [
-      findPracticeWord("hello-goodbye", "how are you? (respectful)"),
-      findPracticeWord("hello-goodbye", "I’m well"),
+      findPracticeWord("hello-goodbye", "how-are-you"),
+      findPracticeWord("hello-goodbye", "im-well"),
       findPracticeWord("yes-no-okay", "yes"),
       findPracticeWord("yes-no-okay", "no"),
       findPracticeWord("yes-no-okay", "okay"),
@@ -613,10 +1039,10 @@ export const practicePacks: PracticePack[] = [
       "Make a request, apologize, and handle small social moments naturally.",
     words: [
       findPracticeWord("please-thank-you", "please"),
-      findPracticeWord("please-thank-you", "it’s okay / no problem"),
-      findPracticeWord("please-thank-you", "sorry / excuse me"),
-      findPracticeWord("yes-no-okay", "I don’t know"),
-      findPracticeWord("when-stuck", "please say it slowly"),
+      findPracticeWord("please-thank-you", "no-problem"),
+      findPracticeWord("please-thank-you", "sorry"),
+      findPracticeWord("yes-no-okay", "dont-know"),
+      findPracticeWord("when-stuck", "say-slowly"),
     ],
   },
   {
@@ -625,11 +1051,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Recover when you are stuck, then introduce yourself without leaving Telugu.",
     words: [
-      findPracticeWord("when-stuck", "I didn’t understand"),
-      findPracticeWord("when-stuck", "I don’t know Telugu well"),
-      findPracticeWord("names-introductions", "my name is…"),
-      findPracticeWord("names-introductions", "nice to meet you"),
-      findPracticeWord("names-introductions", "where are you from?"),
+      findPracticeWord("when-stuck", "didnt-understand"),
+      findPracticeWord("when-stuck", "telugu-not-well"),
+      findPracticeWord("names-introductions", "my-name"),
+      findPracticeWord("names-introductions", "happy-to-meet-you"),
+      findPracticeWord("names-introductions", "where-from"),
     ],
   },
   {
@@ -638,11 +1064,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Join the familiar first conversation and answer how you are feeling.",
     words: [
-      findPracticeWord("family-words", "have you eaten?"),
-      findPracticeWord("family-words", "how are you? (respectful)"),
-      findPracticeWord("first-feelings", "I am well"),
-      findPracticeWord("first-feelings", "I am tired"),
-      findPracticeWord("first-feelings", "I am happy"),
+      findPracticeWord("family-words", "have-you-eaten"),
+      findPracticeWord("family-words", "family-how-are-you"),
+      findPracticeWord("first-feelings", "doing-well"),
+      findPracticeWord("first-feelings", "tired"),
+      findPracticeWord("first-feelings", "happy"),
     ],
   },
   {
@@ -651,11 +1077,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Respond while food is being served and make a simple choice clearly.",
     words: [
-      findPracticeWord("food-water", "this is very good"),
-      findPracticeWord("food-water", "a little more"),
-      findPracticeWord("food-water", "that’s enough"),
-      findPracticeWord("this-that", "I want this"),
-      findPracticeWord("this-that", "I don’t want this"),
+      findPracticeWord("food-water", "food-is-good"),
+      findPracticeWord("food-water", "little-more"),
+      findPracticeWord("food-water", "enough"),
+      findPracticeWord("this-that", "want-this"),
+      findPracticeWord("this-that", "dont-want-this"),
     ],
   },
   {
@@ -664,11 +1090,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Find family members and coordinate a simple arrival or departure.",
     words: [
-      findPracticeWord("family-words", "where are you?"),
-      findPracticeWord("family-words", "is mom at home?"),
-      findPracticeWord("i-you-we", "I’ll come tomorrow"),
-      findPracticeWord("i-you-we", "when will you be home?"),
-      findPracticeWord("i-you-we", "I’m leaving now"),
+      findPracticeWord("family-words", "where-are-you"),
+      findPracticeWord("family-words", "is-mom-home"),
+      findPracticeWord("i-you-we", "come-tomorrow"),
+      findPracticeWord("i-you-we", "when-home"),
+      findPracticeWord("i-you-we", "leaving-now"),
     ],
   },
   {
@@ -677,11 +1103,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Point, choose, ask the price, and get through a small purchase.",
     words: [
-      findPracticeWord("this-that", "that one"),
-      findPracticeWord("this-that", "how much is this?"),
-      findPracticeWord("first-conversation", "too expensive"),
-      findPracticeWord("first-conversation", "can you reduce the price?"),
-      findPracticeWord("first-conversation", "do you have change?"),
+      findPracticeWord("this-that", "that-one"),
+      findPracticeWord("this-that", "how-much"),
+      findPracticeWord("first-conversation", "too-expensive"),
+      findPracticeWord("first-conversation", "lower-price"),
+      findPracticeWord("first-conversation", "have-change"),
     ],
   },
   {
@@ -690,11 +1116,11 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Ask for directions, stop a ride, and end the exchange warmly.",
     words: [
-      findPracticeWord("question-words", "where is the bus stop?"),
-      findPracticeWord("question-words", "stop here, please"),
-      findPracticeWord("question-words", "go straight"),
-      findPracticeWord("question-words", "is this the way there?"),
-      findPracticeWord("hello-goodbye", "see you again"),
+      findPracticeWord("question-words", "bus-stop"),
+      findPracticeWord("question-words", "stop-here"),
+      findPracticeWord("question-words", "go-straight"),
+      findPracticeWord("question-words", "way-there"),
+      findPracticeWord("hello-goodbye", "see-you-again"),
     ],
   },
   {
@@ -703,10 +1129,10 @@ export const practicePacks: PracticePack[] = [
     outcome:
       "Say that something is wrong and ask clearly for the support you need.",
     words: [
-      findPracticeWord("building-blocks-milestone", "I’m not feeling well"),
-      findPracticeWord("building-blocks-milestone", "I have a slight fever"),
-      findPracticeWord("building-blocks-milestone", "I need a doctor"),
-      findPracticeWord("building-blocks-milestone", "I need help"),
+      findPracticeWord("building-blocks-milestone", "not-feeling-well"),
+      findPracticeWord("building-blocks-milestone", "slight-fever"),
+      findPracticeWord("building-blocks-milestone", "need-doctor"),
+      findPracticeWord("building-blocks-milestone", "need-help"),
     ],
   },
 ];
