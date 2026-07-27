@@ -542,7 +542,7 @@ function TodayView({
     <AppShell screen="today">
       <main className="page home-page">
         <section className="home-hero" aria-labelledby="today-heading">
-          <h1 id="today-heading">Say something useful today.</h1>
+          <h1 id="today-heading">Learn Telugu you’ll actually use</h1>
           <p>
             Five practical Telugu phrases for family visits, meals, and the
             moments when you need a little help.

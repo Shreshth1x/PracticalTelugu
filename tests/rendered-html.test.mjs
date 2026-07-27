@@ -31,7 +31,7 @@ async function render(pathname = "/") {
 }
 
 const routeCases = [
-  ["/", /Say something useful today\./],
+  ["/", /Learn Telugu you’ll actually use/],
   ["/learn", /What do you need to say\?/],
   ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
