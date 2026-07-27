@@ -14,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const socialImage = `${origin}/og.png`;
+  const socialImage = `${origin}/og.jpg`;
 
   return {
     metadataBase: new URL(origin),
@@ -64,7 +64,11 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Noto+Sans+Telugu:wght@400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Capriola&family=Geist+Pixel&family=Turret+Road:wght@200;300;400;500;700;800&display=swap"
+          rel="stylesheet"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;500;600;700&display=swap"
           rel="stylesheet"
         />
         {process.env.NODE_ENV === "development" ? (

@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import PalukuApp from "./PalukuApp";
 
 export const metadata: Metadata = {
-  title: "PalukuLingo — Telugu that feels close to home",
+  title: "Today · PalukuLingo",
   description:
-    "Practical Telugu essentials and a friendly full course, guided by Mayu the peacock.",
+    "Meet five useful Telugu words and continue your course with Mayu.",
 };
 
 export default function Home() {
-  return <PalukuApp />;
+  return <PalukuApp screen="today" />;
 }

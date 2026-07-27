@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import PalukuApp from "../../PalukuApp";
 import { findLesson } from "../../course-data";
 
@@ -21,5 +22,6 @@ export async function generateMetadata({
 
 export default async function LessonPage({ params }: LessonPageProps) {
   const { slug } = await params;
-  return <PalukuApp initialLessonId={slug} />;
+  if (!findLesson(slug)) notFound();
+  return <PalukuApp screen="lesson" initialLessonId={slug} />;
 }
