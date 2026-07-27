@@ -2,8 +2,9 @@
 
 PracticalTelugu is a fast, phrase-first Telugu companion for people who want to
 participate in real conversations. It skips alphabet units, grammar detours,
-and locked curricula in favor of short, open practice for family visits,
-meals, errands, travel, and moments when someone needs help.
+and locked curricula in favor of an ordered practical path that moves five
+phrases at a time while keeping family visits, meals, errands, travel, and
+helpful situations open.
 
 Mayu, an original Indian peacock mascot, introduces the first phrase and
 returns to celebrate completed practice. Completed situations and phrase

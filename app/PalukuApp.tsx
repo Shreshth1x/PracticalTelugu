@@ -12,12 +12,14 @@ import {
 import {
   allLessons,
   findLesson,
+  practicePacks,
   practicalLessons,
   situationGroups,
   type Lesson,
   type SituationGroup,
   type TeluguWord,
 } from "./course-data";
+import { phraseKey, resolvePracticePath } from "./practice-path.mjs";
 
 export type AppScreen =
   | "today"
@@ -59,12 +61,6 @@ type LibraryWord = TeluguWord & {
   group: SituationGroup;
 };
 
-type DailyWord = {
-  word: TeluguWord;
-  exampleTelugu: string;
-  exampleEnglish: string;
-};
-
 const STORAGE_KEY = "palukulu.progress.v2";
 const LEGACY_STORAGE_KEY = "palukulu.progress.v1";
 const PREFERENCES_KEY = "palukulu.preferences.v1";
@@ -93,54 +89,13 @@ function formatPronunciation(value: string) {
   return `(${value.trim()})`;
 }
 
-function findDailyWord(lessonId: string, english: string) {
-  const lesson = findLesson(lessonId);
-  const word = lesson?.words.find(
-    (candidate) => normalize(candidate.english) === normalize(english),
-  );
-
-  if (!word) {
-    throw new Error(`Missing daily phrase: ${lessonId}/${english}`);
-  }
-
-  return word;
-}
-
-const dailyWords: DailyWord[] = [
-  {
-    word: findDailyWord("hello-goodbye", "hello"),
-    exampleTelugu: "నమస్కారం, అత్తయ్య.",
-    exampleEnglish: "Hello, auntie.",
-  },
-  {
-    word: findDailyWord("please-thank-you", "thank you"),
-    exampleTelugu: "భోజనానికి ధన్యవాదాలు.",
-    exampleEnglish: "Thank you for the meal.",
-  },
-  {
-    word: findDailyWord("names-introductions", "what is your name?"),
-    exampleTelugu: "మీ పేరు ఏంటి?",
-    exampleEnglish: "What is your name?",
-  },
-  {
-    word: findDailyWord("food-water", "I would like water"),
-    exampleTelugu: "నాకు నీళ్లు కావాలి.",
-    exampleEnglish: "I would like some water.",
-  },
-  {
-    word: findDailyWord("when-stuck", "please say it again"),
-    exampleTelugu: "దయచేసి మళ్లీ చెప్పండి.",
-    exampleEnglish: "Please say it again.",
-  },
-];
-
 const libraryWords: LibraryWord[] = (() => {
   const seen = new Set<string>();
   const words: LibraryWord[] = [];
 
   allLessons.forEach((lesson) => {
     lesson.words.forEach((word) => {
-      const key = `${word.telugu}::${word.english}`;
+      const key = phraseKey(word);
       if (seen.has(key)) return;
 
       seen.add(key);
@@ -547,10 +502,34 @@ function TodayView({
   const featuredSituations = practicalLessons.filter((lesson) =>
     featuredSituationIds.includes(lesson.id),
   );
-  const hello = dailyWords[0].word;
-  const practicedDaily = dailyWords.filter(({ word }) =>
-    Boolean(state.confidence[`${word.telugu}::${word.english}`]),
-  ).length;
+  const path = resolvePracticePath(practicePacks, state.confidence);
+  const activePack = practicePacks[path.packIndex];
+  const pathPhraseCount = practicePacks.reduce(
+    (total, pack) => total + pack.words.length,
+    0,
+  );
+  const nextWord =
+    activePack.words[path.phraseIndex] ?? activePack.words[0];
+  const practiceLabel = path.allComplete
+    ? "Review your first five"
+    : path.completedInPack
+      ? `Continue ${activePack.title.toLocaleLowerCase()}`
+      : path.packIndex === 0
+        ? "Practice your first five"
+        : `Start ${activePack.title.toLocaleLowerCase()}`;
+  const practiceMeta = path.allComplete
+    ? `All ${pathPhraseCount} phrases covered`
+    : path.completedInPack
+      ? `${path.completedInPack} of ${activePack.words.length} practiced`
+      : `Set ${path.packIndex + 1} of ${practicePacks.length}, about 4 minutes`;
+  const guideTitle =
+    path.packIndex === 0 && path.phraseIndex === 0 && !path.allComplete
+      ? "Start with hello."
+      : path.allComplete
+        ? "Keep the essentials close."
+        : path.completedInPack
+          ? "Pick up where you left off."
+          : `Next up: ${activePack.title}.`;
 
   return (
     <AppShell screen="today">
@@ -559,15 +538,9 @@ function TodayView({
           <h1 id="today-heading">Learn Telugu you’ll actually use</h1>
           <div className="home-actions">
             <Link href="/words/daily" className="primary-button">
-              {practicedDaily === dailyWords.length
-                ? "Review five phrases"
-                : "Practice five phrases"}
+              {practiceLabel}
             </Link>
-            <span className="action-time">
-              {practicedDaily
-                ? `${practicedDaily} of ${dailyWords.length} practiced`
-                : "About 4 minutes"}
-            </span>
+            <span className="action-time">{practiceMeta}</span>
             <Link href="/learn" className="text-link">
               Choose a situation
               <Icon name="arrow" />
@@ -577,9 +550,9 @@ function TodayView({
 
         <section className="home-guide" aria-labelledby="home-guide-title">
           <div className="home-guide-copy">
-            <h2 id="home-guide-title">Start with hello.</h2>
-            <PhraseStack word={hello} size="card" />
-            <AudioButton word={hello} notify={notify} />
+            <h2 id="home-guide-title">{guideTitle}</h2>
+            <PhraseStack word={nextWord} size="card" />
+            <AudioButton word={nextWord} notify={notify} />
           </div>
           <span className="mayu-intro">Meet Mayu</span>
           <MayuImage
@@ -785,11 +758,13 @@ function WordRow({
 }
 
 function PhrasebookView({
+  state,
   preferences,
   savedWords,
   setSavedWords,
   notify,
 }: {
+  state: SavedState;
   preferences: Preferences;
   savedWords: string[];
   setSavedWords: React.Dispatch<React.SetStateAction<string[]>>;
@@ -817,12 +792,11 @@ function PhrasebookView({
     };
   }, [selectedWord]);
 
+  const path = resolvePracticePath(practicePacks, state.confidence);
+  const activePack = practicePacks[path.packIndex];
   const todayKeys = useMemo(
-    () =>
-      new Set(
-        dailyWords.map(({ word }) => `${word.telugu}::${word.english}`),
-      ),
-    [],
+    () => new Set(activePack.words.map(phraseKey)),
+    [activePack],
   );
 
   const visibleWords = useMemo(() => {
@@ -914,11 +888,15 @@ function PhrasebookView({
         {tab === "today" ? (
           <div className="phrasebook-today">
             <div>
-              <h2>Today’s five.</h2>
-              <p>A quick set for the most common everyday moments.</p>
+              <h2>{activePack.title}.</h2>
+              <p>{activePack.outcome}</p>
             </div>
             <Link href="/words/daily" className="secondary-button">
-              Practice these
+              {path.allComplete
+                ? "Review these"
+                : path.completedInPack
+                  ? "Continue this set"
+                  : "Practice these"}
             </Link>
           </div>
         ) : (
@@ -1064,33 +1042,42 @@ function PhrasebookView({
 }
 
 function DailySession({
+  state,
   setState,
   preferences,
   notify,
 }: {
+  state: SavedState;
   setState: React.Dispatch<React.SetStateAction<SavedState>>;
   preferences: Preferences;
   notify: (message: string) => void;
 }) {
-  const [wordIndex, setWordIndex] = useState(0);
+  const [position, setPosition] = useState(() => {
+    const path = resolvePracticePath(practicePacks, state.confidence);
+    return {
+      packIndex: path.packIndex,
+      wordIndex: path.phraseIndex,
+      reviewing: path.allComplete,
+    };
+  });
   const [revealed, setRevealed] = useState(false);
-  const [results, setResults] = useState<("learning" | "ready")[]>([]);
-  const finished = wordIndex >= dailyWords.length;
-  const current = finished ? null : dailyWords[wordIndex];
+  const pack = practicePacks[position.packIndex];
+  const finished = position.wordIndex >= pack.words.length;
+  const current = finished ? null : pack.words[position.wordIndex];
 
   useEffect(() => {
-    if (!preferences.autoplay || !current?.word.audioSrc) return;
+    if (!preferences.autoplay || !current?.audioSrc) return;
 
-    const audio = new Audio(current.word.audioSrc);
+    const audio = new Audio(current.audioSrc);
     audio.play().catch(() => {
       // Manual playback remains available when the browser blocks autoplay.
     });
     return () => audio.pause();
-  }, [current?.word.audioSrc, preferences.autoplay]);
+  }, [current?.audioSrc, preferences.autoplay]);
 
   const markWord = (result: "learning" | "ready") => {
     if (current) {
-      const key = `${current.word.telugu}::${current.word.english}`;
+      const key = phraseKey(current);
       setState((currentState) => ({
         completed: currentState.completed,
         confidence: {
@@ -1100,31 +1087,63 @@ function DailySession({
       }));
     }
 
-    setResults((currentResults) => [...currentResults, result]);
     setRevealed(false);
-    setWordIndex((currentIndex) => currentIndex + 1);
+    setPosition((currentPosition) => ({
+      ...currentPosition,
+      wordIndex: currentPosition.wordIndex + 1,
+    }));
   };
 
-  const restart = () => {
-    setWordIndex(0);
+  const continuePath = () => {
+    const path = resolvePracticePath(practicePacks, state.confidence);
+    const nextPackIndex = path.allComplete
+      ? (position.packIndex + 1) % practicePacks.length
+      : path.packIndex;
+
+    setPosition({
+      packIndex: nextPackIndex,
+      wordIndex: path.allComplete ? 0 : path.phraseIndex,
+      reviewing: path.allComplete,
+    });
     setRevealed(false);
-    setResults([]);
+    window.scrollTo({ top: 0 });
   };
 
   if (finished) {
-    const ready = results.filter((result) => result === "ready").length;
+    const path = resolvePracticePath(practicePacks, state.confidence);
+    const nextPackIndex = path.allComplete
+      ? (position.packIndex + 1) % practicePacks.length
+      : path.packIndex;
+    const nextPack = practicePacks[nextPackIndex];
+    const ready = pack.words.filter(
+      (word) => state.confidence[phraseKey(word)] === "ready",
+    ).length;
+    const completedPathNow =
+      path.allComplete &&
+      !position.reviewing &&
+      position.packIndex === practicePacks.length - 1;
+    const recapCopy = completedPathNow
+      ? "You’ve covered the complete practical path. Circle back whenever you want to keep the essentials fresh."
+      : position.reviewing
+        ? `Next, review ${nextPack.title.toLocaleLowerCase()}.`
+        : `Next up: ${nextPack.title}. ${nextPack.outcome}`;
+    const continueLabel = completedPathNow
+      ? "Review your first five"
+      : position.reviewing
+        ? `Review ${nextPack.title.toLocaleLowerCase()}`
+        : `Continue to ${nextPack.title.toLocaleLowerCase()}`;
 
     return (
       <main className="focus-session recap-session">
         <header className="focus-header">
           <Link
-            href="/words"
+            href="/"
             className="icon-button"
-            aria-label="Close quick five"
+            aria-label="Leave practice"
           >
             <Icon name="close" />
           </Link>
-          <strong>Quick five</strong>
+          <strong>{pack.title}</strong>
           <span className="focus-header-space" aria-hidden="true" />
         </header>
 
@@ -1134,37 +1153,44 @@ function DailySession({
             alt=""
             className="recap-mayu"
           />
-          <h1>Five phrases ready for today.</h1>
+          <h1>{pack.title} is ready.</h1>
           <p>
-            You marked {ready} as ready to use. The others will be easy to find
-            for another pass.
+            You marked {ready} of {pack.words.length} as ready to use.{" "}
+            {recapCopy}
           </p>
 
           <div className="recap-list">
-            {dailyWords.map(({ word }, index) => (
-              <div className="recap-item" key={word.telugu}>
-                <PhraseStack
-                  word={word}
-                  showRomanization={preferences.showRomanization}
-                  size="recap"
-                />
-                <span
-                  className={`confidence-label ${
-                    results[index] === "ready" ? "confidence-ready" : ""
-                  }`}
-                >
-                  {results[index] === "ready" ? "Ready" : "Review"}
-                </span>
-              </div>
-            ))}
+            {pack.words.map((word) => {
+              const isReady = state.confidence[phraseKey(word)] === "ready";
+
+              return (
+                <div className="recap-item" key={phraseKey(word)}>
+                  <PhraseStack
+                    word={word}
+                    showRomanization={preferences.showRomanization}
+                    size="recap"
+                  />
+                  <span
+                    className={`confidence-label ${
+                      isReady ? "confidence-ready" : ""
+                    }`}
+                  >
+                    {isReady ? "Ready" : "Review"}
+                  </span>
+                </div>
+              );
+            })}
           </div>
 
-          <Link href="/" className="primary-button recap-primary">
-            Back to today
-          </Link>
-          <button className="text-button" onClick={restart}>
-            Practice again
+          <button
+            className="primary-button recap-primary"
+            onClick={continuePath}
+          >
+            {continueLabel}
           </button>
+          <Link href="/" className="text-button">
+            Back to Today
+          </Link>
         </div>
       </main>
     );
@@ -1176,45 +1202,46 @@ function DailySession({
     <main className="focus-session">
       <header className="focus-header">
         <Link
-          href="/words"
+          href="/"
           className="icon-button"
-          aria-label="Close quick five"
+          aria-label="Leave practice"
         >
           <Icon name="close" />
         </Link>
         <div className="focus-progress-wrap">
-          <strong>Quick five</strong>
+          <strong>
+            Set {position.packIndex + 1}: {pack.title}
+          </strong>
           <ProgressBar
-            value={wordIndex + 1}
-            max={dailyWords.length}
-            label="Quick five progress"
+            value={position.wordIndex + 1}
+            max={pack.words.length}
+            label={`${pack.title} progress`}
           />
         </div>
         <span className="step-count">
-          {wordIndex + 1} of {dailyWords.length}
+          {position.wordIndex + 1} of {pack.words.length}
         </span>
       </header>
 
       <section className="daily-stage" aria-labelledby="daily-word-title">
         <PhraseStack
-          word={current.word}
+          word={current}
           showRomanization={preferences.showRomanization}
           size="hero"
           headingAs="h1"
           headingId="daily-word-title"
         />
 
-        <AudioButton word={current.word} notify={notify} />
+        <AudioButton word={current} notify={notify} />
 
         <div className={`example-panel ${revealed ? "example-visible" : ""}`}>
           {revealed ? (
             <>
-              <h2>In a sentence</h2>
-              <strong>{current.exampleEnglish}</strong>
-              <span lang="te">{current.exampleTelugu}</span>
+              <h2>Use it here</h2>
+              <strong>{current.note ?? pack.outcome}</strong>
             </>
           ) : (
-            <p>Hear the phrase, say it once, then see it in a real sentence.</p>
+            <p>Hear the phrase, say it once, then see where it fits.</p>
           )}
         </div>
       </section>
@@ -1240,7 +1267,7 @@ function DailySession({
             className="primary-button focus-primary"
             onClick={() => setRevealed(true)}
           >
-            Show an example
+            See when to use it
           </button>
         )}
       </footer>
@@ -1336,7 +1363,10 @@ function SettingsView({
         <section className="settings-reset" aria-labelledby="reset-settings">
           <div>
             <h2 id="reset-settings">Practice history</h2>
-            <p>Clear completed situations and phrase confidence on this device.</p>
+            <p>
+              Clear your practical path, completed situations, and phrase
+              confidence on this device.
+            </p>
           </div>
           <button
             className="danger-button"
@@ -1358,8 +1388,8 @@ function SettingsView({
           >
             <h2 id="reset-title">Clear your practice history?</h2>
             <p>
-              This removes completed situations and confidence stored in this
-              browser. Saved phrases stay saved.
+              This removes path progress, completed situations, and confidence
+              stored in this browser. Saved phrases stay saved.
             </p>
             <div className="dialog-actions">
               <button className="secondary-button" onClick={closeResetDialog}>
@@ -2151,6 +2181,8 @@ export default function PalukuApp({
   } else if (screen === "daily") {
     content = (
       <DailySession
+        key={hydrated ? "daily-restored" : "daily-initial"}
+        state={state}
         setState={setState}
         preferences={preferences}
         notify={setToast}
@@ -2161,6 +2193,7 @@ export default function PalukuApp({
   } else if (screen === "words") {
     content = (
       <PhrasebookView
+        state={state}
         preferences={preferences}
         savedWords={savedWords}
         setSavedWords={setSavedWords}

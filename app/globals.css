@@ -1380,6 +1380,7 @@ svg {
   color: var(--muted);
   font-size: 13px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
@@ -1430,9 +1431,12 @@ svg {
 }
 
 .example-panel strong {
+  max-width: 500px;
   margin-top: 12px;
   color: var(--ink-strong);
   font-size: 20px;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 
 .example-panel span {

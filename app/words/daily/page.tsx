@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import PalukuApp from "../../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Quick five | PracticalTelugu",
-  description: "Five practical Telugu phrases to get ready for a real conversation.",
+  title: "Practical path | PracticalTelugu",
+  description:
+    "Move through practical Telugu five phrases at a time and always resume where you left off.",
 };
 
 export default function DailyWordsPage() {

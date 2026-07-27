@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { practicePacks } from "../app/course-data.ts";
+import { phraseKey, resolvePracticePath } from "../app/practice-path.mjs";
 
 const templateRoot = new URL("../", import.meta.url);
 let renderCount = 0;
@@ -87,8 +89,11 @@ test("keeps the home hero focused on one compact action cluster", async () => {
   const html = await response.text();
   const actionsStart = html.indexOf('class="home-actions"');
   const actionsEnd = html.indexOf("</div>", actionsStart);
-  const practiceIndex = html.indexOf("Practice five phrases", actionsStart);
-  const durationIndex = html.indexOf("About 4 minutes", actionsStart);
+  const practiceIndex = html.indexOf("Practice your first five", actionsStart);
+  const durationIndex = html.indexOf(
+    "Set 1 of 10, about 4 minutes",
+    actionsStart,
+  );
   const situationIndex = html.indexOf("Choose a situation", actionsStart);
 
   assert.doesNotMatch(
@@ -115,6 +120,68 @@ test("keeps the home hero focused on one compact action cluster", async () => {
   const mayuIntro = html.indexOf("Meet Mayu", guideStart);
   assert.ok(mayuIntro > guideStart, "Mayu is introduced inside the hello guide");
   assert.ok(mayuIntro < guideEnd, "Mayu introduction stays with the mascot");
+});
+
+test("moves through the practical path five phrases at a time", () => {
+  assert.equal(practicePacks.length, 10);
+  assert.deepEqual(
+    practicePacks.map((pack) => pack.words.length),
+    [5, 5, 5, 5, 5, 5, 5, 5, 5, 4],
+  );
+  assert.deepEqual(
+    practicePacks[0].words.map((word) => word.english),
+    [
+      "hello",
+      "thank you",
+      "what is your name?",
+      "I would like water",
+      "please say it again",
+    ],
+  );
+
+  const pathKeys = practicePacks.flatMap((pack) =>
+    pack.words.map((word) => phraseKey(word)),
+  );
+  const teluguPhrases = practicePacks.flatMap((pack) =>
+    pack.words.map((word) => word.telugu),
+  );
+  assert.equal(new Set(pathKeys).size, 49);
+  assert.equal(new Set(teluguPhrases).size, 49);
+
+  const empty = resolvePracticePath(practicePacks, {});
+  assert.deepEqual(empty, {
+    packIndex: 0,
+    phraseIndex: 0,
+    completedInPack: 0,
+    completedPacks: 0,
+    allComplete: false,
+  });
+
+  const confidence = {
+    [phraseKey(practicePacks[0].words[0])]: "learning",
+    [phraseKey(practicePacks[0].words[1])]: "ready",
+  };
+  assert.equal(
+    resolvePracticePath(practicePacks, confidence).phraseIndex,
+    2,
+  );
+
+  for (const word of practicePacks[0].words) {
+    confidence[phraseKey(word)] = "ready";
+  }
+  const secondPack = resolvePracticePath(practicePacks, confidence);
+  assert.equal(secondPack.packIndex, 1);
+  assert.equal(secondPack.phraseIndex, 0);
+  assert.equal(secondPack.completedPacks, 1);
+
+  for (const word of practicePacks.flatMap((pack) => pack.words)) {
+    confidence[phraseKey(word)] = "ready";
+  }
+  const complete = resolvePracticePath(practicePacks, confidence);
+  assert.equal(complete.allComplete, true);
+  assert.equal(complete.completedPacks, practicePacks.length);
+  assert.equal(complete.packIndex, 0);
+  assert.equal(complete.phraseIndex, 0);
 });
 
 test("teaches each phrase in English, pronunciation, Telugu order", async () => {
@@ -175,7 +242,13 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     app,
     /current\.completed\.includes\(lesson\.id\)[\s\S]*\[\.\.\.current\.completed, lesson\.id\]/,
   );
-  assert.match(app, /findDailyWord\("hello-goodbye"/);
+  assert.match(app, /resolvePracticePath\(practicePacks, state\.confidence\)/);
+  assert.match(app, /key=\{hydrated \? "daily-restored" : "daily-initial"\}/);
+  assert.match(
+    app,
+    /Continue to \$\{nextPack\.title\.toLocaleLowerCase\(\)\}/,
+  );
+  assert.doesNotMatch(app, /const dailyWords/);
   assert.match(app, /type: "introduce"/);
   assert.match(app, /type: "matching"/);
   assert.match(app, /tokens: phrase\.roman\.trim\(\)/);
@@ -207,6 +280,7 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(courseData, /minutes: 4/);
   assert.match(courseData, /essentials-milestone/);
   assert.match(courseData, /building-blocks-milestone/);
+  assert.match(courseData, /export const practicePacks/);
 
   const productCopy = `${app}\n${courseData}\n${layout}\n${readme}`;
   assert.doesNotMatch(
@@ -243,7 +317,7 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   );
   assert.doesNotMatch(productCopy, /[—·]/);
   assert.doesNotMatch(app, /overline|pixel-meta/);
-  assert.match(app, /practicedDaily/);
+  assert.match(app, /const practiceMeta = path\.allComplete/);
   assert.match(app, /Recording soon/);
   assert.match(app, /event\.key === "ArrowRight"/);
   assert.match(app, /type MayuVariant = "guide" \| "success"/);

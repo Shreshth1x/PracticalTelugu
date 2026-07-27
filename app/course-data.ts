@@ -24,6 +24,13 @@ export type Lesson = {
   milestone?: boolean;
 };
 
+export type PracticePack = {
+  id: string;
+  title: string;
+  outcome: string;
+  words: TeluguWord[];
+};
+
 export const situationGroups: {
   id: SituationGroup;
   eyebrow: string;
@@ -482,3 +489,146 @@ export const allLessons = practicalLessons;
 export function findLesson(id: string | null | undefined) {
   return practicalLessons.find((lesson) => lesson.id === id);
 }
+
+function findPracticeWord(lessonId: string, english: string) {
+  const lesson = findLesson(lessonId);
+  const word = lesson?.words.find((candidate) => candidate.english === english);
+
+  if (!word) {
+    throw new Error(`Missing practice phrase: ${lessonId}/${english}`);
+  }
+
+  return word;
+}
+
+export const practicePacks: PracticePack[] = [
+  {
+    id: "first-five",
+    title: "Your first five",
+    outcome:
+      "Greet someone, thank them, ask a name, request water, and ask for a repeat.",
+    words: [
+      findPracticeWord("hello-goodbye", "hello"),
+      findPracticeWord("please-thank-you", "thank you"),
+      findPracticeWord("names-introductions", "what is your name?"),
+      findPracticeWord("food-water", "I would like water"),
+      findPracticeWord("when-stuck", "please say it again"),
+    ],
+  },
+  {
+    id: "quick-replies",
+    title: "Quick replies",
+    outcome:
+      "Answer the questions you hear first without dropping back into English.",
+    words: [
+      findPracticeWord("hello-goodbye", "how are you? (respectful)"),
+      findPracticeWord("hello-goodbye", "I’m well"),
+      findPracticeWord("yes-no-okay", "yes"),
+      findPracticeWord("yes-no-okay", "no"),
+      findPracticeWord("yes-no-okay", "okay"),
+    ],
+  },
+  {
+    id: "everyday-courtesy",
+    title: "Everyday courtesy",
+    outcome:
+      "Make a request, apologize, and handle small social moments naturally.",
+    words: [
+      findPracticeWord("please-thank-you", "please"),
+      findPracticeWord("please-thank-you", "it’s okay / no problem"),
+      findPracticeWord("please-thank-you", "sorry / excuse me"),
+      findPracticeWord("yes-no-okay", "I don’t know"),
+      findPracticeWord("when-stuck", "please say it slowly"),
+    ],
+  },
+  {
+    id: "stay-connected",
+    title: "Stay connected",
+    outcome:
+      "Recover when you are stuck, then introduce yourself without leaving Telugu.",
+    words: [
+      findPracticeWord("when-stuck", "I didn’t understand"),
+      findPracticeWord("when-stuck", "I don’t know Telugu well"),
+      findPracticeWord("names-introductions", "my name is…"),
+      findPracticeWord("names-introductions", "nice to meet you"),
+      findPracticeWord("names-introductions", "where are you from?"),
+    ],
+  },
+  {
+    id: "family-check-in",
+    title: "Family check-in",
+    outcome:
+      "Join the familiar first conversation and answer how you are feeling.",
+    words: [
+      findPracticeWord("family-words", "have you eaten?"),
+      findPracticeWord("family-words", "how are you? (respectful)"),
+      findPracticeWord("first-feelings", "I am well"),
+      findPracticeWord("first-feelings", "I am tired"),
+      findPracticeWord("first-feelings", "I am happy"),
+    ],
+  },
+  {
+    id: "at-the-table",
+    title: "At the table",
+    outcome:
+      "Respond while food is being served and make a simple choice clearly.",
+    words: [
+      findPracticeWord("food-water", "this is very good"),
+      findPracticeWord("food-water", "a little more"),
+      findPracticeWord("food-water", "that’s enough"),
+      findPracticeWord("this-that", "I want this"),
+      findPracticeWord("this-that", "I don’t want this"),
+    ],
+  },
+  {
+    id: "make-a-plan",
+    title: "Make a plan",
+    outcome:
+      "Find family members and coordinate a simple arrival or departure.",
+    words: [
+      findPracticeWord("family-words", "where are you?"),
+      findPracticeWord("family-words", "is mom at home?"),
+      findPracticeWord("i-you-we", "I’ll come tomorrow"),
+      findPracticeWord("i-you-we", "when will you be home?"),
+      findPracticeWord("i-you-we", "I’m leaving now"),
+    ],
+  },
+  {
+    id: "shop-and-pay",
+    title: "Shop and pay",
+    outcome:
+      "Point, choose, ask the price, and get through a small purchase.",
+    words: [
+      findPracticeWord("this-that", "that one"),
+      findPracticeWord("this-that", "how much is this?"),
+      findPracticeWord("first-conversation", "too expensive"),
+      findPracticeWord("first-conversation", "can you reduce the price?"),
+      findPracticeWord("first-conversation", "do you have change?"),
+    ],
+  },
+  {
+    id: "get-around",
+    title: "Get around",
+    outcome:
+      "Ask for directions, stop a ride, and end the exchange warmly.",
+    words: [
+      findPracticeWord("question-words", "where is the bus stop?"),
+      findPracticeWord("question-words", "stop here, please"),
+      findPracticeWord("question-words", "go straight"),
+      findPracticeWord("question-words", "is this the way there?"),
+      findPracticeWord("hello-goodbye", "see you again"),
+    ],
+  },
+  {
+    id: "ask-for-help",
+    title: "Ask for help",
+    outcome:
+      "Say that something is wrong and ask clearly for the support you need.",
+    words: [
+      findPracticeWord("building-blocks-milestone", "I’m not feeling well"),
+      findPracticeWord("building-blocks-milestone", "I have a slight fever"),
+      findPracticeWord("building-blocks-milestone", "I need a doctor"),
+      findPracticeWord("building-blocks-milestone", "I need help"),
+    ],
+  },
+];
