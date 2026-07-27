@@ -89,6 +89,10 @@ function normalize(value: string) {
     .replace(/\s+/g, " ");
 }
 
+function formatPronunciation(value: string) {
+  return `(${value.trim()})`;
+}
+
 function findDailyWord(lessonId: string, english: string) {
   const lesson = findLesson(lessonId);
   const word = lesson?.words.find(
@@ -403,7 +407,9 @@ function PhraseStack({
         {english}
       </Heading>
       {showRomanization ? (
-        <span className="phrase-roman">{word.roman}</span>
+        <span className="phrase-roman">
+          {formatPronunciation(word.roman)}
+        </span>
       ) : null}
       <span className="phrase-telugu" lang="te">
         {word.telugu}
@@ -1465,7 +1471,7 @@ function MatchingExercise({
             aria-pressed={rightSelected === wordIndex}
           >
             {showRomanization ? (
-              <span>{words[wordIndex].roman}</span>
+              <span>{formatPronunciation(words[wordIndex].roman)}</span>
             ) : null}
             <small lang="te">{words[wordIndex].telugu}</small>
           </button>
@@ -1711,7 +1717,7 @@ function LessonView({
                     aria-pressed={isSelected}
                   >
                     {preferences.showRomanization ? (
-                      <strong>{option.roman}</strong>
+                      <strong>{formatPronunciation(option.roman)}</strong>
                     ) : null}
                     <span lang="te">{option.telugu}</span>
                   </button>
@@ -1769,7 +1775,7 @@ function LessonView({
                   aria-pressed={selected === option.value}
                 >
                   <strong>{option.english}</strong>
-                  <span>{option.roman}</span>
+                  <span>{formatPronunciation(option.roman)}</span>
                   <small lang="te">{option.telugu}</small>
                 </button>
               ))}

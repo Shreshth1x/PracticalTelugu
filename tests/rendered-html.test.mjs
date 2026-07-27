@@ -134,6 +134,11 @@ test("teaches each phrase in English, pronunciation, Telugu order", async () => 
       teluguIndex > pronunciationIndex,
       `${pathname}: Telugu follows pronunciation`,
     );
+    assert.match(
+      html,
+      /class="phrase-roman">\([^<]+\)<\/span>/,
+      `${pathname}: pronunciation is visually enclosed in parentheses`,
+    );
   }
 });
 
@@ -182,6 +187,18 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(
     app,
     /className="phrase-english"[\s\S]*className="phrase-roman"[\s\S]*className="phrase-telugu"/,
+  );
+  assert.match(
+    app,
+    /className="phrase-roman"[\s\S]*formatPronunciation\(word\.roman\)/,
+  );
+  assert.match(
+    app,
+    /formatPronunciation\(words\[wordIndex\]\.roman\)/,
+  );
+  assert.equal(
+    (app.match(/formatPronunciation\(option\.roman\)/g) ?? []).length,
+    2,
   );
   assert.doesNotMatch(app, /teluguFirst|Show Telugu larger/);
   assert.match(courseData, /SituationGroup/);
