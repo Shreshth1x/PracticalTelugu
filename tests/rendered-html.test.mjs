@@ -50,7 +50,7 @@ test("server-renders every practical route with a unique primary heading", async
     );
 
     const html = await response.text();
-    assert.match(html, /PalukuLingo/, pathname);
+    assert.match(html, /PracticalTelugu/i, pathname);
     assert.match(html, heading, pathname);
     assert.doesNotMatch(
       html,

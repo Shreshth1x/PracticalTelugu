@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import PalukuApp from "./PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Today | PalukuLingo",
+  title: "Today | PracticalTelugu",
   description:
     "Practice five useful Telugu phrases, then choose a real-life situation.",
 };

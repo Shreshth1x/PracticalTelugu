@@ -1,6 +1,6 @@
-# PalukuLingo
+# PracticalTelugu
 
-PalukuLingo is a fast, phrase-first Telugu companion for people who want to
+PracticalTelugu is a fast, phrase-first Telugu companion for people who want to
 participate in real conversations. It skips alphabet units, grammar detours,
 and locked curricula in favor of short, open practice for family visits,
 meals, errands, travel, and moments when someone needs help.

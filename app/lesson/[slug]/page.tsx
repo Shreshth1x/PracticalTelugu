@@ -14,8 +14,8 @@ export async function generateMetadata({
   const lesson = findLesson(slug);
   return {
     title: lesson
-      ? `${lesson.title} | PalukuLingo`
-      : "Telugu practice | PalukuLingo",
+      ? `${lesson.title} | PracticalTelugu`
+      : "Telugu practice | PracticalTelugu",
     description: lesson?.description,
   };
 }

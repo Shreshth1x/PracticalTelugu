@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import PalukuApp from "../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Settings | PalukuLingo",
+  title: "Settings | PracticalTelugu",
   description:
     "Choose pronunciation, audio, and quick-practice preferences.",
 };

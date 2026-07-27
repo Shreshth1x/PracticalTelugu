@@ -462,10 +462,10 @@ function Wordmark() {
   return (
     <span className="wordmark">
       <span className="wordmark-mark" aria-hidden="true">
-        ప
+        తె
       </span>
-      <span>
-        Paluku<i>Lingo</i>
+      <span className="wordmark-name">
+        practical<span>telugu</span>
       </span>
     </span>
   );
@@ -482,7 +482,11 @@ function AppShell({
     <div className="app-frame">
       <header className="top-header">
         <div className="top-header-inner">
-          <Link href="/" className="top-brand" aria-label="PalukuLingo home">
+          <Link
+            href="/"
+            className="top-brand"
+            aria-label="PracticalTelugu home"
+          >
             <Wordmark />
           </Link>
 
@@ -1315,9 +1319,10 @@ function SettingsView({
         <section className="settings-section" aria-labelledby="about-settings">
           <h2 id="about-settings">About the Telugu here</h2>
           <p className="settings-copy">
-            Spoken Telugu changes by region, family, and formality. PalukuLingo
-            starts with the English thought, adds an approachable
-            pronunciation, and keeps Telugu script nearby for recognition.
+            Spoken Telugu changes by region, family, and formality.
+            PracticalTelugu starts with the English thought, adds an
+            approachable pronunciation, and keeps Telugu script nearby for
+            recognition.
           </p>
         </section>
 

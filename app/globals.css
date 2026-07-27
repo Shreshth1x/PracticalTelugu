@@ -139,30 +139,42 @@ svg {
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   color: var(--ink-strong);
   font-family: var(--font-display);
-  font-size: 19px;
-  letter-spacing: -0.035em;
+  font-size: 18px;
+  letter-spacing: -0.045em;
 }
 
-.wordmark i {
+.wordmark-name > span {
   color: var(--saffron-dark);
-  font-style: normal;
 }
 
 .wordmark-mark {
+  position: relative;
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 39px;
+  height: 38px;
   place-items: center;
-  border-radius: 11px;
-  background: var(--green);
-  color: white;
+  color: var(--green-dark);
   font-family: var(--font-telugu);
-  font-size: 20px;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.09em;
   line-height: 1;
-  box-shadow: 0 3px 9px rgba(8, 77, 58, 0.18);
+  transform: translateY(1px);
+}
+
+.wordmark-mark::after {
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  width: 18px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--saffron);
+  content: "";
+  transform: rotate(-5deg);
 }
 
 .top-nav {
@@ -587,11 +599,18 @@ svg {
 }
 
 .home-hero {
-  max-width: 760px;
+  display: flex;
+  max-width: 880px;
+  align-items: center;
+  flex-direction: column;
+  margin: 0 auto;
+  text-align: center;
 }
 
 .home-hero h1 {
+  max-width: 860px;
   font-size: clamp(48px, 8vw, 72px);
+  text-wrap: balance;
 }
 
 .home-hero > p {
@@ -600,12 +619,14 @@ svg {
   color: var(--muted);
   font-size: clamp(18px, 2.5vw, 21px);
   line-height: 1.62;
+  text-wrap: pretty;
 }
 
 .home-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-direction: column;
+  gap: 11px;
   margin-top: 32px;
 }
 
@@ -620,7 +641,7 @@ svg {
 }
 
 .home-hero > .text-link {
-  margin-top: 22px;
+  margin-top: 24px;
 }
 
 .home-guide {
@@ -2409,19 +2430,17 @@ svg {
 
 @media (max-width: 440px) {
   .wordmark {
-    font-size: 17px;
+    gap: 7px;
+    font-size: 16px;
   }
 
   .wordmark-mark {
-    width: 31px;
-    height: 31px;
-    border-radius: 10px;
-    font-size: 18px;
+    width: 34px;
+    height: 34px;
+    font-size: 26px;
   }
 
   .home-actions {
-    align-items: flex-start;
-    flex-direction: column;
     gap: 12px;
   }
 

@@ -14,12 +14,11 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const socialImage = `${origin}/og.jpg`;
 
   return {
     metadataBase: new URL(origin),
     title: {
-      default: "PalukuLingo | Practical Telugu for real life",
+      default: "PracticalTelugu | Telugu for real life",
       template: "%s",
     },
     description:
@@ -29,26 +28,17 @@ export async function generateMetadata(): Promise<Metadata> {
       shortcut: "/mayu-favicon.png",
     },
     openGraph: {
-      title: "PalukuLingo | Speak useful Telugu sooner",
+      title: "PracticalTelugu | Speak useful Telugu sooner",
       description:
         "Short, practical Telugu for the real moments you’re preparing for.",
       type: "website",
       url: origin,
-      images: [
-        {
-          url: socialImage,
-          width: 1200,
-          height: 630,
-          alt: "PalukuLingo with Mayu the peacock",
-        },
-      ],
     },
     twitter: {
-      card: "summary_large_image",
-      title: "PalukuLingo | Speak useful Telugu sooner",
+      card: "summary",
+      title: "PracticalTelugu | Speak useful Telugu sooner",
       description:
         "Short, practical Telugu for the real moments you’re preparing for.",
-      images: [socialImage],
     },
   };
 }
