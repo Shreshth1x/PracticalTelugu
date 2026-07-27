@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import PalukuApp from "../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Phrasebook · PalukuLingo",
+  title: "Phrasebook | PalukuLingo",
   description:
     "Search, hear, and save practical Telugu for the moments you actually face.",
 };

@@ -19,17 +19,17 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase: new URL(origin),
     title: {
-      default: "PalukuLingo — Practical Telugu for real life",
+      default: "PalukuLingo | Practical Telugu for real life",
       template: "%s",
     },
     description:
       "Get up to speed with the Telugu you’ll use with family, at the table, while visiting, and when you need help.",
     icons: {
-      icon: "/maya-peacock.webp",
-      shortcut: "/maya-peacock.webp",
+      icon: "/mayu-favicon.png",
+      shortcut: "/mayu-favicon.png",
     },
     openGraph: {
-      title: "PalukuLingo — Speak useful Telugu sooner",
+      title: "PalukuLingo | Speak useful Telugu sooner",
       description:
         "Short, practical Telugu for the real moments you’re preparing for.",
       type: "website",
@@ -45,7 +45,7 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     twitter: {
       card: "summary_large_image",
-      title: "PalukuLingo — Speak useful Telugu sooner",
+      title: "PalukuLingo | Speak useful Telugu sooner",
       description:
         "Short, practical Telugu for the real moments you’re preparing for.",
       images: [socialImage],

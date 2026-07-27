@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import PalukuApp from "../../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Quick five · PalukuLingo",
+  title: "Quick five | PalukuLingo",
   description: "Five practical Telugu phrases to get ready for a real conversation.",
 };
 

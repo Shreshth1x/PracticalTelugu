@@ -8,7 +8,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import {
   allLessons,
@@ -20,7 +19,13 @@ import {
   type TeluguWord,
 } from "./course-data";
 
-export type AppScreen = "today" | "learn" | "words" | "daily" | "settings" | "lesson";
+export type AppScreen =
+  | "today"
+  | "learn"
+  | "words"
+  | "daily"
+  | "settings"
+  | "lesson";
 
 type SavedState = {
   completed: string[];
@@ -46,13 +51,7 @@ type Step =
 
 type ResultState = "idle" | "correct" | "wrong";
 type WordTab = "today" | "all" | "saved";
-type MayuPose =
-  | "welcome"
-  | "teach"
-  | "listen"
-  | "encourage"
-  | "celebrate"
-  | "read";
+type MayuVariant = "guide" | "success";
 
 type LibraryWord = TeluguWord & {
   key: string;
@@ -81,14 +80,25 @@ const defaultPreferences: Preferences = {
   autoplay: false,
 };
 
+function normalize(value: string) {
+  return value
+    .normalize("NFC")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[.,!?;:'"()।]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 function findDailyWord(lessonId: string, english: string) {
   const lesson = findLesson(lessonId);
   const word = lesson?.words.find(
     (candidate) => normalize(candidate.english) === normalize(english),
   );
+
   if (!word) {
     throw new Error(`Missing daily phrase: ${lessonId}/${english}`);
   }
+
   return word;
 }
 
@@ -128,6 +138,7 @@ const libraryWords: LibraryWord[] = (() => {
     lesson.words.forEach((word) => {
       const key = `${word.telugu}::${word.english}`;
       if (seen.has(key)) return;
+
       seen.add(key);
       words.push({
         ...word,
@@ -154,17 +165,18 @@ function buildSteps(lesson: Lesson): Step[] {
 
     if (index % 2 === 0 || index === lesson.words.length - 1) {
       steps.push({ type: "choice", word, options: rotated });
-    } else {
-      const isTrue = index % 4 === 1;
-      steps.push({
-        type: "true-false",
-        word,
-        shownMeaning: isTrue
-          ? word.english
-          : lesson.words[(index + 1) % lesson.words.length].english,
-        answer: isTrue,
-      });
+      return;
     }
+
+    const isTrue = index % 4 === 1;
+    steps.push({
+      type: "true-false",
+      word,
+      shownMeaning: isTrue
+        ? word.english
+        : lesson.words[(index + 1) % lesson.words.length].english,
+      answer: isTrue,
+    });
   });
 
   steps.push({ type: "matching", words: lesson.words.slice(0, 3) });
@@ -172,24 +184,16 @@ function buildSteps(lesson: Lesson): Step[] {
   const phrase = lesson.words.find(
     (word) => word.telugu.trim().split(/\s+/).length > 1,
   );
+
   if (phrase) {
     steps.push({
       type: "arrange",
       word: phrase,
-      tokens: phrase.telugu.trim().split(/\s+/).reverse(),
+      tokens: phrase.roman.trim().split(/\s+/).reverse(),
     });
   }
 
   return steps;
-}
-
-function normalize(value: string) {
-  return value
-    .normalize("NFC")
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[.,!?;:'"()।]/g, "")
-    .replace(/\s+/g, " ");
 }
 
 function useDialogFocus<T extends HTMLElement>(
@@ -219,10 +223,12 @@ function useDialogFocus<T extends HTMLElement>(
         onClose();
         return;
       }
+
       if (event.key !== "Tab" || !focusables.length) return;
 
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
+
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
@@ -247,16 +253,13 @@ function Icon({
   className = "",
 }: {
   name:
-    | "today"
-    | "learn"
-    | "words"
-    | "settings"
     | "arrow"
     | "audio"
     | "bookmark"
     | "search"
     | "close"
-    | "check";
+    | "check"
+    | "settings";
   className?: string;
 }) {
   const common = {
@@ -265,45 +268,13 @@ function Icon({
     viewBox: "0 0 24 24",
     fill: "none",
     stroke: "currentColor",
-    strokeWidth: 1.8,
+    strokeWidth: 1.9,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     "aria-hidden": true,
     className,
   };
 
-  if (name === "today") {
-    return (
-      <svg {...common}>
-        <path d="M4.5 9.5 12 3l7.5 6.5V20a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1Z" />
-        <path d="M9 21v-7h6v7" />
-      </svg>
-    );
-  }
-  if (name === "learn") {
-    return (
-      <svg {...common}>
-        <path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H11v17H7.5A3.5 3.5 0 0 0 4 22Z" />
-        <path d="M20 5.5A3.5 3.5 0 0 0 16.5 2H13v17h3.5A3.5 3.5 0 0 1 20 22Z" />
-      </svg>
-    );
-  }
-  if (name === "words") {
-    return (
-      <svg {...common}>
-        <path d="M5 4h14a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 19 20H5a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 5 4Z" />
-        <path d="M7 8h10M7 12h7M7 16h5" />
-      </svg>
-    );
-  }
-  if (name === "settings") {
-    return (
-      <svg {...common}>
-        <circle cx="12" cy="12" r="3" />
-        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
-      </svg>
-    );
-  }
   if (name === "arrow") {
     return (
       <svg {...common}>
@@ -311,6 +282,7 @@ function Icon({
       </svg>
     );
   }
+
   if (name === "audio") {
     return (
       <svg {...common}>
@@ -319,6 +291,7 @@ function Icon({
       </svg>
     );
   }
+
   if (name === "bookmark") {
     return (
       <svg {...common}>
@@ -326,6 +299,7 @@ function Icon({
       </svg>
     );
   }
+
   if (name === "search") {
     return (
       <svg {...common}>
@@ -334,6 +308,7 @@ function Icon({
       </svg>
     );
   }
+
   if (name === "close") {
     return (
       <svg {...common}>
@@ -341,6 +316,16 @@ function Icon({
       </svg>
     );
   }
+
+  if (name === "settings") {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" />
+      </svg>
+    );
+  }
+
   return (
     <svg {...common}>
       <path d="m5 12 4.5 4.5L19 7" />
@@ -349,43 +334,36 @@ function Icon({
 }
 
 function MayuImage({
-  pose,
+  variant,
   alt,
   className = "",
 }: {
-  pose: MayuPose;
+  variant: MayuVariant;
   alt: string;
   className?: string;
 }) {
   return (
     <span className={`mayu-image ${className}`.trim()}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={`/mayu-${pose}.webp`}
-        alt={alt}
-        onError={(event) => {
-          const image = event.currentTarget;
-          image.onerror = null;
-          image.src = "/maya-peacock.webp";
-        }}
-      />
+      <img src={`/mayu-${variant}-v2.webp`} alt={alt} />
     </span>
   );
 }
 
 function ProgressBar({
   value,
-  max = 100,
+  max,
+  label,
   className = "",
-  label = "Progress",
 }: {
   value: number;
-  max?: number;
+  max: number;
+  label: string;
   className?: string;
-  label?: string;
 }) {
   const safeMax = max || 1;
   const percentage = Math.max(0, Math.min(100, (value / safeMax) * 100));
+
   return (
     <span
       className={`progress-track ${className}`.trim()}
@@ -393,7 +371,7 @@ function ProgressBar({
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={max}
-      aria-valuenow={Math.round(value)}
+      aria-valuenow={value}
     >
       <span className="progress-fill" style={{ width: `${percentage}%` }} />
     </span>
@@ -410,14 +388,15 @@ function PhraseStack({
 }: {
   word: Pick<TeluguWord, "english" | "roman" | "telugu">;
   showRomanization?: boolean;
-  size?: "row" | "sheet" | "hero" | "lesson" | "recap";
-  headingAs?: "h1" | "h2" | "strong";
+  size?: "row" | "card" | "hero" | "lesson" | "recap" | "feedback";
+  headingAs?: "h1" | "h2" | "h3" | "strong";
   headingId?: string;
   className?: string;
 }) {
   const Heading = headingAs;
   const english =
     word.english.charAt(0).toLocaleUpperCase() + word.english.slice(1);
+
   return (
     <div className={`phrase-stack phrase-${size} ${className}`.trim()}>
       <Heading id={headingId} className="phrase-english">
@@ -430,6 +409,42 @@ function PhraseStack({
         {word.telugu}
       </span>
     </div>
+  );
+}
+
+function playWordAudio(word: TeluguWord, notify: (message: string) => void) {
+  if (!word.audioSrc) {
+    notify("Family recording coming soon.");
+    return;
+  }
+
+  new Audio(word.audioSrc).play().catch(() => {
+    notify("That recording could not play. Try again in a moment.");
+  });
+}
+
+function AudioButton({
+  word,
+  notify,
+  className = "",
+}: {
+  word: TeluguWord;
+  notify: (message: string) => void;
+  className?: string;
+}) {
+  return (
+    <button
+      className={`audio-button ${className}`.trim()}
+      onClick={() => playWordAudio(word, notify)}
+      aria-label={
+        word.audioSrc
+          ? `Listen to “${word.english}” in Telugu`
+          : `Recording for “${word.english}” coming soon`
+      }
+    >
+      <Icon name="audio" />
+      {word.audioSrc ? "Listen" : "Recording soon"}
+    </button>
   );
 }
 
@@ -467,13 +482,10 @@ function AppShell({
     <div className="app-frame">
       <header className="top-header">
         <div className="top-header-inner">
-          <Link
-            href="/"
-            className="top-brand"
-            aria-label="PalukuLingo home"
-          >
+          <Link href="/" className="top-brand" aria-label="PalukuLingo home">
             <Wordmark />
           </Link>
+
           <nav aria-label="Primary navigation" className="top-nav">
             {navItems.map((item) => (
               <Link
@@ -488,6 +500,7 @@ function AppShell({
               </Link>
             ))}
           </nav>
+
           <Link
             href="/settings"
             className={`top-settings ${
@@ -507,104 +520,83 @@ function AppShell({
   );
 }
 
-function formatWeekday() {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-  }).format(new Date());
-}
-
-function subscribeToLocalClock(notify: () => void) {
-  const timer = window.setInterval(notify, 60_000);
-  return () => window.clearInterval(timer);
-}
-
-function getServerDateLabel() {
-  return "Today";
-}
-
-function useLocalWeekday() {
-  return useSyncExternalStore(
-    subscribeToLocalClock,
-    formatWeekday,
-    getServerDateLabel,
-  );
-}
-
 function TodayView({
   state,
   startLesson,
+  notify,
 }: {
   state: SavedState;
   startLesson: (lesson: Lesson) => void;
+  notify: (message: string) => void;
 }) {
-  const featuredSituationIds = [
-    "family-words",
-    "food-water",
-    "when-stuck",
-    "building-blocks-milestone",
-  ];
+  const featuredSituationIds = ["family-words", "food-water", "when-stuck"];
   const featuredSituations = practicalLessons.filter((lesson) =>
     featuredSituationIds.includes(lesson.id),
   );
+  const hello = dailyWords[0].word;
+  const practicedDaily = dailyWords.filter(({ word }) =>
+    Boolean(state.confidence[`${word.telugu}::${word.english}`]),
+  ).length;
 
   return (
     <AppShell screen="today">
-      <main className="page page-today">
-        <section className="landing-hero" aria-labelledby="today-heading">
-          <div className="landing-copy">
-            <p className="overline">Practical Telugu for real life</p>
-            <h1 id="today-heading">Say something useful today.</h1>
-            <p className="landing-description">
-              Learn five useful phrases for greeting family, sitting down at
-              the table, and asking for help—then use them in real life.
-            </p>
-            <div className="landing-actions">
-              <Link
-                href="/words/daily"
-                className="primary-button landing-primary"
-              >
-                <span>Start the quick five</span>
-                <span className="landing-primary-meta">4 min</span>
-                <Icon name="arrow" />
-              </Link>
-              <Link href="/learn" className="landing-secondary">
-                Browse all situations
-              </Link>
-            </div>
+      <main className="page home-page">
+        <section className="home-hero" aria-labelledby="today-heading">
+          <h1 id="today-heading">Say something useful today.</h1>
+          <p>
+            Five practical Telugu phrases for family visits, meals, and the
+            moments when you need a little help.
+          </p>
+          <div className="home-actions">
+            <Link href="/words/daily" className="primary-button">
+              {practicedDaily === dailyWords.length
+                ? "Review five phrases"
+                : "Practice five phrases"}
+            </Link>
+            <span className="action-time">
+              {practicedDaily
+                ? `${practicedDaily} of ${dailyWords.length} practiced`
+                : "About 4 minutes"}
+            </span>
           </div>
-          <div className="landing-visual">
-            <MayuImage
-              pose="welcome"
-              alt="Mayu the peacock saying hello in Telugu"
-              className="landing-mayu"
-            />
-            <div className="hello-chip">
-              <PhraseStack
-                word={{
-                  english: "Hello",
-                  roman: "namaskaaram",
-                  telugu: "నమస్కారం",
-                }}
-                size="row"
-              />
-            </div>
+          <Link href="/learn" className="text-link">
+            Choose a situation
+            <Icon name="arrow" />
+          </Link>
+        </section>
+
+        <section className="home-guide" aria-labelledby="home-guide-title">
+          <div className="home-guide-copy">
+            <h2 id="home-guide-title">Start with hello.</h2>
+            <PhraseStack word={hello} size="card" />
+            <AudioButton word={hello} notify={notify} />
           </div>
+          <MayuImage
+            variant="guide"
+            alt=""
+            className="home-mayu"
+          />
         </section>
 
         <section
           className="situation-preview"
           aria-labelledby="situation-preview-title"
         >
-          <header className="situation-preview-heading">
+          <div className="section-heading">
             <div>
-              <p className="overline">Choose a moment</p>
-              <h2 id="situation-preview-title">What are you walking into?</h2>
+              <h2 id="situation-preview-title">Choose a situation.</h2>
+              <p>Practice only what you are likely to use next.</p>
             </div>
-            <p>Short practice for the situations that come up most.</p>
-          </header>
-          <ul className="situation-preview-list">
+            <Link href="/learn" className="text-link section-link">
+              See all
+              <Icon name="arrow" />
+            </Link>
+          </div>
+
+          <ul className="situation-list">
             {featuredSituations.map((lesson) => {
               const done = state.completed.includes(lesson.id);
+
               return (
                 <li key={lesson.id}>
                   <button
@@ -615,14 +607,13 @@ function TodayView({
                     }`}
                   >
                     <span className="situation-row-copy">
-                      <small>{lesson.eyebrow}</small>
                       <strong>{lesson.title}</strong>
                       <span>{lesson.description}</span>
                     </span>
-                    <span className="situation-row-meta">
-                      <span>
-                        {lesson.minutes} min
-                        {done ? " · Practiced" : ""}
+                    <span className="situation-row-end">
+                      <span className="situation-row-meta">
+                        <span>{lesson.minutes} min</span>
+                        {done ? <span>Practiced</span> : null}
                       </span>
                       <Icon name="arrow" />
                     </span>
@@ -650,83 +641,84 @@ function SituationsView({
 
   return (
     <AppShell screen="learn">
-      <main className="page page-learn">
+      <main className="page">
         <header className="page-header">
-          <span className="overline">REAL-LIFE TELUGU</span>
           <h1>What do you need to say?</h1>
           <p>
-            Choose the moment in front of you. Every situation is open, short,
-            and built around phrases you can use right away.
+            Pick the moment in front of you. Every practice is short and every
+            situation is open.
           </p>
         </header>
 
-        <section className="continue-banner">
-          <div>
-            <span className="overline overline-light">A GOOD NEXT STEP</span>
-            <h2>{nextSituation.title}</h2>
-            <p>{nextSituation.outcome}</p>
-          </div>
-          <button
-            className="light-button"
-            onClick={() => startLesson(nextSituation)}
-          >
-            Practice now
+        <button
+          className="next-practice"
+          onClick={() => startLesson(nextSituation)}
+        >
+          <span>
+            <strong>{nextSituation.title}</strong>
+            <span>{nextSituation.outcome}</span>
+          </span>
+          <span className="next-practice-end">
+            <span>{nextSituation.minutes} min</span>
             <Icon name="arrow" />
-          </button>
-        </section>
+          </span>
+        </button>
 
-        {situationGroups.map((group) => {
-          const lessons = practicalLessons.filter(
-            (lesson) => lesson.group === group.id,
-          );
-          return (
-            <section className="topic-section" key={group.id}>
-              <div className="section-title-row">
-                <div>
-                  <span className="overline">{group.eyebrow}</span>
+        <div className="situation-groups">
+          {situationGroups.map((group) => {
+            const lessons = practicalLessons.filter(
+              (lesson) => lesson.group === group.id,
+            );
+
+            return (
+              <section className="situation-group" key={group.id}>
+                <div className="group-heading">
                   <h2>{group.title}</h2>
                   <p>{group.description}</p>
                 </div>
-              </div>
 
-              <ol className="topic-list">
-                {lessons.map((lesson, index) => {
-                  const done = state.completed.includes(lesson.id);
-                  return (
-                    <li key={lesson.id}>
-                      <span
-                        className={`topic-index ${
-                          done ? "topic-index-done" : ""
-                        }`}
-                      >
-                        {done ? (
-                          <Icon name="check" />
-                        ) : (
-                          String(index + 1).padStart(2, "0")
-                        )}
-                      </span>
-                      <span className="topic-copy">
-                        <strong>{lesson.title}</strong>
-                        <span>{lesson.description}</span>
-                        <small className="pixel-meta">
-                          {lesson.minutes} MIN · {lesson.words.length} PHRASES
-                        </small>
-                      </span>
-                      <button
-                        className="topic-action"
-                        onClick={() => startLesson(lesson)}
-                        aria-label={`${done ? "Run again" : "Open"} ${lesson.title}`}
-                      >
-                        {done ? "Run again" : "Open"}
-                        <Icon name="arrow" />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ol>
-            </section>
-          );
-        })}
+                <ul className="lesson-list">
+                  {lessons.map((lesson) => {
+                    const done = state.completed.includes(lesson.id);
+
+                    return (
+                      <li key={lesson.id}>
+                        <button
+                          className="lesson-row"
+                          onClick={() => startLesson(lesson)}
+                          aria-label={`${done ? "Practice again" : "Practice"} ${
+                            lesson.title
+                          }`}
+                        >
+                          <span
+                            className={`lesson-status ${
+                              done ? "lesson-status-done" : ""
+                            }`}
+                            aria-hidden="true"
+                          >
+                            {done ? <Icon name="check" /> : null}
+                          </span>
+                          <span className="lesson-row-copy">
+                            <strong>{lesson.title}</strong>
+                            <span>{lesson.description}</span>
+                          </span>
+                          <span className="lesson-row-meta">
+                            <span>{lesson.minutes} min</span>
+                            <span>
+                              {lesson.words.length}{" "}
+                              {lesson.words.length === 1 ? "phrase" : "phrases"}
+                            </span>
+                          </span>
+                          <Icon name="arrow" />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
       </main>
     </AppShell>
   );
@@ -760,14 +752,18 @@ function WordRow({
         <button
           className="icon-button"
           onClick={() => onAudio(item)}
-          aria-label={`Hear ${item.telugu}`}
+          aria-label={
+            item.audioSrc
+              ? `Listen to “${item.english}” in Telugu`
+              : `Recording for “${item.english}” coming soon`
+          }
         >
           <Icon name="audio" />
         </button>
         <button
           className={`icon-button ${isSaved ? "icon-button-saved" : ""}`}
           onClick={() => onSave(item)}
-          aria-label={`${isSaved ? "Remove" : "Save"} ${item.telugu}`}
+          aria-label={`${isSaved ? "Remove" : "Save"} “${item.english}”`}
           aria-pressed={isSaved}
         >
           <Icon name="bookmark" />
@@ -794,7 +790,6 @@ function PhrasebookView({
     "all" | SituationGroup
   >("all");
   const [selectedWord, setSelectedWord] = useState<LibraryWord | null>(null);
-  const weekdayLabel = useLocalWeekday();
   const closeWordSheet = useCallback(() => setSelectedWord(null), []);
   const wordSheetRef = useDialogFocus<HTMLElement>(
     Boolean(selectedWord),
@@ -814,15 +809,14 @@ function PhrasebookView({
   const todayKeys = useMemo(
     () =>
       new Set(
-        dailyWords.map(
-          ({ word }) => `${word.telugu}::${word.english}`,
-        ),
+        dailyWords.map(({ word }) => `${word.telugu}::${word.english}`),
       ),
     [],
   );
 
   const visibleWords = useMemo(() => {
     const normalizedQuery = normalize(query);
+
     return libraryWords.filter((word) => {
       if (tab === "today" && !todayKeys.has(word.key)) return false;
       if (tab === "saved" && !savedWords.includes(word.key)) return false;
@@ -830,21 +824,12 @@ function PhrasebookView({
         return false;
       }
       if (!normalizedQuery) return true;
+
       return normalize(`${word.telugu} ${word.roman} ${word.english}`).includes(
         normalizedQuery,
       );
     });
   }, [query, savedWords, situationFilter, tab, todayKeys]);
-
-  const playAudio = (word: TeluguWord) => {
-    if (!word.audioSrc) {
-      notify("Family recording coming soon.");
-      return;
-    }
-    new Audio(word.audioSrc).play().catch(() => {
-      notify("That recording could not play. Try again in a moment.");
-    });
-  };
 
   const toggleSaved = (word: LibraryWord) => {
     setSavedWords((current) =>
@@ -854,31 +839,51 @@ function PhrasebookView({
     );
   };
 
+  const tabOptions: readonly [WordTab, string][] = [
+    ["today", "Today"],
+    ["all", "All phrases"],
+    ["saved", "Saved"],
+  ];
+
+  const moveTabFocus = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    currentTab: WordTab,
+  ) => {
+    const currentIndex = tabOptions.findIndex(([value]) => value === currentTab);
+    let nextIndex = currentIndex;
+
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % tabOptions.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + tabOptions.length) % tabOptions.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = tabOptions.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const nextTab = tabOptions[nextIndex][0];
+    setTab(nextTab);
+    document.getElementById(`words-tab-${nextTab}`)?.focus();
+  };
+
   return (
     <AppShell screen="words">
-      <main className="page page-words">
-        <header className="page-header words-header">
-          <div>
-            <span className="overline">QUICK PHRASEBOOK</span>
-            <h1>Find what you need to say.</h1>
-            <p>
-              Search, hear, and save Telugu for the moments you actually face.
-            </p>
-          </div>
-          <Link href="/words/daily" className="primary-button">
-            Quick five
-            <Icon name="arrow" />
-          </Link>
+      <main className="page">
+        <header className="page-header">
+          <h1>Find what you need to say.</h1>
+          <p>Search, hear, and save the Telugu you actually reach for.</p>
         </header>
 
-        <div className="word-tabs" role="tablist" aria-label="Phrase collections">
-          {(
-            [
-              ["today", "Quick five"],
-              ["all", "All phrases"],
-              ["saved", "Saved"],
-            ] as const
-          ).map(([value, label]) => (
+        <div
+          className="word-tabs"
+          role="tablist"
+          aria-label="Phrase collections"
+        >
+          {tabOptions.map(([value, label]) => (
             <button
               key={value}
               id={`words-tab-${value}`}
@@ -887,13 +892,25 @@ function PhrasebookView({
               aria-controls="words-panel"
               className={tab === value ? "word-tab-active" : ""}
               onClick={() => setTab(value)}
+              onKeyDown={(event) => moveTabFocus(event, value)}
+              tabIndex={tab === value ? 0 : -1}
             >
               {label}
             </button>
           ))}
         </div>
 
-        {tab !== "today" ? (
+        {tab === "today" ? (
+          <div className="phrasebook-today">
+            <div>
+              <h2>Today’s five.</h2>
+              <p>A quick set for the most common everyday moments.</p>
+            </div>
+            <Link href="/words/daily" className="secondary-button">
+              Practice these
+            </Link>
+          </div>
+        ) : (
           <div className="word-tools">
             <label className="search-field">
               <Icon name="search" />
@@ -924,15 +941,6 @@ function PhrasebookView({
               </select>
             </label>
           </div>
-        ) : (
-          <div className="today-word-note">
-            <span className="pixel-meta">
-              {weekdayLabel.toUpperCase()} SET · 5 PHRASES
-            </span>
-            <p>
-              Hello, thank you, your name, water, and a phrase for getting unstuck.
-            </p>
-          </div>
         )}
 
         <section
@@ -940,7 +948,6 @@ function PhrasebookView({
           className="word-list"
           role="tabpanel"
           aria-labelledby={`words-tab-${tab}`}
-          aria-label={`${tab === "all" ? "All phrases" : tab === "saved" ? "Saved phrases" : "Quick five phrases"}`}
         >
           {visibleWords.length ? (
             visibleWords.map((word) => (
@@ -949,29 +956,26 @@ function PhrasebookView({
                 item={word}
                 isSaved={savedWords.includes(word.key)}
                 showRomanization={preferences.showRomanization}
-                onAudio={playAudio}
+                onAudio={(item) => playWordAudio(item, notify)}
                 onOpen={setSelectedWord}
                 onSave={toggleSaved}
               />
             ))
           ) : tab === "saved" && !query ? (
-            <div className="saved-empty">
-              <MayuImage
-                pose="read"
-                alt="Mayu reading beside an empty saved phrase list"
-              />
-              <div>
-                <h2>Save the phrases you want nearby.</h2>
-                <p>Use the bookmark on any phrase and it will wait for you here.</p>
-                <button className="secondary-button" onClick={() => setTab("all")}>
-                  Browse all phrases
-                </button>
-              </div>
+            <div className="empty-state">
+              <h2>No saved phrases yet.</h2>
+              <p>Save a phrase and it will stay easy to find here.</p>
+              <button
+                className="secondary-button"
+                onClick={() => setTab("all")}
+              >
+                Browse all phrases
+              </button>
             </div>
           ) : (
-            <div className="no-results">
+            <div className="empty-state">
               <h2>No phrases found.</h2>
-              <p>Try a different spelling or situation filter.</p>
+              <p>Try a different spelling or situation.</p>
             </div>
           )}
         </section>
@@ -982,7 +986,7 @@ function PhrasebookView({
           className="sheet-backdrop"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSelectedWord(null);
+            if (event.target === event.currentTarget) closeWordSheet();
           }}
         >
           <aside
@@ -993,59 +997,54 @@ function PhrasebookView({
             aria-labelledby="word-sheet-title"
           >
             <div className="sheet-header">
-              <span className="overline">{selectedWord.lessonTitle}</span>
-              <button
-                className="icon-button"
-                onClick={closeWordSheet}
-                aria-label="Close phrase details"
-                autoFocus
-              >
-                <Icon name="close" />
-              </button>
-            </div>
-            <div className="sheet-word">
-              <PhraseStack
-                word={selectedWord}
-                showRomanization={preferences.showRomanization}
-                size="sheet"
-                headingAs="h2"
-                headingId="word-sheet-title"
-              />
-            </div>
-            <button
-              className="audio-wide-button"
-              onClick={() => playAudio(selectedWord)}
-              aria-label={`Hear ${selectedWord.telugu}`}
-            >
-              <Icon name="audio" />
-              <span>
-                <strong>Hear this phrase</strong>
-                <small>
-                  {selectedWord.audioSrc
-                    ? "Play family-recorded audio"
-                    : "Family recording coming soon"}
-                </small>
+              <span>{selectedWord.lessonTitle}</span>
+              <span className="sheet-header-actions">
+                <button
+                  className={`icon-button ${
+                    savedWords.includes(selectedWord.key)
+                      ? "icon-button-saved"
+                      : ""
+                  }`}
+                  onClick={() => toggleSaved(selectedWord)}
+                  aria-label={`${
+                    savedWords.includes(selectedWord.key) ? "Remove" : "Save"
+                  } “${selectedWord.english}”`}
+                  aria-pressed={savedWords.includes(selectedWord.key)}
+                >
+                  <Icon name="bookmark" />
+                </button>
+                <button
+                  className="icon-button"
+                  onClick={closeWordSheet}
+                  aria-label="Close phrase details"
+                  autoFocus
+                >
+                  <Icon name="close" />
+                </button>
               </span>
-            </button>
+            </div>
+
+            <PhraseStack
+              word={selectedWord}
+              showRomanization={preferences.showRomanization}
+              size="hero"
+              headingAs="h2"
+              headingId="word-sheet-title"
+            />
+
+            <AudioButton
+              word={selectedWord}
+              notify={notify}
+              className="sheet-audio"
+            />
+
             <div className="usage-note">
-              <span className="overline">WHEN TO USE IT</span>
+              <h3>When to use it</h3>
               <p>
                 {selectedWord.note ??
-                  `Say it once slowly, then again in the kind of moment where you would naturally reach for “${selectedWord.english}.”`}
+                  `Use this whenever you would naturally say “${selectedWord.english}.” Start slowly, then say it again at a comfortable pace.`}
               </p>
             </div>
-            <button
-              className={`secondary-button sheet-save ${
-                savedWords.includes(selectedWord.key) ? "button-saved" : ""
-              }`}
-              onClick={() => toggleSaved(selectedWord)}
-              aria-pressed={savedWords.includes(selectedWord.key)}
-            >
-              <Icon name="bookmark" />
-              {savedWords.includes(selectedWord.key)
-                ? "Saved"
-                : "Save for later"}
-            </button>
           </aside>
         </div>
       ) : null}
@@ -1054,12 +1053,10 @@ function PhrasebookView({
 }
 
 function DailySession({
-  state,
   setState,
   preferences,
   notify,
 }: {
-  state: SavedState;
   setState: React.Dispatch<React.SetStateAction<SavedState>>;
   preferences: Preferences;
   notify: (message: string) => void;
@@ -1069,28 +1066,16 @@ function DailySession({
   const [results, setResults] = useState<("learning" | "ready")[]>([]);
   const finished = wordIndex >= dailyWords.length;
   const current = finished ? null : dailyWords[wordIndex];
-  const currentConfidence = current
-    ? state.confidence[`${current.word.telugu}::${current.word.english}`]
-    : undefined;
 
   useEffect(() => {
     if (!preferences.autoplay || !current?.word.audioSrc) return;
+
     const audio = new Audio(current.word.audioSrc);
     audio.play().catch(() => {
-      // Autoplay can be blocked by browser policy; the manual control remains.
+      // Manual playback remains available when the browser blocks autoplay.
     });
     return () => audio.pause();
   }, [current?.word.audioSrc, preferences.autoplay]);
-
-  const playAudio = () => {
-    if (!current?.word.audioSrc) {
-      notify("Family recording coming soon.");
-      return;
-    }
-    new Audio(current.word.audioSrc).play().catch(() => {
-      notify("That recording could not play. Try again in a moment.");
-    });
-  };
 
   const markWord = (result: "learning" | "ready") => {
     if (current) {
@@ -1103,34 +1088,47 @@ function DailySession({
         },
       }));
     }
+
     setResults((currentResults) => [...currentResults, result]);
     setRevealed(false);
     setWordIndex((currentIndex) => currentIndex + 1);
   };
 
+  const restart = () => {
+    setWordIndex(0);
+    setRevealed(false);
+    setResults([]);
+  };
+
   if (finished) {
     const ready = results.filter((result) => result === "ready").length;
+
     return (
-      <main className="daily-session daily-recap">
-        <header className="session-header">
-          <Link href="/words" className="icon-button" aria-label="Close quick five">
+      <main className="focus-session recap-session">
+        <header className="focus-header">
+          <Link
+            href="/words"
+            className="icon-button"
+            aria-label="Close quick five"
+          >
             <Icon name="close" />
           </Link>
-          <span className="pixel-meta">QUICK FIVE</span>
-          <span className="session-header-spacer" aria-hidden="true" />
+          <strong>Quick five</strong>
+          <span className="focus-header-space" aria-hidden="true" />
         </header>
+
         <div className="recap-content">
           <MayuImage
-            pose="celebrate"
-            alt="Mayu opening her tail in a gentle celebration"
+            variant="success"
+            alt=""
             className="recap-mayu"
           />
-          <span className="overline">QUICK PRACTICE DONE</span>
-          <h1>You’re ready to use these today.</h1>
+          <h1>Five phrases ready for today.</h1>
           <p>
-            {ready} are ready to use. {dailyWords.length - ready} will stay
-            marked for another quick review.
+            You marked {ready} as ready to use. The others will be easy to find
+            for another pass.
           </p>
+
           <div className="recap-list">
             {dailyWords.map(({ word }, index) => (
               <div className="recap-item" key={word.telugu}>
@@ -1139,22 +1137,23 @@ function DailySession({
                   showRomanization={preferences.showRomanization}
                   size="recap"
                 />
-                <small>
-                  {results[index] === "ready"
-                    ? "Ready to use"
-                    : "Review once more"}
-                </small>
+                <span
+                  className={`confidence-label ${
+                    results[index] === "ready" ? "confidence-ready" : ""
+                  }`}
+                >
+                  {results[index] === "ready" ? "Ready" : "Review"}
+                </span>
               </div>
             ))}
           </div>
-          <div className="recap-actions">
-            <Link href="/" className="primary-button">
-              Back to Today
-            </Link>
-            <Link href="/words" className="secondary-button">
-              Open phrasebook
-            </Link>
-          </div>
+
+          <Link href="/" className="primary-button recap-primary">
+            Back to today
+          </Link>
+          <button className="text-button" onClick={restart}>
+            Practice again
+          </button>
         </div>
       </main>
     );
@@ -1163,37 +1162,29 @@ function DailySession({
   if (!current) return null;
 
   return (
-    <main className="daily-session">
-      <header className="session-header">
-        <Link href="/words" className="icon-button" aria-label="Close quick five">
+    <main className="focus-session">
+      <header className="focus-header">
+        <Link
+          href="/words"
+          className="icon-button"
+          aria-label="Close quick five"
+        >
           <Icon name="close" />
         </Link>
-        <ProgressBar
-          value={wordIndex + 1}
-          max={dailyWords.length}
-          className="session-progress"
-          label="Quick five progress"
-        />
-        <span className="pixel-meta">
-          {wordIndex + 1}/{dailyWords.length}
+        <div className="focus-progress-wrap">
+          <strong>Quick five</strong>
+          <ProgressBar
+            value={wordIndex + 1}
+            max={dailyWords.length}
+            label="Quick five progress"
+          />
+        </div>
+        <span className="step-count">
+          {wordIndex + 1} of {dailyWords.length}
         </span>
       </header>
 
-      <section className="daily-word-stage" aria-labelledby="daily-word-title">
-        <MayuImage
-          pose={revealed ? "teach" : "listen"}
-          alt={
-            revealed
-              ? "Mayu teaching today’s Telugu phrase"
-              : "Mayu listening carefully"
-          }
-          className="daily-word-mayu"
-        />
-        <span className="overline">
-          {currentConfidence === "ready"
-            ? "QUICK REFRESH"
-            : `PHRASE ${wordIndex + 1} OF 5`}
-        </span>
+      <section className="daily-stage" aria-labelledby="daily-word-title">
         <PhraseStack
           word={current.word}
           showRomanization={preferences.showRomanization}
@@ -1201,45 +1192,47 @@ function DailySession({
           headingAs="h1"
           headingId="daily-word-title"
         />
-        <button className="listen-button" onClick={playAudio}>
-          <Icon name="audio" />
-          Hear the phrase
-        </button>
 
-        {revealed ? (
-          <div className="revealed-meaning">
-            <span className="overline">IN CONTEXT</span>
-            <div className="example-card">
-              <span className="overline">SAY IT LIKE THIS</span>
-              <strong className="example-english">
-                {current.exampleEnglish}
-              </strong>
-              <p className="example-telugu" lang="te">
-                {current.exampleTelugu}
-              </p>
-            </div>
-          </div>
-        ) : (
-          <button className="primary-button reveal-button" onClick={() => setRevealed(true)}>
-            See it in context
-          </button>
-        )}
+        <AudioButton word={current.word} notify={notify} />
+
+        <div className={`example-panel ${revealed ? "example-visible" : ""}`}>
+          {revealed ? (
+            <>
+              <h2>In a sentence</h2>
+              <strong>{current.exampleEnglish}</strong>
+              <span lang="te">{current.exampleTelugu}</span>
+            </>
+          ) : (
+            <p>Hear the phrase, say it once, then see it in a real sentence.</p>
+          )}
+        </div>
       </section>
 
-      {revealed ? (
-        <footer className="daily-actions">
+      <footer className="focus-actions">
+        {revealed ? (
+          <div className="confidence-actions">
+            <button
+              className="secondary-button"
+              onClick={() => markWord("learning")}
+            >
+              Keep practicing
+            </button>
+            <button
+              className="primary-button"
+              onClick={() => markWord("ready")}
+            >
+              Ready to use
+            </button>
+          </div>
+        ) : (
           <button
-            className="secondary-button"
-            onClick={() => markWord("learning")}
+            className="primary-button focus-primary"
+            onClick={() => setRevealed(true)}
           >
-            Review once more
+            Show an example
           </button>
-          <button className="primary-button" onClick={() => markWord("ready")}>
-            Ready to use
-            <Icon name="arrow" />
-          </button>
-        </footer>
-      ) : null}
+        )}
+      </footer>
     </main>
   );
 }
@@ -1295,55 +1288,48 @@ function SettingsView({
 
   return (
     <AppShell screen="settings">
-      <main className="page page-settings">
+      <main className="page settings-page">
         <header className="page-header">
-          <span className="overline">SETTINGS</span>
-          <h1>Set up Telugu your way.</h1>
-          <p>
-            Choose only the support that helps you speak sooner.
-          </p>
+          <h1>Settings.</h1>
+          <p>Keep only the support that helps you speak sooner.</p>
         </header>
 
-        <section className="settings-group" aria-labelledby="display-settings">
-          <div className="settings-group-heading">
-            <span className="overline">READING & AUDIO</span>
-            <h2 id="display-settings">How phrases appear</h2>
+        <section className="settings-section" aria-labelledby="phrase-settings">
+          <h2 id="phrase-settings">Phrases</h2>
+          <div className="settings-list">
+            <SwitchRow
+              label="Show pronunciation"
+              description="Place an easy phonetic spelling below the English."
+              checked={preferences.showRomanization}
+              onChange={() => updatePreference("showRomanization")}
+            />
+            <SwitchRow
+              label="Play available audio automatically"
+              description="This only plays when a family recording is available."
+              checked={preferences.autoplay}
+              onChange={() => updatePreference("autoplay")}
+            />
           </div>
-          <SwitchRow
-            label="Show pronunciation"
-            description="Show an easy-to-read pronunciation below each phrase."
-            checked={preferences.showRomanization}
-            onChange={() => updatePreference("showRomanization")}
-          />
-          <SwitchRow
-            label="Play available audio automatically"
-            description="Only plays when a family recording is available."
-            checked={preferences.autoplay}
-            onChange={() => updatePreference("autoplay")}
-          />
         </section>
 
-        <section className="settings-group settings-about" aria-labelledby="about-settings">
-          <div className="settings-group-heading">
-            <span className="overline">SPOKEN TELUGU FIRST</span>
-            <h2 id="about-settings">
-              Designed for conversations, not textbook drills.
-            </h2>
-          </div>
-          <p>
-            Telugu changes by region, family, and formality. PalukuLingo starts
-            with the English thought, gives you an approachable pronunciation,
-            and keeps the Telugu script nearby for recognition.
+        <section className="settings-section" aria-labelledby="about-settings">
+          <h2 id="about-settings">About the Telugu here</h2>
+          <p className="settings-copy">
+            Spoken Telugu changes by region, family, and formality. PalukuLingo
+            starts with the English thought, adds an approachable
+            pronunciation, and keeps Telugu script nearby for recognition.
           </p>
         </section>
 
-        <section className="danger-zone">
+        <section className="settings-reset" aria-labelledby="reset-settings">
           <div>
-            <span className="overline">ON THIS DEVICE</span>
-            <h2>Clear practice history</h2>
-            <p>Clear practiced situations and quick-five confidence on this device.</p>
+            <h2 id="reset-settings">Practice history</h2>
+            <p>Clear completed situations and phrase confidence on this device.</p>
           </div>
-          <button className="danger-button" onClick={() => setConfirmReset(true)}>
+          <button
+            className="danger-button"
+            onClick={() => setConfirmReset(true)}
+          >
             Reset progress
           </button>
         </section>
@@ -1358,10 +1344,9 @@ function SettingsView({
             aria-modal="true"
             aria-labelledby="reset-title"
           >
-            <span className="overline">RESET LOCAL PROGRESS</span>
             <h2 id="reset-title">Clear your practice history?</h2>
             <p>
-              This clears practiced situations and confidence stored in this
+              This removes completed situations and confidence stored in this
               browser. Saved phrases stay saved.
             </p>
             <div className="dialog-actions">
@@ -1369,7 +1354,7 @@ function SettingsView({
                 Keep progress
               </button>
               <button
-                className="danger-button"
+                className="danger-button danger-button-solid"
                 onClick={() => {
                   setState(defaultState);
                   setConfirmReset(false);
@@ -1428,7 +1413,8 @@ function MatchingExercise({
       setMismatch(null);
       setLeftSelected(null);
       setRightSelected(null);
-    }, 550);
+    }, 500);
+
     return () => window.clearTimeout(timer);
   }, [
     leftSelected,
@@ -1445,7 +1431,7 @@ function MatchingExercise({
         {words.map((word, index) => (
           <button
             key={word.english}
-            className={`match-card match-english ${
+            className={`match-card ${
               leftSelected === index ? "answer-selected" : ""
             } ${matched.has(index) ? "answer-correct" : ""} ${
               mismatch?.startsWith(`${index}-`) ? "answer-wrong" : ""
@@ -1458,6 +1444,7 @@ function MatchingExercise({
           </button>
         ))}
       </div>
+
       <div>
         {rightOrder.map((wordIndex) => (
           <button
@@ -1472,13 +1459,9 @@ function MatchingExercise({
             aria-pressed={rightSelected === wordIndex}
           >
             {showRomanization ? (
-              <span className="answer-pronunciation">
-                {words[wordIndex].roman}
-              </span>
+              <span>{words[wordIndex].roman}</span>
             ) : null}
-            <small className="answer-telugu" lang="te">
-              {words[wordIndex].telugu}
-            </small>
+            <small lang="te">{words[wordIndex].telugu}</small>
           </button>
         ))}
       </div>
@@ -1523,10 +1506,12 @@ function LessonView({
     ) {
       return;
     }
+
     const audio = new Audio(step.word.audioSrc);
     audio.play().catch(() => {
-      // Autoplay can be blocked by browser policy; the manual control remains.
+      // Manual playback remains available when autoplay is blocked.
     });
+
     return () => audio.pause();
   }, [preferences.autoplay, step]);
 
@@ -1554,97 +1539,88 @@ function LessonView({
       onComplete(lesson, correctCount, gradedCount);
       return;
     }
+
     setStepIndex((current) => current + 1);
     resetStepState();
   };
 
   const recordResult = (correct: boolean) => {
     setGradedCount((current) => current + 1);
+
     if (correct) {
       setCorrectCount((current) => current + 1);
       setResult("correct");
-    } else {
-      setResult("wrong");
+      return;
     }
+
+    setResult("wrong");
   };
 
   const check = () => {
     if (step.type === "choice" && selected) {
       recordResult(selected === step.word.telugu);
     }
+
     if (step.type === "true-false" && selected) {
       recordResult((selected === "true") === step.answer);
     }
+
     if (step.type === "arrange" && arranged.length) {
       const answer = arranged.map((index) => step.tokens[index]).join(" ");
-      recordResult(normalize(answer) === normalize(step.word.telugu));
+      recordResult(normalize(answer) === normalize(step.word.roman));
     }
-  };
-
-  const playAudio = (word: TeluguWord) => {
-    if (!word.audioSrc) {
-      notify("Family recording coming soon.");
-      return;
-    }
-    new Audio(word.audioSrc).play().catch(() => {
-      notify("That recording could not play. Try again in a moment.");
-    });
   };
 
   if (finished) {
     const passed = gradedCount === 0 || correctCount / gradedCount >= 0.6;
+    const score = gradedCount
+      ? Math.round((correctCount / gradedCount) * 100)
+      : 100;
+
     return (
       <main className="completion-screen">
         <div className="completion-content">
-          <MayuImage
-            pose={passed ? "celebrate" : "encourage"}
-            alt={
-              passed
-                ? "Mayu celebrating the completed situation practice"
-                : "Mayu encouraging another gentle try"
-            }
-            className="completion-mayu"
-          />
-          <span className="overline">
-            {passed ? "READY TO USE" : "ONE QUICK REPLAY"}
-          </span>
+          {passed ? (
+            <MayuImage
+              variant="success"
+              alt=""
+              className="completion-mayu"
+            />
+          ) : null}
+
           <h1>
             {passed
               ? "You can use these phrases now."
-              : "Run these phrases once more."}
+              : "Give these phrases one more pass."}
           </h1>
           <p>
             {passed
-              ? `${lesson.outcome} You practiced ${lesson.words.length} useful ${
-                  lesson.words.length === 1 ? "phrase" : "phrases"
-                }.`
-              : "Run through the situation again slowly. The answers stay visible after each check."}
+              ? lesson.outcome
+              : "Take it slowly. The answer stays visible after every check."}
           </p>
+
           <div className="completion-stats">
             <span>
-              <small>PHRASES PRACTICED</small>
               <strong>{lesson.words.length}</strong>
+              <small>Phrases practiced</small>
             </span>
             <span>
-              <small>CHECKS RIGHT</small>
-              <strong>
-                {gradedCount
-                  ? Math.round((correctCount / gradedCount) * 100)
-                  : 100}
-                %
-              </strong>
+              <strong>{score}%</strong>
+              <small>Checks right</small>
             </span>
           </div>
-          <div className="completion-actions">
-            <button className="primary-button" onClick={passed ? onExit : restart}>
-              {passed ? "Back to situations" : "Run it again"}
+
+          <button
+            className="primary-button completion-primary"
+            onClick={passed ? onExit : restart}
+          >
+            {passed ? "Back to situations" : "Practice again"}
+          </button>
+          {passed ? (
+            <button className="text-button" onClick={restart}>
+              Practice this situation again
             </button>
-            {passed ? (
-              <button className="secondary-button" onClick={restart}>
-                Run it again
-              </button>
-            ) : null}
-          </div>
+          ) : null}
         </div>
       </main>
     );
@@ -1660,16 +1636,12 @@ function LessonView({
       : step.type === "arrange"
         ? !arrangeReady
         : false;
-
-  let answerText = "";
-  if (
+  const answerWord =
     step.type === "choice" ||
     step.type === "true-false" ||
     step.type === "arrange"
-  ) {
-    answerText =
-      `${step.word.english} — ${step.word.roman} · ${step.word.telugu}`;
-  }
+      ? step.word
+      : null;
 
   return (
     <div className="lesson-shell">
@@ -1681,54 +1653,37 @@ function LessonView({
         >
           <Icon name="close" />
         </button>
-        <ProgressBar
-          value={stepIndex + 1}
-          max={steps.length}
-          className="lesson-progress"
-          label="Situation practice progress"
-        />
-        <span className="pixel-meta">
-          {stepIndex + 1}/{steps.length}
+        <div className="lesson-header-center">
+          <strong>{lesson.title}</strong>
+          <ProgressBar
+            value={stepIndex + 1}
+            max={steps.length}
+            label="Situation practice progress"
+          />
+        </div>
+        <span className="step-count">
+          {stepIndex + 1} of {steps.length}
         </span>
       </header>
 
       <main className="lesson-main">
-        <p className="lesson-position">
-          <span className="overline">{lesson.title}</span>
-        </p>
-
         {step.type === "introduce" ? (
           <section className="introduce-exercise">
-            <MayuImage
-              pose="teach"
-              alt="Mayu introducing a Telugu phrase"
-              className="lesson-mayu"
-            />
-            <span className="overline">USEFUL PHRASE</span>
+            <h1>Say this out loud.</h1>
             <div className="lesson-word-card">
-              <button
-                className="audio-circle-button"
-                onClick={() => playAudio(step.word)}
-                aria-label={`Hear ${step.word.telugu}`}
-              >
-                <Icon name="audio" />
-              </button>
               <PhraseStack
                 word={step.word}
                 showRomanization={preferences.showRomanization}
                 size="lesson"
-                headingAs="h1"
               />
+              <AudioButton word={step.word} notify={notify} />
             </div>
-            <p className="lesson-guidance">
-              Hear it, then say it once as if you needed it right now.
-            </p>
+            <p>Say it once as if you needed the phrase right now.</p>
           </section>
         ) : null}
 
         {step.type === "choice" ? (
           <section className="choice-exercise">
-            <span className="overline">CHOOSE ONE</span>
             <h1>Which Telugu means “{step.word.english}”?</h1>
             <div className="answer-grid">
               {step.options.map((option) => {
@@ -1736,6 +1691,7 @@ function LessonView({
                 const isCorrect =
                   result !== "idle" && option.telugu === step.word.telugu;
                 const isWrong = result === "wrong" && isSelected;
+
                 return (
                   <button
                     key={option.telugu}
@@ -1749,13 +1705,9 @@ function LessonView({
                     aria-pressed={isSelected}
                   >
                     {preferences.showRomanization ? (
-                      <strong className="answer-pronunciation">
-                        {option.roman}
-                      </strong>
+                      <strong>{option.roman}</strong>
                     ) : null}
-                    <span className="answer-telugu" lang="te">
-                      {option.telugu}
-                    </span>
+                    <span lang="te">{option.telugu}</span>
                   </button>
                 );
               })}
@@ -1765,24 +1717,32 @@ function LessonView({
 
         {step.type === "true-false" ? (
           <section className="true-false-exercise">
-            <span className="overline">CHECK THE MEANING</span>
-            <h1>Does this pairing feel right?</h1>
+            <h1>Does this pairing match?</h1>
             <div className="statement-card">
-              <strong className="statement-english">
-                “{step.shownMeaning}”
-              </strong>
-              <span>matches</span>
-              {preferences.showRomanization ? (
-                <b className="statement-pronunciation">{step.word.roman}</b>
-              ) : null}
-              <small className="statement-telugu" lang="te">
-                {step.word.telugu}
-              </small>
+              <PhraseStack
+                word={{
+                  english: step.shownMeaning,
+                  roman: step.word.roman,
+                  telugu: step.word.telugu,
+                }}
+                showRomanization={preferences.showRomanization}
+                size="card"
+              />
             </div>
             <div className="true-false-grid">
               {[
-                { value: "true", label: "Avunu · Yes" },
-                { value: "false", label: "Kaadu · No" },
+                {
+                  value: "true",
+                  english: "Yes",
+                  roman: "avunu",
+                  telugu: "అవును",
+                },
+                {
+                  value: "false",
+                  english: "No",
+                  roman: "kaadu",
+                  telugu: "కాదు",
+                },
               ].map((option) => (
                 <button
                   key={option.value}
@@ -1802,7 +1762,9 @@ function LessonView({
                   onClick={() => setSelected(option.value)}
                   aria-pressed={selected === option.value}
                 >
-                  <strong>{option.label}</strong>
+                  <strong>{option.english}</strong>
+                  <span>{option.roman}</span>
+                  <small lang="te">{option.telugu}</small>
                 </button>
               ))}
             </div>
@@ -1811,9 +1773,8 @@ function LessonView({
 
         {step.type === "matching" ? (
           <section className="matching-exercise">
-            <span className="overline">MAKE THREE PAIRS</span>
             <h1>Match each phrase to its meaning.</h1>
-            <p>Choose an English meaning, then the phrase you would say.</p>
+            <p>Choose an English meaning, then choose the phrase you would say.</p>
             <MatchingExercise
               words={step.words}
               matched={matched}
@@ -1831,7 +1792,6 @@ function LessonView({
 
         {step.type === "arrange" ? (
           <section className="arrange-exercise">
-            <span className="overline">PUT IT TOGETHER</span>
             <h1>Build “{step.word.english}”.</h1>
             <div className="answer-tray" aria-label="Your answer">
               {arranged.length ? (
@@ -1849,7 +1809,7 @@ function LessonView({
                   </button>
                 ))
               ) : (
-                <span>Choose the Telugu words in order</span>
+                <span>Choose the pronunciation in order</span>
               )}
             </div>
             <div className="word-bank">
@@ -1880,22 +1840,41 @@ function LessonView({
         <div className="lesson-footer-inner">
           <div className="feedback-copy" role="status" aria-live="polite">
             {result === "correct" ? (
-              <span>
-                <strong>That’s right.</strong>
-                <small>{answerText}</small>
-              </span>
+              <div>
+                <strong>
+                  {
+                    ["That’s right.", "You’ve got it.", "Exactly."][
+                      stepIndex % 3
+                    ]
+                  }
+                </strong>
+                {answerWord ? (
+                  <PhraseStack
+                    word={answerWord}
+                    showRomanization={preferences.showRomanization}
+                    size="feedback"
+                  />
+                ) : null}
+              </div>
             ) : result === "wrong" ? (
-              <>
-                <MayuImage
-                  pose="encourage"
-                  alt="Mayu offering gentle encouragement"
-                  className="feedback-mayu"
-                />
-                <span>
-                  <strong>Take another look.</strong>
-                  <small>The answer is {answerText}.</small>
-                </span>
-              </>
+              <div>
+                <strong>
+                  {
+                    [
+                      "Take another look.",
+                      "Keep this phrase close.",
+                      "Here is the phrase to remember.",
+                    ][stepIndex % 3]
+                  }
+                </strong>
+                {answerWord ? (
+                  <PhraseStack
+                    word={answerWord}
+                    showRomanization={preferences.showRomanization}
+                    size="feedback"
+                  />
+                ) : null}
+              </div>
             ) : (
               <span>
                 {step.type === "introduce"
@@ -1904,7 +1883,7 @@ function LessonView({
                     ? matchingDone
                       ? "All three pairs are together."
                       : "Match every pair to continue."
-                    : "Choose an answer when you’re ready."}
+                    : "Choose an answer when you are ready."}
               </span>
             )}
           </div>
@@ -1912,7 +1891,6 @@ function LessonView({
           {step.type === "introduce" ? (
             <button className="primary-button" onClick={advance}>
               Continue
-              <Icon name="arrow" />
             </button>
           ) : step.type === "matching" ? (
             <button
@@ -1921,7 +1899,6 @@ function LessonView({
               onClick={advance}
             >
               Continue
-              <Icon name="arrow" />
             </button>
           ) : result === "idle" ? (
             <button
@@ -1934,7 +1911,6 @@ function LessonView({
           ) : (
             <button className="primary-button" onClick={advance}>
               {isLast ? "Finish practice" : "Continue"}
-              <Icon name="arrow" />
             </button>
           )}
         </div>
@@ -1946,9 +1922,8 @@ function LessonView({
 function MissingLesson({ onExit }: { onExit: () => void }) {
   return (
     <main className="missing-lesson">
-      <span className="overline">PRACTICE NOT FOUND</span>
       <h1>That situation is not available.</h1>
-      <p>Return to Situations and choose any practical moment.</p>
+      <p>Choose any practical moment from Situations.</p>
       <button className="primary-button" onClick={onExit}>
         Back to situations
       </button>
@@ -1958,6 +1933,7 @@ function MissingLesson({ onExit }: { onExit: () => void }) {
 
 function completedFrom(value: unknown) {
   if (!Array.isArray(value)) return [];
+
   return Array.from(
     new Set(value.filter((item): item is string => typeof item === "string")),
   );
@@ -1965,6 +1941,7 @@ function completedFrom(value: unknown) {
 
 function confidenceFrom(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
   return Object.fromEntries(
     Object.entries(value).filter(
       (entry): entry is [string, "learning" | "ready"] =>
@@ -1975,6 +1952,7 @@ function confidenceFrom(value: unknown) {
 
 function parseCurrentProgress(value: unknown): SavedState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
   const candidate = value as Record<string, unknown>;
   return {
     completed: completedFrom(candidate.completed),
@@ -1984,6 +1962,7 @@ function parseCurrentProgress(value: unknown): SavedState | null {
 
 function parseLegacyProgress(value: unknown): SavedState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+
   const candidate = value as Record<string, unknown>;
   return {
     completed: completedFrom(candidate.completed),
@@ -1995,6 +1974,7 @@ function parsePreferences(value: unknown): Preferences {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return defaultPreferences;
   }
+
   const candidate = value as Record<string, unknown>;
   return {
     showRomanization:
@@ -2027,6 +2007,7 @@ export default function PalukuApp({
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
       let restoredProgress: SavedState | null = null;
+
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (raw) {
@@ -2046,6 +2027,7 @@ export default function PalukuApp({
           restoredProgress = null;
         }
       }
+
       setState(restoredProgress ?? defaultState);
 
       try {
@@ -2069,20 +2051,23 @@ export default function PalukuApp({
 
       setHydrated(true);
     }, 0);
+
     return () => window.clearTimeout(restoreTimer);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
+
     try {
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {
-      // Keep the current session usable when storage is unavailable.
+      // The session stays usable when local storage is unavailable.
     }
   }, [hydrated, state]);
 
   useEffect(() => {
     if (!hydrated) return;
+
     try {
       window.localStorage.setItem(
         PREFERENCES_KEY,
@@ -2095,15 +2080,17 @@ export default function PalukuApp({
 
   useEffect(() => {
     if (!hydrated) return;
+
     try {
       window.localStorage.setItem(SAVED_WORDS_KEY, JSON.stringify(savedWords));
     } catch {
-      // Saved words remain available for the current session.
+      // Saved phrases remain available for the current session.
     }
   }, [hydrated, savedWords]);
 
   useEffect(() => {
     if (!toast) return;
+
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
@@ -2125,6 +2112,7 @@ export default function PalukuApp({
   ) => {
     const passed = graded === 0 || correct / graded >= 0.6;
     if (!passed) return;
+
     setState((current) => ({
       completed: current.completed.includes(lesson.id)
         ? current.completed
@@ -2151,19 +2139,13 @@ export default function PalukuApp({
   } else if (screen === "daily") {
     content = (
       <DailySession
-        state={state}
         setState={setState}
         preferences={preferences}
         notify={setToast}
       />
     );
   } else if (screen === "learn") {
-    content = (
-      <SituationsView
-        state={state}
-        startLesson={startLesson}
-      />
-    );
+    content = <SituationsView state={state} startLesson={startLesson} />;
   } else if (screen === "words") {
     content = (
       <PhrasebookView
@@ -2182,7 +2164,13 @@ export default function PalukuApp({
       />
     );
   } else {
-    content = <TodayView state={state} startLesson={startLesson} />;
+    content = (
+      <TodayView
+        state={state}
+        startLesson={startLesson}
+        notify={setToast}
+      />
+    );
   }
 
   return (

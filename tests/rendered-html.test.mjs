@@ -35,7 +35,7 @@ const routeCases = [
   ["/learn", /What do you need to say\?/],
   ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
-  ["/settings", /Set up Telugu your way\./],
+  ["/settings", />Settings\.<\/h1>/],
   ["/lesson/hello-goodbye", /class="introduce-exercise"/],
 ];
 
@@ -93,7 +93,7 @@ test("unknown lesson URLs return a real not-found response", async () => {
   const response = await render("/lesson/not-a-real-lesson");
   assert.equal(response.status, 404);
   const html = await response.text();
-  assert.match(html, /Mayu can’t find that page\./);
+  assert.match(html, /That page is not available\./);
   assert.match(html, /href="\/"/);
 });
 
@@ -125,6 +125,12 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(app, /findDailyWord\("hello-goodbye"/);
   assert.match(app, /type: "introduce"/);
   assert.match(app, /type: "matching"/);
+  assert.match(app, /tokens: phrase\.roman\.trim\(\)/);
+  assert.doesNotMatch(app, /tokens: phrase\.telugu\.trim\(\)/);
+  assert.match(
+    app,
+    /normalize\(answer\) === normalize\(step\.word\.roman\)/,
+  );
   assert.match(
     app,
     /className="phrase-english"[\s\S]*className="phrase-roman"[\s\S]*className="phrase-telugu"/,
@@ -154,18 +160,20 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(css, /"Nunito Sans"/);
   assert.doesNotMatch(css, /"Geist Pixel"|"Turret Road"/);
   assert.doesNotMatch(css, /transition(?:-property)?:\s*all\b/);
-
-  for (const pose of [
-    "welcome",
-    "teach",
-    "listen",
-    "encourage",
-    "celebrate",
-    "read",
-  ]) {
-    assert.match(app, new RegExp(`"${pose}"`));
-  }
-  assert.match(app, /maya-peacock\.webp/);
+  assert.doesNotMatch(productCopy, /[—·]/);
+  assert.doesNotMatch(app, /overline|pixel-meta/);
+  assert.match(app, /practicedDaily/);
+  assert.match(app, /Recording soon/);
+  assert.match(app, /event\.key === "ArrowRight"/);
+  assert.match(app, /type MayuVariant = "guide" \| "success"/);
+  assert.match(app, /mayu-\$\{variant\}-v2\.webp/);
+  assert.doesNotMatch(
+    app,
+    /mayu-(?:welcome|teach|listen|encourage|celebrate|read)\.webp/,
+  );
+  await access(new URL("public/mayu-guide-v2.webp", templateRoot));
+  await access(new URL("public/mayu-success-v2.webp", templateRoot));
+  await access(new URL("public/mayu-favicon.png", templateRoot));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", templateRoot)));
 });
