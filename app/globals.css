@@ -587,7 +587,8 @@ svg {
 
 .home-hero {
   display: flex;
-  max-width: 880px;
+  width: 100%;
+  max-width: 1040px;
   align-items: center;
   flex-direction: column;
   margin: 0 auto;
@@ -595,9 +596,10 @@ svg {
 }
 
 .home-hero h1 {
-  max-width: 860px;
-  font-size: clamp(48px, 8vw, 72px);
+  max-width: none;
+  font-size: clamp(52px, 5.15vw, 62px);
   text-wrap: balance;
+  white-space: nowrap;
 }
 
 .home-actions {
@@ -2098,6 +2100,18 @@ svg {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@media (max-width: 980px) {
+  .home-hero {
+    max-width: 880px;
+  }
+
+  .home-hero h1 {
+    max-width: 860px;
+    font-size: clamp(48px, 8vw, 72px);
+    white-space: normal;
   }
 }
 

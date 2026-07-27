@@ -203,6 +203,14 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(css, /"Nunito Sans"/);
   assert.doesNotMatch(css, /"Geist Pixel"|"Turret Road"/);
   assert.doesNotMatch(css, /transition(?:-property)?:\s*all\b/);
+  assert.match(
+    css,
+    /\.home-hero h1\s*\{[^}]*white-space:\s*nowrap;/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 980px\)[\s\S]*?\.home-hero h1\s*\{[^}]*white-space:\s*normal;/,
+  );
   assert.doesNotMatch(productCopy, /[—·]/);
   assert.doesNotMatch(app, /overline|pixel-meta/);
   assert.match(app, /practicedDaily/);
