@@ -24,9 +24,11 @@ The development server prints the local URL when it starts.
 
 ## Practical situations and family audio
 
-Situation content lives in `app/course-data.ts`. Every phrase supports an
-optional `audioSrc`, so family-recorded pronunciation clips can be added without
-changing the practice engine.
+Situation content lives in `app/course-data.ts`. Every phrase keeps four
+separate learning layers: its English meaning, stable romanized Telugu, an
+easy English-speaker pronunciation cue, and Telugu script. The pronunciation
+cue is deliberately approximate and complements, rather than replaces, the
+optional `audioSrc` for family-recorded pronunciation clips.
 
 ## Verification
 

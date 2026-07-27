@@ -35,7 +35,7 @@ type SavedState = {
 };
 
 type Preferences = {
-  showRomanization: boolean;
+  showPronunciation: boolean;
   autoplay: boolean;
 };
 
@@ -72,7 +72,7 @@ const defaultState: SavedState = {
 };
 
 const defaultPreferences: Preferences = {
-  showRomanization: true,
+  showPronunciation: true,
   autoplay: false,
 };
 
@@ -87,6 +87,29 @@ function normalize(value: string) {
 
 function formatPronunciation(value: string) {
   return `(${value.trim()})`;
+}
+
+function SpokenGuide({
+  word,
+  showPronunciation = true,
+}: {
+  word: Pick<TeluguWord, "roman" | "pronunciation">;
+  showPronunciation?: boolean;
+}) {
+  return (
+    <span className="phrase-spoken">
+      <span className="phrase-roman" lang="te-Latn">
+        <span className="sr-only">Telugu in English letters: </span>
+        {word.roman}
+      </span>
+      {showPronunciation ? (
+        <span className="phrase-pronunciation" lang="en">
+          <span className="sr-only">Say it like: </span>
+          {formatPronunciation(word.pronunciation)}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 const libraryWords: LibraryWord[] = (() => {
@@ -339,14 +362,17 @@ function ProgressBar({
 
 function PhraseStack({
   word,
-  showRomanization = true,
+  showPronunciation = true,
   size = "row",
   headingAs = "strong",
   headingId,
   className = "",
 }: {
-  word: Pick<TeluguWord, "english" | "roman" | "telugu">;
-  showRomanization?: boolean;
+  word: Pick<
+    TeluguWord,
+    "english" | "roman" | "pronunciation" | "telugu"
+  >;
+  showPronunciation?: boolean;
   size?: "row" | "card" | "hero" | "lesson" | "recap" | "feedback";
   headingAs?: "h1" | "h2" | "h3" | "strong";
   headingId?: string;
@@ -361,11 +387,10 @@ function PhraseStack({
       <Heading id={headingId} className="phrase-english">
         {english}
       </Heading>
-      {showRomanization ? (
-        <span className="phrase-roman">
-          {formatPronunciation(word.roman)}
-        </span>
-      ) : null}
+      <SpokenGuide
+        word={word}
+        showPronunciation={showPronunciation}
+      />
       <span className="phrase-telugu" lang="te">
         {word.telugu}
       </span>
@@ -711,14 +736,14 @@ function SituationsView({
 function WordRow({
   item,
   isSaved,
-  showRomanization,
+  showPronunciation,
   onAudio,
   onOpen,
   onSave,
 }: {
   item: LibraryWord;
   isSaved: boolean;
-  showRomanization: boolean;
+  showPronunciation: boolean;
   onAudio: (word: TeluguWord) => void;
   onOpen: (word: LibraryWord) => void;
   onSave: (word: LibraryWord) => void;
@@ -728,7 +753,7 @@ function WordRow({
       <button className="word-row-main" onClick={() => onOpen(item)}>
         <PhraseStack
           word={item}
-          showRomanization={showRomanization}
+          showPronunciation={showPronunciation}
           size="row"
         />
       </button>
@@ -810,9 +835,9 @@ function PhrasebookView({
       }
       if (!normalizedQuery) return true;
 
-      return normalize(`${word.telugu} ${word.roman} ${word.english}`).includes(
-        normalizedQuery,
-      );
+      return normalize(
+        `${word.telugu} ${word.roman} ${word.pronunciation} ${word.english}`,
+      ).includes(normalizedQuery);
     });
   }, [query, savedWords, situationFilter, tab, todayKeys]);
 
@@ -944,7 +969,7 @@ function PhrasebookView({
                 key={word.key}
                 item={word}
                 isSaved={savedWords.includes(word.key)}
-                showRomanization={preferences.showRomanization}
+                showPronunciation={preferences.showPronunciation}
                 onAudio={(item) => playWordAudio(item, notify)}
                 onOpen={setSelectedWord}
                 onSave={toggleSaved}
@@ -1015,7 +1040,7 @@ function PhrasebookView({
 
             <PhraseStack
               word={selectedWord}
-              showRomanization={preferences.showRomanization}
+              showPronunciation={preferences.showPronunciation}
               size="hero"
               headingAs="h2"
               headingId="word-sheet-title"
@@ -1167,7 +1192,7 @@ function DailySession({
                 <div className="recap-item" key={phraseKey(word)}>
                   <PhraseStack
                     word={word}
-                    showRomanization={preferences.showRomanization}
+                    showPronunciation={preferences.showPronunciation}
                     size="recap"
                   />
                   <span
@@ -1226,7 +1251,7 @@ function DailySession({
       <section className="daily-stage" aria-labelledby="daily-word-title">
         <PhraseStack
           word={current}
-          showRomanization={preferences.showRomanization}
+          showPronunciation={preferences.showPronunciation}
           size="hero"
           headingAs="h1"
           headingId="daily-word-title"
@@ -1336,10 +1361,10 @@ function SettingsView({
           <h2 id="phrase-settings">Phrases</h2>
           <div className="settings-list">
             <SwitchRow
-              label="Show pronunciation"
-              description="Place an easy phonetic spelling below the English."
-              checked={preferences.showRomanization}
-              onChange={() => updatePreference("showRomanization")}
+              label="Show the speaking guide"
+              description="Keep the easy, say-it-out-loud cue in parentheses."
+              checked={preferences.showPronunciation}
+              onChange={() => updatePreference("showPronunciation")}
             />
             <SwitchRow
               label="Play available audio automatically"
@@ -1354,9 +1379,9 @@ function SettingsView({
           <h2 id="about-settings">About the Telugu here</h2>
           <p className="settings-copy">
             Spoken Telugu changes by region, family, and formality.
-            PracticalTelugu starts with the English thought, adds an
-            approachable pronunciation, and keeps Telugu script nearby for
-            recognition.
+            PracticalTelugu starts with the English meaning, shows Telugu in
+            English letters, adds an approximate speaking cue in parentheses,
+            and keeps Telugu script nearby for recognition.
           </p>
         </section>
 
@@ -1422,7 +1447,7 @@ function MatchingExercise({
   setRightSelected,
   mismatch,
   setMismatch,
-  showRomanization,
+  showPronunciation,
 }: {
   words: TeluguWord[];
   matched: Set<number>;
@@ -1433,7 +1458,7 @@ function MatchingExercise({
   setRightSelected: (value: number | null) => void;
   mismatch: string | null;
   setMismatch: (value: string | null) => void;
-  showRomanization: boolean;
+  showPronunciation: boolean;
 }) {
   const rightOrder =
     words.length === 3
@@ -1500,9 +1525,10 @@ function MatchingExercise({
             onClick={() => setRightSelected(wordIndex)}
             aria-pressed={rightSelected === wordIndex}
           >
-            {showRomanization ? (
-              <span>{formatPronunciation(words[wordIndex].roman)}</span>
-            ) : null}
+            <SpokenGuide
+              word={words[wordIndex]}
+              showPronunciation={showPronunciation}
+            />
             <small lang="te">{words[wordIndex].telugu}</small>
           </button>
         ))}
@@ -1715,7 +1741,7 @@ function LessonView({
             <div className="lesson-word-card">
               <PhraseStack
                 word={step.word}
-                showRomanization={preferences.showRomanization}
+                showPronunciation={preferences.showPronunciation}
                 size="lesson"
               />
               <AudioButton word={step.word} notify={notify} />
@@ -1746,9 +1772,10 @@ function LessonView({
                     onClick={() => setSelected(option.telugu)}
                     aria-pressed={isSelected}
                   >
-                    {preferences.showRomanization ? (
-                      <strong>{formatPronunciation(option.roman)}</strong>
-                    ) : null}
+                    <SpokenGuide
+                      word={option}
+                      showPronunciation={preferences.showPronunciation}
+                    />
                     <span lang="te">{option.telugu}</span>
                   </button>
                 );
@@ -1765,9 +1792,10 @@ function LessonView({
                 word={{
                   english: step.shownMeaning,
                   roman: step.word.roman,
+                  pronunciation: step.word.pronunciation,
                   telugu: step.word.telugu,
                 }}
-                showRomanization={preferences.showRomanization}
+                showPronunciation={preferences.showPronunciation}
                 size="card"
               />
             </div>
@@ -1777,12 +1805,14 @@ function LessonView({
                   value: "true",
                   english: "Yes",
                   roman: "avunu",
+                  pronunciation: "uh-VOO-noo",
                   telugu: "అవును",
                 },
                 {
                   value: "false",
                   english: "No",
                   roman: "kaadu",
+                  pronunciation: "KAA-doo",
                   telugu: "కాదు",
                 },
               ].map((option) => (
@@ -1805,7 +1835,10 @@ function LessonView({
                   aria-pressed={selected === option.value}
                 >
                   <strong>{option.english}</strong>
-                  <span>{formatPronunciation(option.roman)}</span>
+                  <SpokenGuide
+                    word={option}
+                    showPronunciation={preferences.showPronunciation}
+                  />
                   <small lang="te">{option.telugu}</small>
                 </button>
               ))}
@@ -1827,7 +1860,7 @@ function LessonView({
               setRightSelected={setRightSelected}
               mismatch={mismatch}
               setMismatch={setMismatch}
-              showRomanization={preferences.showRomanization}
+              showPronunciation={preferences.showPronunciation}
             />
           </section>
         ) : null}
@@ -1851,7 +1884,7 @@ function LessonView({
                   </button>
                 ))
               ) : (
-                <span>Choose the pronunciation in order</span>
+                <span>Choose the English-letter words in order</span>
               )}
             </div>
             <div className="word-bank">
@@ -1893,7 +1926,7 @@ function LessonView({
                 {answerWord ? (
                   <PhraseStack
                     word={answerWord}
-                    showRomanization={preferences.showRomanization}
+                    showPronunciation={preferences.showPronunciation}
                     size="feedback"
                   />
                 ) : null}
@@ -1912,7 +1945,7 @@ function LessonView({
                 {answerWord ? (
                   <PhraseStack
                     word={answerWord}
-                    showRomanization={preferences.showRomanization}
+                    showPronunciation={preferences.showPronunciation}
                     size="feedback"
                   />
                 ) : null}
@@ -2018,11 +2051,14 @@ function parsePreferences(value: unknown): Preferences {
   }
 
   const candidate = value as Record<string, unknown>;
+  const legacyShowRomanization = candidate.showRomanization;
   return {
-    showRomanization:
-      typeof candidate.showRomanization === "boolean"
-        ? candidate.showRomanization
-        : defaultPreferences.showRomanization,
+    showPronunciation:
+      typeof candidate.showPronunciation === "boolean"
+        ? candidate.showPronunciation
+        : typeof legacyShowRomanization === "boolean"
+          ? legacyShowRomanization
+          : defaultPreferences.showPronunciation,
     autoplay:
       typeof candidate.autoplay === "boolean"
         ? candidate.autoplay

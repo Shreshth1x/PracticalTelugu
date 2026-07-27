@@ -458,9 +458,25 @@ svg {
   line-height: 1.16;
 }
 
+.phrase-spoken {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 2px;
+}
+
 .phrase-roman {
   color: var(--green);
   font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+}
+
+.phrase-pronunciation {
+  color: var(--muted);
+  font-weight: 700;
   letter-spacing: 0.01em;
   line-height: 1.25;
 }
@@ -483,8 +499,12 @@ svg {
   letter-spacing: -0.02em;
 }
 
-.phrase-row .phrase-roman {
+.phrase-row .phrase-spoken {
   margin-top: 3px;
+}
+
+.phrase-row .phrase-roman,
+.phrase-row .phrase-pronunciation {
   font-size: 15px;
 }
 
@@ -500,8 +520,12 @@ svg {
   font-size: clamp(30px, 4.8vw, 44px);
 }
 
-.phrase-card .phrase-roman {
+.phrase-card .phrase-spoken {
   margin-top: 5px;
+}
+
+.phrase-card .phrase-roman,
+.phrase-card .phrase-pronunciation {
   font-size: 20px;
 }
 
@@ -519,8 +543,13 @@ svg {
   font-size: clamp(40px, 8vw, 66px);
 }
 
-.phrase-hero .phrase-roman {
+.phrase-hero .phrase-spoken {
+  justify-content: center;
   margin-top: 8px;
+}
+
+.phrase-hero .phrase-roman,
+.phrase-hero .phrase-pronunciation {
   font-size: clamp(21px, 4vw, 28px);
 }
 
@@ -536,8 +565,12 @@ svg {
   font-size: clamp(36px, 7vw, 56px);
 }
 
-.phrase-lesson .phrase-roman {
+.phrase-lesson .phrase-spoken {
   margin-top: 5px;
+}
+
+.phrase-lesson .phrase-roman,
+.phrase-lesson .phrase-pronunciation {
   font-size: 24px;
 }
 
@@ -557,6 +590,7 @@ svg {
 }
 
 .phrase-recap .phrase-roman,
+.phrase-recap .phrase-pronunciation,
 .phrase-recap .phrase-telugu {
   font-size: 13px;
 }
@@ -577,8 +611,13 @@ svg {
 }
 
 .phrase-feedback .phrase-roman,
+.phrase-feedback .phrase-pronunciation,
 .phrase-feedback .phrase-telugu {
   font-size: 13px;
+}
+
+.phrase-feedback .phrase-spoken {
+  column-gap: 6px;
 }
 
 .home-page {
@@ -1267,7 +1306,8 @@ svg {
   font-size: clamp(38px, 7vw, 54px);
 }
 
-.word-sheet > .phrase-stack .phrase-roman {
+.word-sheet > .phrase-stack .phrase-roman,
+.word-sheet > .phrase-stack .phrase-pronunciation {
   font-size: 23px;
 }
 
@@ -1837,12 +1877,23 @@ svg {
   font-weight: 800;
 }
 
-.answer-card > span {
+.answer-card > span[lang="te"] {
   display: block;
   margin-top: 6px;
   color: var(--green);
   font-family: var(--font-telugu);
   font-size: 23px;
+}
+
+.answer-card > .phrase-spoken {
+  justify-content: center;
+  margin-top: 6px;
+  font-family: var(--font-body);
+}
+
+.answer-card > .phrase-spoken .phrase-roman,
+.answer-card > .phrase-spoken .phrase-pronunciation {
+  font-size: 15px;
 }
 
 .answer-selected {
@@ -1898,11 +1949,9 @@ svg {
   justify-content: center;
 }
 
-.true-false-grid .answer-card > span {
+.true-false-grid .answer-card > .phrase-spoken {
   margin-top: 4px;
   font-family: var(--font-body);
-  font-size: 15px;
-  font-weight: 800;
 }
 
 .true-false-grid .answer-card > small {
@@ -1934,7 +1983,12 @@ svg {
   font-weight: 800;
 }
 
-.match-card span {
+.match-card > .phrase-spoken {
+  justify-content: center;
+}
+
+.match-card .phrase-roman,
+.match-card .phrase-pronunciation {
   font-size: 15px;
 }
 

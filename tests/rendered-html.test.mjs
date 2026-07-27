@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
-import { practicePacks } from "../app/course-data.ts";
+import { allLessons, practicePacks } from "../app/course-data.ts";
 import { phraseKey, resolvePracticePath } from "../app/practice-path.mjs";
 
 const templateRoot = new URL("../", import.meta.url);
@@ -184,29 +184,70 @@ test("moves through the practical path five phrases at a time", () => {
   assert.equal(complete.phraseIndex, 0);
 });
 
-test("teaches each phrase in English, pronunciation, Telugu order", async () => {
+test("keeps meaning, romanized Telugu, pronunciation, and script distinct", async () => {
   for (const pathname of ["/words/daily", "/lesson/hello-goodbye"]) {
     const response = await render(pathname);
     const html = await response.text();
     const englishIndex = html.indexOf("phrase-english");
-    const pronunciationIndex = html.indexOf("phrase-roman");
+    const romanIndex = html.indexOf("phrase-roman");
+    const pronunciationIndex = html.indexOf("phrase-pronunciation");
     const teluguIndex = html.indexOf("phrase-telugu");
 
     assert.ok(englishIndex >= 0, `${pathname}: English phrase is present`);
     assert.ok(
-      pronunciationIndex > englishIndex,
-      `${pathname}: pronunciation follows English`,
+      romanIndex > englishIndex,
+      `${pathname}: romanized Telugu follows English`,
+    );
+    assert.ok(
+      pronunciationIndex > romanIndex,
+      `${pathname}: pronunciation follows romanized Telugu`,
     );
     assert.ok(
       teluguIndex > pronunciationIndex,
       `${pathname}: Telugu follows pronunciation`,
     );
-    assert.match(
-      html,
-      /class="phrase-roman">\([^<]+\)<\/span>/,
-      `${pathname}: pronunciation is visually enclosed in parentheses`,
+    assert.ok(
+      html.indexOf("(nuh-muh-SKAA-rum)", pronunciationIndex) >
+        pronunciationIndex,
+      `${pathname}: easy pronunciation is enclosed in parentheses`,
     );
+    assert.doesNotMatch(html, /\(namaskaaram\)/);
   }
+});
+
+test("every phrase has a separate curated speaking cue", () => {
+  const seenByTelugu = new Map();
+
+  for (const word of allLessons.flatMap((lesson) => lesson.words)) {
+    assert.ok(word.roman.trim(), `${word.telugu}: romanization is present`);
+    assert.ok(
+      word.pronunciation.trim(),
+      `${word.telugu}: pronunciation is present`,
+    );
+    assert.notEqual(
+      word.roman.toLocaleLowerCase(),
+      word.pronunciation.toLocaleLowerCase(),
+      `${word.telugu}: pronunciation is not a duplicate romanization`,
+    );
+    assert.doesNotMatch(word.roman, /^\(.*\)$/);
+    assert.doesNotMatch(word.pronunciation, /^\(.*\)$/);
+
+    const existing = seenByTelugu.get(word.telugu);
+    if (existing) {
+      assert.deepEqual(
+        { roman: word.roman, pronunciation: word.pronunciation },
+        existing,
+        `${word.telugu}: repeated phrases keep the same speaking guide`,
+      );
+    } else {
+      seenByTelugu.set(word.telugu, {
+        roman: word.roman,
+        pronunciation: word.pronunciation,
+      });
+    }
+  }
+
+  assert.equal(seenByTelugu.size, 49);
 });
 
 test("unknown lesson URLs return a real not-found response", async () => {
@@ -257,22 +298,29 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     app,
     /normalize\(answer\) === normalize\(step\.word\.roman\)/,
   );
-  assert.match(
+  assert.doesNotMatch(
     app,
-    /className="phrase-english"[\s\S]*className="phrase-roman"[\s\S]*className="phrase-telugu"/,
-  );
-  assert.match(
-    app,
-    /className="phrase-roman"[\s\S]*formatPronunciation\(word\.roman\)/,
+    /normalize\(answer\) === normalize\(step\.word\.pronunciation\)/,
   );
   assert.match(
     app,
-    /formatPronunciation\(words\[wordIndex\]\.roman\)/,
+    /className="phrase-english"[\s\S]*<SpokenGuide[\s\S]*className="phrase-telugu"/,
   );
-  assert.equal(
-    (app.match(/formatPronunciation\(option\.roman\)/g) ?? []).length,
-    2,
+  assert.match(
+    app,
+    /className="phrase-roman"[\s\S]*word\.roman[\s\S]*className="phrase-pronunciation"[\s\S]*formatPronunciation\(word\.pronunciation\)/,
   );
+  assert.match(
+    app,
+    /word=\{words\[wordIndex\]\}[\s\S]*showPronunciation=\{showPronunciation\}/,
+  );
+  assert.match(
+    app,
+    /\$\{word\.telugu\} \$\{word\.roman\} \$\{word\.pronunciation\} \$\{word\.english\}/,
+  );
+  assert.match(app, /legacyShowRomanization = candidate\.showRomanization/);
+  assert.doesNotMatch(app, /formatPronunciation\(word\.roman\)/);
+  assert.doesNotMatch(app, /Choose the pronunciation in order/);
   assert.doesNotMatch(app, /teluguFirst|Show Telugu larger/);
   assert.match(courseData, /SituationGroup/);
   assert.match(courseData, /situationGroups/);
@@ -281,6 +329,8 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(courseData, /essentials-milestone/);
   assert.match(courseData, /building-blocks-milestone/);
   assert.match(courseData, /export const practicePacks/);
+  assert.match(courseData, /learnerPronunciations/);
+  assert.match(courseData, /Missing learner pronunciation/);
 
   const productCopy = `${app}\n${courseData}\n${layout}\n${readme}`;
   assert.doesNotMatch(

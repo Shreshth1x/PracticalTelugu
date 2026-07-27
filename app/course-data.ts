@@ -7,6 +7,7 @@ export type SituationGroup =
 export type TeluguWord = {
   telugu: string;
   roman: string;
+  pronunciation: string;
   english: string;
   note?: string;
   audioSrc?: string;
@@ -29,6 +30,11 @@ export type PracticePack = {
   title: string;
   outcome: string;
   words: TeluguWord[];
+};
+
+type TeluguWordSource = Omit<TeluguWord, "pronunciation">;
+type LessonSource = Omit<Lesson, "words"> & {
+  words: TeluguWordSource[];
 };
 
 export const situationGroups: {
@@ -67,7 +73,72 @@ export const situationGroups: {
   },
 ];
 
-export const practicalLessons: Lesson[] = [
+const learnerPronunciations: Record<string, string> = {
+  "నమస్కారం": "nuh-muh-SKAA-rum",
+  "ఎలా ఉన్నారు?": "eh-LAA oon-NAA-roo?",
+  "బాగున్నాను": "baa-goon-NAA-noo",
+  "మళ్లీ కలుద్దాం": "mul-LEE kuh-lood-DAAM",
+  "ధన్యవాదాలు": "dun-yuh-VAA-daa-loo",
+  "దయచేసి": "duh-yuh-CHAY-see",
+  "పరవాలేదు": "puh-ruh-vaa-LAY-doo",
+  "క్షమించండి": "kshuh-min-CHUN-dee",
+  "అవును": "uh-VOO-noo",
+  "కాదు": "KAA-doo",
+  "సరే": "suh-RAY",
+  "తెలియదు": "teh-lee-YUH-doo",
+  "మీ పేరు ఏంటి?": "MEE PAY-roo AYN-tee?",
+  "నా పేరు…": "NAA PAY-roo…",
+  "మిమ్మల్ని కలవడం సంతోషం":
+    "mim-MUL-nee kuh-luh-VUH-dum sun-TOH-shum",
+  "మీరు ఎక్కడి నుంచి?": "MEE-roo ek-KUH-dee NOON-chee?",
+  "తిన్నారా?": "tin-NAA-raa?",
+  "మీరు ఎలా ఉన్నారు?": "MEE-roo eh-LAA oon-NAA-roo?",
+  "మీరు ఎక్కడ ఉన్నారు?": "MEE-roo ek-KUH-duh oon-NAA-roo?",
+  "అమ్మ ఇంట్లో ఉన్నారా?": "UM-muh IN-tloh oon-NAA-raa?",
+  "నీళ్లు కావాలి": "NEE-lloo KAA-vaa-lee",
+  "ఇది చాలా బాగుంది": "IH-dee CHAA-laa BAA-goon-dee",
+  "ఇంకొంచెం": "in-KON-chem",
+  "చాలు": "CHAA-loo",
+  "నాకు అర్థం కాలేదు": "NAA-koo AR-thum kaa-LAY-doo",
+  "మెల్లగా చెప్పండి": "mel-luh-GAA chep-PUN-dee",
+  "మళ్లీ చెప్పండి": "mul-LEE chep-PUN-dee",
+  "నాకు తెలుగు బాగా రాదు": "NAA-koo TEH-loo-goo BAA-gaa RAA-doo",
+  "నేను బాగున్నాను": "NAY-noo baa-goon-NAA-noo",
+  "నాకు అలసటగా ఉంది": "NAA-koo uh-luh-suh-tuh-GAA OON-dee",
+  "నాకు సంతోషంగా ఉంది": "NAA-koo sun-TOH-shum-gaa OON-dee",
+  "నేను రేపు వస్తాను": "NAY-noo RAY-poo vus-TAA-noo",
+  "మీరు ఎప్పుడు ఇంట్లో ఉంటారు?": "MEE-roo EP-poo-doo IN-tloh oon-TAA-roo?",
+  "నేను ఇప్పుడు బయల్దేరాను": "NAY-noo IP-poo-doo buh-yul-DAY-raa-noo",
+  "నాకు ఇది కావాలి": "NAA-koo IH-dee KAA-vaa-lee",
+  "నాకు ఇది వద్దు": "NAA-koo IH-dee VUD-doo",
+  "ఇది ఎంత?": "IH-dee EN-tuh?",
+  "అది": "UH-dee",
+  "బస్ స్టాప్ ఎక్కడ ఉంది?": "BUS STAAP ek-KUH-duh OON-dee?",
+  "ఇక్కడ ఆపండి దయచేసి": "ik-KUH-duh AA-pun-dee duh-yuh-CHAY-see",
+  "సూటిగా వెళ్ళండి": "SOO-tee-gaa vel-LUN-dee",
+  "ఇది అక్కడికి వెళ్లే దారినా?":
+    "IH-dee uk-KUH-dee-kee vel-LAY DAA-ree-naa?",
+  "చాలా ఖరీదు": "CHAA-laa khuh-REE-doo",
+  "ధర తగ్గించగలరా?": "dhuh-ruh tug-gin-chuh-guh-luh-RAA?",
+  "చేంజ్ ఉందా?": "CHAYNJ OON-daa?",
+  "నాకు ఒంట్లో బాగా లేదు": "NAA-koo ON-tloh BAA-gaa LAY-doo",
+  "నాకు కొంచెం జ్వరంగా ఉంది":
+    "NAA-koo KON-chem jwuh-RUM-gaa OON-dee",
+  "నాకు డాక్టర్ కావాలి": "NAA-koo DAAK-tur KAA-vaa-lee",
+  "నాకు సహాయం కావాలి": "NAA-koo suh-HAA-yum KAA-vaa-lee",
+};
+
+function addLearnerPronunciation(word: TeluguWordSource): TeluguWord {
+  const pronunciation = learnerPronunciations[word.telugu];
+
+  if (!pronunciation) {
+    throw new Error(`Missing learner pronunciation: ${word.telugu}`);
+  }
+
+  return { ...word, pronunciation };
+}
+
+const practicalLessonSources: LessonSource[] = [
   {
     id: "hello-goodbye",
     group: "quick-start",
@@ -479,6 +550,13 @@ export const practicalLessons: Lesson[] = [
     ],
   },
 ];
+
+export const practicalLessons: Lesson[] = practicalLessonSources.map(
+  (lesson) => ({
+    ...lesson,
+    words: lesson.words.map(addLearnerPronunciation),
+  }),
+);
 
 export const quickStartLessons = practicalLessons.filter(
   (lesson) => lesson.group === "quick-start",
