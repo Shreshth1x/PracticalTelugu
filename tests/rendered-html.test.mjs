@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
 import { allLessons, practicePacks } from "../app/course-data.ts";
+import {
+  applySnapshotChanges,
+  mergeSnapshots,
+  parseCloudSnapshot,
+  safeAppPath,
+  snapshotAdditionsSince,
+} from "../app/learning-state.ts";
 import {
   phraseKey,
   resolvePracticePath,
@@ -10,6 +17,22 @@ import {
 
 const templateRoot = new URL("../", import.meta.url);
 let renderCount = 0;
+
+async function readSourceTree(directory) {
+  const sources = [];
+
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const entryUrl = new URL(entry.name, directory);
+
+    if (entry.isDirectory()) {
+      sources.push(...(await readSourceTree(new URL(`${entry.name}/`, directory))));
+    } else if (/\.(?:js|mjs|ts|tsx)$/.test(entry.name)) {
+      sources.push(await readFile(entryUrl, "utf8"));
+    }
+  }
+
+  return sources.join("\n");
+}
 
 async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -42,13 +65,18 @@ const routeCases = [
   ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
   ["/settings", />Settings\.<\/h1>/],
+  [
+    "/account",
+    /Checking your account|Keep your Telugu progress\.|Welcome back\./,
+  ],
   ["/lesson/hello-goodbye", /class="introduce-exercise"/],
 ];
 
-test("server-renders every practical route with a unique primary heading", async () => {
+test("server-renders every practical route publicly with its intended content", async () => {
   for (const [pathname, heading] of routeCases) {
     const response = await render(pathname);
     assert.equal(response.status, 200, pathname);
+    assert.equal(response.headers.get("location"), null, pathname);
     assert.match(
       response.headers.get("content-type") ?? "",
       /^text\/html\b/i,
@@ -60,7 +88,7 @@ test("server-renders every practical route with a unique primary heading", async
     assert.match(html, heading, pathname);
     assert.doesNotMatch(
       html,
-      /codex-preview|react-loading-skeleton/i,
+      /codex-preview|react-loading-skeleton|You must sign in|Authentication required/i,
       pathname,
     );
   }
@@ -253,6 +281,251 @@ test("moves through the practical path five phrases at a time", () => {
   );
 });
 
+test("merges device and cloud learning without losing the stronger progress", () => {
+  const local = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table"],
+      confidence: {
+        namaskaaram: "ready",
+        dhanyavaadaalu: "learning",
+        neellu: "learning",
+      },
+    },
+    preferences: {
+      showPronunciation: false,
+      autoplay: true,
+    },
+    savedWords: ["namaskaaram", "neellu"],
+  };
+  const cloud = parseCloudSnapshot({
+    progress: {
+      completed: ["hello-goodbye", "checking-in"],
+      confidence: {
+        namaskaaram: "learning",
+        dhanyavaadaalu: "ready",
+        baagunnaanu: "learning",
+      },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    saved_words: ["namaskaaram", "baagunnaanu"],
+  });
+
+  assert.ok(cloud);
+  const merged = mergeSnapshots(local, cloud);
+
+  assert.deepEqual(
+    new Set(merged.state.completed),
+    new Set(["hello-goodbye", "at-the-table", "checking-in"]),
+  );
+  assert.deepEqual(
+    new Set(merged.savedWords),
+    new Set(["namaskaaram", "neellu", "baagunnaanu"]),
+  );
+  assert.deepEqual(merged.state.confidence, {
+    namaskaaram: "ready",
+    dhanyavaadaalu: "ready",
+    baagunnaanu: "learning",
+    neellu: "learning",
+  });
+  assert.deepEqual(
+    merged.preferences,
+    local.preferences,
+    "the current device keeps its pronunciation and autoplay choices",
+  );
+});
+
+test("imports only new anonymous progress after an account has claimed a device", () => {
+  const baseline = {
+    state: {
+      completed: ["hello-goodbye"],
+      confidence: { namaskaaram: "ready" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram"],
+  };
+  const current = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table"],
+      confidence: {
+        namaskaaram: "ready",
+        neellu: "learning",
+      },
+    },
+    preferences: {
+      showPronunciation: false,
+      autoplay: true,
+    },
+    savedWords: ["namaskaaram", "neellu"],
+  };
+
+  assert.deepEqual(snapshotAdditionsSince(current, baseline), {
+    state: {
+      completed: ["at-the-table"],
+      confidence: { neellu: "learning" },
+    },
+    preferences: current.preferences,
+    savedWords: ["neellu"],
+  });
+});
+
+test("preserves additions and removals made while cloud progress is loading", () => {
+  const baseline = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table"],
+      confidence: {
+        namaskaaram: "ready",
+        neellu: "learning",
+      },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram", "neellu"],
+  };
+  const current = {
+    state: {
+      completed: ["hello-goodbye", "checking-in"],
+      confidence: {
+        namaskaaram: "learning",
+        baagunnaanu: "ready",
+      },
+    },
+    preferences: {
+      showPronunciation: false,
+      autoplay: true,
+    },
+    savedWords: ["neellu", "baagunnaanu"],
+  };
+  const cloud = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table", "getting-around"],
+      confidence: {
+        namaskaaram: "ready",
+        neellu: "learning",
+        ekkada: "ready",
+      },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram", "neellu", "ekkada"],
+  };
+
+  assert.deepEqual(applySnapshotChanges(baseline, current, cloud), {
+    state: {
+      completed: ["hello-goodbye", "getting-around", "checking-in"],
+      confidence: {
+        namaskaaram: "learning",
+        ekkada: "ready",
+        baagunnaanu: "ready",
+      },
+    },
+    preferences: current.preferences,
+    savedWords: ["neellu", "ekkada", "baagunnaanu"],
+  });
+});
+
+test("a reset during cloud loading stays a reset", () => {
+  const baseline = {
+    state: {
+      completed: ["hello-goodbye"],
+      confidence: { namaskaaram: "ready" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram"],
+  };
+  const reset = {
+    state: { completed: [], confidence: {} },
+    preferences: {
+      showPronunciation: false,
+      autoplay: false,
+    },
+    savedWords: [],
+  };
+  const cloud = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table"],
+      confidence: { namaskaaram: "ready", neellu: "learning" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: true,
+    },
+    savedWords: ["namaskaaram", "neellu"],
+  };
+
+  assert.deepEqual(applySnapshotChanges(baseline, reset, cloud), reset);
+});
+
+test("keeps account return paths on the current site", () => {
+  assert.equal(safeAppPath("/lesson/hello-goodbye?from=account"), "/lesson/hello-goodbye?from=account");
+  assert.equal(safeAppPath("//evil.example"), "/");
+  assert.equal(safeAppPath("/\\evil.example"), "/");
+  assert.equal(safeAppPath("https://evil.example"), "/");
+  assert.equal(safeAppPath(null), "/");
+});
+
+test("rejects malformed cloud rows so they cannot erase device progress", () => {
+  const local = {
+    state: {
+      completed: ["hello-goodbye"],
+      confidence: { namaskaaram: "ready" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram"],
+  };
+  const malformedRows = [
+    null,
+    {},
+    {
+      progress: "not an object",
+      preferences: {},
+      saved_words: [],
+    },
+    {
+      progress: { completed: "not an array", confidence: {} },
+      preferences: {},
+      saved_words: [],
+    },
+    {
+      progress: { completed: [], confidence: ["not", "an", "object"] },
+      preferences: {},
+      saved_words: [],
+    },
+    {
+      progress: { completed: [], confidence: {} },
+      preferences: "not an object",
+      saved_words: [],
+    },
+    {
+      progress: { completed: [], confidence: {} },
+      preferences: {},
+      saved_words: "not an array",
+    },
+  ];
+
+  for (const row of malformedRows) {
+    const cloud = parseCloudSnapshot(row);
+    assert.equal(cloud, null);
+    const retained = cloud ? mergeSnapshots(local, cloud) : local;
+    assert.deepEqual(retained, local);
+  }
+});
+
 test("keeps meaning, romanized Telugu, pronunciation, and script distinct", async () => {
   for (const pathname of ["/words/daily", "/lesson/hello-goodbye"]) {
     const response = await render(pathname);
@@ -327,26 +600,200 @@ test("unknown lesson URLs return a real not-found response", async () => {
   assert.match(html, /href="\/"/);
 });
 
+test("keeps cloud learning state private to its authenticated owner", async () => {
+  const migration = await readFile(
+    new URL(
+      "../supabase/migrations/20260727180014_user_learning_state.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    migration,
+    /create table public\.user_learning_state\s*\(/i,
+  );
+  assert.match(
+    migration,
+    /user_id uuid primary key references auth\.users\s*\(id\) on delete cascade/i,
+  );
+  assert.match(migration, /progress jsonb not null/i);
+  assert.match(migration, /preferences jsonb not null/i);
+  assert.match(migration, /saved_words text\[\] not null/i);
+  assert.match(
+    migration,
+    /alter table public\.user_learning_state enable row level security/i,
+  );
+  assert.match(
+    migration,
+    /revoke all on table public\.user_learning_state from anon/i,
+  );
+  assert.match(
+    migration,
+    /grant select, insert, update, delete[\s\S]*to authenticated/i,
+  );
+
+  for (const operation of ["select", "insert", "update", "delete"]) {
+    assert.match(
+      migration,
+      new RegExp(
+        `create policy "[^"]+"\\s+on public\\.user_learning_state\\s+for ${operation}\\s+to authenticated`,
+        "i",
+      ),
+      `${operation} is limited to authenticated users`,
+    );
+  }
+
+  assert.ok(
+    (migration.match(/\(select auth\.uid\(\)\) = user_id/gi) ?? []).length >=
+      4,
+    "every operation checks the authenticated user's id",
+  );
+  assert.doesNotMatch(
+    migration,
+    /create policy[\s\S]*?\bto\s+(?:anon|public)\b/i,
+  );
+});
+
+test("merges concurrent device writes with optimistic revisions", async () => {
+  const [revisionMigration, learningProvider] = await Promise.all([
+    readFile(
+      new URL(
+        "../supabase/migrations/20260727185800_add_learning_state_revision.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../app/LearningProvider.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(
+    revisionMigration,
+    /add column revision bigint not null default 0/i,
+  );
+  assert.match(revisionMigration, /check \(revision >= 0\)/i);
+  assert.match(
+    learningProvider,
+    /applySnapshotChanges\(\s*baseline\.snapshot,\s*next,\s*latestSnapshot/s,
+  );
+  assert.match(learningProvider, /\.eq\("revision", latestRevision\)/);
+  assert.match(learningProvider, /for \(let attempt = 0; attempt < 4/);
+  assert.match(learningProvider, /insertError\?\.code === "23505"/);
+});
+
+test("never exposes a Supabase service credential in browser source", async () => {
+  const clientSource = await readSourceTree(
+    new URL("../app/", import.meta.url),
+  );
+
+  assert.doesNotMatch(
+    clientSource,
+    /SUPABASE_SERVICE_ROLE(?:_KEY)?|service[_-]?role|sb_secret_/i,
+  );
+  assert.doesNotMatch(
+    clientSource,
+    /SUPABASE_DB_PASSWORD|POSTGRES_PASSWORD|DATABASE_URL/i,
+  );
+  assert.doesNotMatch(
+    clientSource,
+    /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/,
+  );
+
+  const supabaseClient = await readFile(
+    new URL("../app/supabase-client.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    supabaseClient,
+    /sb_publishable_|NEXT_PUBLIC_SUPABASE_(?:PUBLISHABLE|ANON)_KEY/,
+  );
+});
+
+test("offers Google and email account creation without gating practice", async () => {
+  const [accountPage, learningProvider] = await Promise.all([
+    readFile(new URL("../app/account/AccountPage.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/LearningProvider.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(accountPage, /Continue with Google/);
+  assert.match(accountPage, /type="email"/);
+  assert.match(accountPage, /type=\{showPassword \? "text" : "password"\}/);
+  assert.match(accountPage, /Create account/);
+  assert.match(accountPage, /Sign in/);
+  assert.match(accountPage, /The progress on this device will be added/);
+  assert.match(learningProvider, /auth\.signInWithPassword/);
+  assert.match(learningProvider, /auth\.signUp/);
+  assert.match(learningProvider, /provider: "google"/);
+  assert.doesNotMatch(accountPage, /router\.(?:push|replace)\(["']\/account/);
+});
+
+test("failed cloud reads refetch before writing and preserve later device progress", async () => {
+  const learningProvider = await readFile(
+    new URL("../app/LearningProvider.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    learningProvider,
+    /reconciliationFailedRef\.current = true[\s\S]*setSyncStatus\("error"\)/,
+  );
+  assert.match(
+    learningProvider,
+    /if \(reconciliationFailedRef\.current\) \{[\s\S]*setReconcileRetry/,
+  );
+  assert.match(
+    learningProvider,
+    /userCacheIsDirty[\s\S]*mergeSnapshots\(userSnapshot, cloudSnapshot\)/,
+  );
+  assert.match(
+    learningProvider,
+    /userCacheBaseline[\s\S]*applySnapshotChanges\(\s*userCacheBaseline,\s*userSnapshot,\s*cloudSnapshot/s,
+  );
+  assert.match(learningProvider, /keys\.cloudBaseline/);
+  assert.match(
+    learningProvider,
+    /shouldClaimAnonymous = !claimedBy \|\| claimedBy === user\.id/,
+  );
+});
+
 test("keeps prior progress while enforcing the practical Telugu product contract", async () => {
-  const [app, courseData, layout, css, packageJson, readme] = await Promise.all([
+  const [
+    app,
+    courseData,
+    layout,
+    css,
+    learningState,
+    learningProvider,
+    packageJson,
+    readme,
+  ] = await Promise.all([
     readFile(new URL("../app/PalukuApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/course-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/learning-state.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/LearningProvider.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../README.md", import.meta.url), "utf8"),
   ]);
 
-  assert.match(app, /palukulu\.progress\.v2/);
-  assert.match(app, /palukulu\.progress\.v1/);
-  assert.match(app, /LEGACY_STORAGE_KEY/);
+  const progressSource = `${learningState}\n${learningProvider}`;
+  assert.match(progressSource, /palukulu\.progress\.v2/);
+  assert.match(progressSource, /palukulu\.progress\.v1/);
+  assert.match(progressSource, /LEGACY_STORAGE_KEY/);
   assert.match(
-    app,
-    /getItem\(STORAGE_KEY\)[\s\S]*getItem\(LEGACY_STORAGE_KEY\)/,
+    learningProvider,
+    /parseCurrentProgress\(readJson\(STORAGE_KEY\)\)[\s\S]*parseLegacyProgress\(readJson\(LEGACY_STORAGE_KEY\)\)/,
   );
-  assert.match(app, /completed: completedFrom\(candidate\.completed\)/);
-  assert.match(app, /confidence: confidenceFrom\(candidate\.confidence\)/);
-  assert.match(app, /if \(!hydrated\) return;/);
+  assert.match(
+    learningState,
+    /completed: uniqueStrings\(candidate\.completed\)/,
+  );
+  assert.match(
+    learningState,
+    /confidence: confidenceFrom\(candidate\.confidence\)/,
+  );
+  assert.match(learningProvider, /if \(!hydrated\) return;/);
   assert.match(app, /correct \/ graded >= 0\.6/);
   assert.match(
     app,
@@ -387,7 +834,10 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     app,
     /\$\{word\.telugu\} \$\{word\.roman\} \$\{word\.pronunciation\} \$\{word\.english\}/,
   );
-  assert.match(app, /legacyShowRomanization = candidate\.showRomanization/);
+  assert.match(
+    learningState,
+    /legacyShowRomanization = candidate\.showRomanization/,
+  );
   assert.doesNotMatch(app, /formatPronunciation\(word\.roman\)/);
   assert.doesNotMatch(app, /Choose the pronunciation in order/);
   assert.doesNotMatch(app, /teluguFirst|Show Telugu larger/);
@@ -401,7 +851,7 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(courseData, /learnerPronunciations/);
   assert.match(courseData, /Missing learner pronunciation/);
 
-  const productCopy = `${app}\n${courseData}\n${layout}\n${readme}`;
+  const productCopy = `${app}\n${courseData}\n${layout}\n${learningState}\n${learningProvider}\n${readme}`;
   assert.doesNotMatch(
     productCopy,
     /from beginning|full course|telugu script & sounds|foundationLessons|selectedTrack/i,

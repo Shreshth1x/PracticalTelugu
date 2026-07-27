@@ -8,8 +8,17 @@ helpful situations open.
 
 Mayu, an original Indian peacock mascot, introduces the first phrase and
 returns to celebrate completed practice. Completed situations and phrase
-confidence are stored locally in the browser; no account or AI service is
+confidence are stored locally in the browser, so every lesson remains
+available without an account. An optional account can be created with Google
+or email and password to back up practiced phrases and saved phrases through
+Supabase and restore them on another device. Signing in adds any progress
+already on the device to the account instead of replacing it. No AI service is
 required.
+
+Google sign-in is ready for public use. Email/password confirmation and
+password-reset messages use Supabase Auth; configure a custom SMTP provider
+before relying on those email flows for users outside the Supabase project
+team.
 
 ## Run locally
 

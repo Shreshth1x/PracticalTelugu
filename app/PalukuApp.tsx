@@ -24,6 +24,13 @@ import {
   resolvePracticePath,
   resolvePracticeRoadmap,
 } from "./practice-path.mjs";
+import {
+  defaultState,
+  type Preferences,
+  type SavedState,
+} from "./learning-state";
+import { useLearning } from "./LearningProvider";
+import { Wordmark } from "./Wordmark";
 
 export type AppScreen =
   | "today"
@@ -32,16 +39,6 @@ export type AppScreen =
   | "daily"
   | "settings"
   | "lesson";
-
-type SavedState = {
-  completed: string[];
-  confidence: Record<string, "learning" | "ready">;
-};
-
-type Preferences = {
-  showPronunciation: boolean;
-  autoplay: boolean;
-};
 
 type Step =
   | { type: "introduce"; word: TeluguWord }
@@ -63,21 +60,6 @@ type LibraryWord = TeluguWord & {
   key: string;
   lessonTitle: string;
   group: SituationGroup;
-};
-
-const STORAGE_KEY = "palukulu.progress.v2";
-const LEGACY_STORAGE_KEY = "palukulu.progress.v1";
-const PREFERENCES_KEY = "palukulu.preferences.v1";
-const SAVED_WORDS_KEY = "palukulu.saved-words.v1";
-
-const defaultState: SavedState = {
-  completed: [],
-  confidence: {},
-};
-
-const defaultPreferences: Preferences = {
-  showPronunciation: true,
-  autoplay: false,
 };
 
 function normalize(value: string) {
@@ -448,23 +430,6 @@ const navItems: {
   { screen: "words", href: "/words", label: "Phrasebook" },
 ];
 
-function Wordmark() {
-  return (
-    <span className="wordmark">
-      <span className="wordmark-mark" aria-hidden="true">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/practicaltelugu-peacock-mark-v3.png?v=approved-1"
-          alt=""
-        />
-      </span>
-      <span className="wordmark-name">
-        practical<span>telugu</span>
-      </span>
-    </span>
-  );
-}
-
 function AppShell({
   screen,
   children,
@@ -472,6 +437,16 @@ function AppShell({
   screen: AppScreen;
   children: React.ReactNode;
 }) {
+  const { user } = useLearning();
+  const returnPath =
+    screen === "learn"
+      ? "/learn"
+      : screen === "words"
+        ? "/words"
+        : screen === "settings"
+          ? "/settings"
+          : "/";
+
   return (
     <div className="app-frame">
       <header className="top-header">
@@ -499,17 +474,29 @@ function AppShell({
             ))}
           </nav>
 
-          <Link
-            href="/settings"
-            className={`top-settings ${
-              screen === "settings" ? "top-settings-active" : ""
-            }`}
-            aria-label="Open settings"
-            aria-current={screen === "settings" ? "page" : undefined}
-          >
-            <Icon name="settings" />
-            <span>Settings</span>
-          </Link>
+          <div className="top-actions">
+            <Link
+              href={
+                user
+                  ? "/account"
+                  : `/account?mode=signin&returnTo=${encodeURIComponent(returnPath)}`
+              }
+              className="top-account"
+            >
+              {user ? "Account" : "Sign in"}
+            </Link>
+            <Link
+              href="/settings"
+              className={`top-settings ${
+                screen === "settings" ? "top-settings-active" : ""
+              }`}
+              aria-label="Open settings"
+              aria-current={screen === "settings" ? "page" : undefined}
+            >
+              <Icon name="settings" />
+              <span>Settings</span>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -1385,7 +1372,16 @@ function SettingsView({
   preferences: Preferences;
   setPreferences: React.Dispatch<React.SetStateAction<Preferences>>;
 }) {
+  const {
+    user,
+    authReady,
+    syncStatus,
+    syncMessage,
+    retrySync,
+    signOut,
+  } = useLearning();
   const [confirmReset, setConfirmReset] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
   const closeResetDialog = useCallback(() => setConfirmReset(false), []);
   const resetDialogRef = useDialogFocus<HTMLElement>(
     confirmReset,
@@ -1402,6 +1398,68 @@ function SettingsView({
           <h1>Settings.</h1>
           <p>Keep only the support that helps you speak sooner.</p>
         </header>
+
+        <section className="settings-section" aria-labelledby="progress-settings">
+          <h2 id="progress-settings">Progress</h2>
+          <div className="settings-account-panel">
+            <div>
+              <strong>
+                {user
+                  ? syncStatus === "error"
+                    ? "Saved on this device"
+                    : "Progress backed up"
+                  : "Saved on this device"}
+              </strong>
+              <p>
+                {!authReady
+                  ? "Checking your account…"
+                  : user
+                    ? syncMessage
+                    : "Sign in if you want your practiced and saved phrases on every device."}
+              </p>
+              {user?.email ? (
+                <small>Signed in as {user.email}</small>
+              ) : null}
+              {accountMessage ? (
+                <small role="status">{accountMessage}</small>
+              ) : null}
+            </div>
+            <div className="settings-account-actions">
+              {user ? (
+                <>
+                  {syncStatus === "error" ? (
+                    <button className="text-button" onClick={retrySync}>
+                      Try again
+                    </button>
+                  ) : null}
+                  <Link href="/account" className="secondary-button">
+                    Account
+                  </Link>
+                  <button
+                    className="text-button"
+                    onClick={async () => {
+                      const result = await signOut();
+                      setAccountMessage(
+                        result.error
+                          ? "Couldn’t sign out. Try again."
+                          : "Signed out. Your progress is still on this device.",
+                      );
+                    }}
+                  >
+                    Sign out
+                  </button>
+                </>
+              ) : (
+                <Link
+                  href="/account?mode=signup&returnTo=%2Fsettings"
+                  className="primary-button"
+                >
+                  Save progress
+                </Link>
+              )}
+            </div>
+          </div>
+        </section>
 
         <section className="settings-section" aria-labelledby="phrase-settings">
           <h2 id="phrase-settings">Phrases</h2>
@@ -1436,7 +1494,7 @@ function SettingsView({
             <h2 id="reset-settings">Practice history</h2>
             <p>
               Clear your practical path, completed situations, and phrase
-              confidence on this device.
+              confidence {user ? "on this device and in your backup." : "on this device."}
             </p>
           </div>
           <button
@@ -1460,7 +1518,9 @@ function SettingsView({
             <h2 id="reset-title">Clear your practice history?</h2>
             <p>
               This removes path progress, completed situations, and confidence
-              stored in this browser. Saved phrases stay saved.
+              {user
+                ? " from this device and your account. Saved phrases stay saved."
+                : " stored in this browser. Saved phrases stay saved."}
             </p>
             <div className="dialog-actions">
               <button className="secondary-button" onClick={closeResetDialog}>
@@ -2052,66 +2112,6 @@ function MissingLesson({ onExit }: { onExit: () => void }) {
   );
 }
 
-function completedFrom(value: unknown) {
-  if (!Array.isArray(value)) return [];
-
-  return Array.from(
-    new Set(value.filter((item): item is string => typeof item === "string")),
-  );
-}
-
-function confidenceFrom(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, "learning" | "ready"] =>
-        entry[1] === "learning" || entry[1] === "ready",
-    ),
-  );
-}
-
-function parseCurrentProgress(value: unknown): SavedState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-
-  const candidate = value as Record<string, unknown>;
-  return {
-    completed: completedFrom(candidate.completed),
-    confidence: confidenceFrom(candidate.confidence),
-  };
-}
-
-function parseLegacyProgress(value: unknown): SavedState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-
-  const candidate = value as Record<string, unknown>;
-  return {
-    completed: completedFrom(candidate.completed),
-    confidence: {},
-  };
-}
-
-function parsePreferences(value: unknown): Preferences {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return defaultPreferences;
-  }
-
-  const candidate = value as Record<string, unknown>;
-  const legacyShowRomanization = candidate.showRomanization;
-  return {
-    showPronunciation:
-      typeof candidate.showPronunciation === "boolean"
-        ? candidate.showPronunciation
-        : typeof legacyShowRomanization === "boolean"
-          ? legacyShowRomanization
-          : defaultPreferences.showPronunciation,
-    autoplay:
-      typeof candidate.autoplay === "boolean"
-        ? candidate.autoplay
-        : defaultPreferences.autoplay,
-  };
-}
-
 export default function PalukuApp({
   screen = "today",
   initialLessonId,
@@ -2120,97 +2120,17 @@ export default function PalukuApp({
   initialLessonId?: string;
 }) {
   const router = useRouter();
-  const [state, setState] = useState<SavedState>(defaultState);
-  const [preferences, setPreferences] =
-    useState<Preferences>(defaultPreferences);
-  const [savedWords, setSavedWords] = useState<string[]>([]);
+  const {
+    state,
+    setState,
+    preferences,
+    setPreferences,
+    savedWords,
+    setSavedWords,
+    hydrated,
+  } = useLearning();
   const [toast, setToast] = useState("");
-  const [hydrated, setHydrated] = useState(false);
   const activeLesson = findLesson(initialLessonId);
-
-  useEffect(() => {
-    const restoreTimer = window.setTimeout(() => {
-      let restoredProgress: SavedState | null = null;
-
-      try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          restoredProgress = parseCurrentProgress(JSON.parse(raw));
-        }
-      } catch {
-        restoredProgress = null;
-      }
-
-      if (!restoredProgress) {
-        try {
-          const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-          if (legacyRaw) {
-            restoredProgress = parseLegacyProgress(JSON.parse(legacyRaw));
-          }
-        } catch {
-          restoredProgress = null;
-        }
-      }
-
-      setState(restoredProgress ?? defaultState);
-
-      try {
-        const rawPreferences = window.localStorage.getItem(PREFERENCES_KEY);
-        if (rawPreferences) {
-          setPreferences(parsePreferences(JSON.parse(rawPreferences)));
-        }
-      } catch {
-        setPreferences(defaultPreferences);
-      }
-
-      try {
-        const rawSavedWords = window.localStorage.getItem(SAVED_WORDS_KEY);
-        if (rawSavedWords) {
-          const restored = JSON.parse(rawSavedWords);
-          if (Array.isArray(restored)) setSavedWords(restored);
-        }
-      } catch {
-        setSavedWords([]);
-      }
-
-      setHydrated(true);
-    }, 0);
-
-    return () => window.clearTimeout(restoreTimer);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {
-      // The session stays usable when local storage is unavailable.
-    }
-  }, [hydrated, state]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-
-    try {
-      window.localStorage.setItem(
-        PREFERENCES_KEY,
-        JSON.stringify(preferences),
-      );
-    } catch {
-      // Preferences remain available for the current session.
-    }
-  }, [hydrated, preferences]);
-
-  useEffect(() => {
-    if (!hydrated) return;
-
-    try {
-      window.localStorage.setItem(SAVED_WORDS_KEY, JSON.stringify(savedWords));
-    } catch {
-      // Saved phrases remain available for the current session.
-    }
-  }, [hydrated, savedWords]);
 
   useEffect(() => {
     if (!toast) return;

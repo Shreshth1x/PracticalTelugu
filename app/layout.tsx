@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { LearningProvider } from "./LearningProvider";
 import "./globals.css";
 
 /* eslint-disable @next/next/no-page-custom-font */
@@ -87,7 +88,9 @@ export default function RootLayout({
           />
         ) : null}
       </head>
-      <body>{children}</body>
+      <body>
+        <LearningProvider>{children}</LearningProvider>
+      </body>
     </html>
   );
 }
