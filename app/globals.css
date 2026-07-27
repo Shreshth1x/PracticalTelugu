@@ -139,7 +139,7 @@ svg {
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   color: var(--ink-strong);
   font-family: var(--font-display);
   font-size: 18px;
@@ -151,30 +151,17 @@ svg {
 }
 
 .wordmark-mark {
-  position: relative;
-  display: grid;
-  width: 39px;
-  height: 38px;
-  place-items: center;
-  color: var(--green-dark);
-  font-family: var(--font-telugu);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.09em;
-  line-height: 1;
-  transform: translateY(1px);
+  display: block;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  transform: translateY(-1px);
 }
 
-.wordmark-mark::after {
-  position: absolute;
-  right: 2px;
-  bottom: 1px;
-  width: 18px;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--saffron);
-  content: "";
-  transform: rotate(-5deg);
+.wordmark-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .top-nav {
@@ -2430,14 +2417,13 @@ svg {
 
 @media (max-width: 440px) {
   .wordmark {
-    gap: 7px;
+    gap: 5px;
     font-size: 16px;
   }
 
   .wordmark-mark {
-    width: 34px;
-    height: 34px;
-    font-size: 26px;
+    width: 36px;
+    height: 36px;
   }
 
   .home-actions {

@@ -69,6 +69,16 @@ test("focused word and lesson sessions omit global navigation", async () => {
   }
 });
 
+test("uses the fused peacock Telugu mark across brand surfaces", async () => {
+  const response = await render("/");
+  const html = await response.text();
+
+  assert.match(html, /practicaltelugu-peacock-mark-v2\.png/);
+  assert.match(html, /practicaltelugu-favicon-v2\.png/);
+  assert.match(html, /og-peacock-v2\.png/);
+  assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
+});
+
 test("teaches each phrase in English, pronunciation, Telugu order", async () => {
   for (const pathname of ["/words/daily", "/lesson/hello-goodbye"]) {
     const response = await render(pathname);
@@ -173,7 +183,16 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   );
   await access(new URL("public/mayu-guide-v2.webp", templateRoot));
   await access(new URL("public/mayu-success-v2.webp", templateRoot));
-  await access(new URL("public/mayu-favicon.png", templateRoot));
+  await access(
+    new URL("public/practicaltelugu-peacock-mark-v2.png", templateRoot),
+  );
+  await access(
+    new URL("public/practicaltelugu-favicon-v2.png", templateRoot),
+  );
+  await access(
+    new URL("public/practicaltelugu-apple-icon-v2.png", templateRoot),
+  );
+  await access(new URL("public/og-peacock-v2.png", templateRoot));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", templateRoot)));
 });

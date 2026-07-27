@@ -14,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const socialImage = `${origin}/og.png`;
+  const socialImage = `${origin}/og-peacock-v2.png`;
 
   return {
     metadataBase: new URL(origin),
@@ -25,8 +25,17 @@ export async function generateMetadata(): Promise<Metadata> {
     description:
       "Get up to speed with the Telugu you’ll use with family, at the table, while visiting, and when you need help.",
     icons: {
-      icon: "/mayu-favicon.png",
-      shortcut: "/mayu-favicon.png",
+      icon: {
+        url: "/practicaltelugu-favicon-v2.png",
+        type: "image/png",
+        sizes: "64x64",
+      },
+      shortcut: "/practicaltelugu-favicon-v2.png",
+      apple: {
+        url: "/practicaltelugu-apple-icon-v2.png",
+        type: "image/png",
+        sizes: "180x180",
+      },
     },
     openGraph: {
       title: "PracticalTelugu | Speak useful Telugu sooner",
@@ -39,7 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: socialImage,
           width: 1200,
           height: 630,
-          alt: "PracticalTelugu wordmark with the Telugu letters తె",
+          alt: "PracticalTelugu with a peacock-shaped Telugu letter logo",
         },
       ],
     },
