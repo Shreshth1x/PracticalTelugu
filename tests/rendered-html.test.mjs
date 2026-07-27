@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 import { allLessons, practicePacks } from "../app/course-data.ts";
-import { phraseKey, resolvePracticePath } from "../app/practice-path.mjs";
+import {
+  phraseKey,
+  resolvePracticePath,
+  resolvePracticeRoadmap,
+} from "../app/practice-path.mjs";
 
 const templateRoot = new URL("../", import.meta.url);
 let renderCount = 0;
@@ -122,6 +126,48 @@ test("keeps the home hero focused on one compact action cluster", async () => {
   assert.ok(mayuIntro < guideEnd, "Mayu introduction stays with the mascot");
 });
 
+test("shows the entire practical path in one compact roadmap", async () => {
+  const response = await render("/");
+  const html = await response.text();
+  const roadmapStart = html.indexOf('class="home-roadmap"');
+  const roadmapEnd = html.indexOf("</section>", roadmapStart);
+  const roadmap = html.slice(roadmapStart, roadmapEnd);
+
+  assert.ok(roadmapStart >= 0, "home roadmap is present");
+  assert.match(roadmap, /id="home-roadmap-title"/);
+  assert.match(roadmap, /<ol class="roadmap-grid">/);
+  assert.equal(
+    (roadmap.match(/class="roadmap-step /g) ?? []).length,
+    practicePacks.length,
+  );
+  assert.equal(
+    (roadmap.match(/roadmap-step-current/g) ?? []).length,
+    1,
+    "the next set is visually current",
+  );
+  assert.equal(
+    (roadmap.match(/roadmap-step-upcoming/g) ?? []).length,
+    practicePacks.length - 1,
+    "later sets remain visible",
+  );
+  assert.equal(
+    (roadmap.match(/roadmap-step-completed/g) ?? []).length,
+    0,
+    "a new learner has no completed sets",
+  );
+  assert.match(roadmap, /aria-current="step"/);
+  assert.match(roadmap, /0 of 10 sets practiced/);
+  assert.doesNotMatch(html, /class="situation-preview"/);
+  assert.doesNotMatch(html, /class="situation-row"/);
+
+  let previousTitleIndex = -1;
+  for (const pack of practicePacks) {
+    const titleIndex = roadmap.indexOf(pack.title);
+    assert.ok(titleIndex > previousTitleIndex, `${pack.title} is shown in order`);
+    previousTitleIndex = titleIndex;
+  }
+});
+
 test("moves through the practical path five phrases at a time", () => {
   assert.equal(practicePacks.length, 10);
   assert.deepEqual(
@@ -156,6 +202,10 @@ test("moves through the practical path five phrases at a time", () => {
     completedPacks: 0,
     allComplete: false,
   });
+  assert.deepEqual(
+    resolvePracticeRoadmap(practicePacks, {}).map((step) => step.status),
+    ["current", ...Array(9).fill("upcoming")],
+  );
 
   const confidence = {
     [phraseKey(practicePacks[0].words[0])]: "learning",
@@ -173,6 +223,13 @@ test("moves through the practical path five phrases at a time", () => {
   assert.equal(secondPack.packIndex, 1);
   assert.equal(secondPack.phraseIndex, 0);
   assert.equal(secondPack.completedPacks, 1);
+  const secondPackRoadmap = resolvePracticeRoadmap(
+    practicePacks,
+    confidence,
+  );
+  assert.equal(secondPackRoadmap[0].status, "completed");
+  assert.equal(secondPackRoadmap[1].status, "current");
+  assert.equal(secondPackRoadmap[1].practiced, 0);
 
   for (const word of practicePacks.flatMap((pack) => pack.words)) {
     confidence[phraseKey(word)] = "ready";
@@ -182,6 +239,18 @@ test("moves through the practical path five phrases at a time", () => {
   assert.equal(complete.completedPacks, practicePacks.length);
   assert.equal(complete.packIndex, 0);
   assert.equal(complete.phraseIndex, 0);
+  const completeRoadmap = resolvePracticeRoadmap(
+    practicePacks,
+    confidence,
+  );
+  assert.equal(
+    completeRoadmap.filter((step) => step.status === "completed").length,
+    practicePacks.length,
+  );
+  assert.equal(
+    completeRoadmap.filter((step) => step.status === "current").length,
+    0,
+  );
 });
 
 test("keeps meaning, romanized Telugu, pronunciation, and script distinct", async () => {

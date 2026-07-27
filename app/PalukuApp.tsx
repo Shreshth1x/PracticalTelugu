@@ -19,7 +19,11 @@ import {
   type SituationGroup,
   type TeluguWord,
 } from "./course-data";
-import { phraseKey, resolvePracticePath } from "./practice-path.mjs";
+import {
+  phraseKey,
+  resolvePracticePath,
+  resolvePracticeRoadmap,
+} from "./practice-path.mjs";
 
 export type AppScreen =
   | "today"
@@ -516,23 +520,31 @@ function AppShell({
 
 function TodayView({
   state,
-  startLesson,
   notify,
 }: {
   state: SavedState;
-  startLesson: (lesson: Lesson) => void;
   notify: (message: string) => void;
 }) {
-  const featuredSituationIds = ["family-words", "food-water", "when-stuck"];
-  const featuredSituations = practicalLessons.filter((lesson) =>
-    featuredSituationIds.includes(lesson.id),
-  );
   const path = resolvePracticePath(practicePacks, state.confidence);
   const activePack = practicePacks[path.packIndex];
   const pathPhraseCount = practicePacks.reduce(
     (total, pack) => total + pack.words.length,
     0,
   );
+  const roadmapProgress = resolvePracticeRoadmap(
+    practicePacks,
+    state.confidence,
+  );
+  const roadmapSteps = practicePacks.map((pack, index) => {
+    return {
+      ...pack,
+      index,
+      ...roadmapProgress[index],
+    };
+  });
+  const completedRoadmapSteps = roadmapSteps.filter(
+    (step) => step.status === "completed",
+  ).length;
   const nextWord =
     activePack.words[path.phraseIndex] ?? activePack.words[0];
   const practiceLabel = path.allComplete
@@ -587,50 +599,84 @@ function TodayView({
           />
         </section>
 
-        <section
-          className="situation-preview"
-          aria-labelledby="situation-preview-title"
-        >
-          <div className="section-heading">
+        <section className="home-roadmap" aria-labelledby="home-roadmap-title">
+          <div className="roadmap-heading">
             <div>
-              <h2 id="situation-preview-title">Choose a situation.</h2>
-              <p>Practice only what you are likely to use next.</p>
+              <h2 id="home-roadmap-title">Your practical path.</h2>
+              <p>
+                {practicePacks.length} short sets, {pathPhraseCount} practical
+                phrases. From first hello to asking for help.
+              </p>
             </div>
-            <Link href="/learn" className="text-link section-link">
-              See all
-              <Icon name="arrow" />
-            </Link>
+            <p className="roadmap-summary" aria-live="polite">
+              {path.allComplete
+                ? `All ${practicePacks.length} sets practiced`
+                : `${completedRoadmapSteps} of ${practicePacks.length} sets practiced`}
+            </p>
           </div>
 
-          <ul className="situation-list">
-            {featuredSituations.map((lesson) => {
-              const done = state.completed.includes(lesson.id);
+          <ol className="roadmap-grid">
+            {roadmapSteps.map((step) => {
+              const statusLabel = step.status === "completed"
+                ? "Practiced"
+                : step.status === "current"
+                  ? step.practiced
+                    ? `${step.practiced} of ${step.total}`
+                    : "Start here"
+                  : `${step.total} phrases`;
+              const stepContent = (
+                <>
+                  <span className="roadmap-step-top">
+                    <span className="roadmap-step-number">
+                      {String(step.index + 1).padStart(2, "0")}
+                    </span>
+                    <span className="roadmap-step-status">
+                      {step.status === "completed" ? (
+                        <Icon name="check" />
+                      ) : null}
+                      {statusLabel}
+                    </span>
+                  </span>
+                  <span className="roadmap-step-title">
+                    <strong>{step.title}</strong>
+                    {step.status === "current" ? (
+                      <Icon name="arrow" />
+                    ) : null}
+                  </span>
+                </>
+              );
+              const accessibleStatus = step.status === "completed"
+                ? "practiced"
+                : step.status === "current"
+                  ? `current, ${step.practiced} of ${step.total} phrases practiced`
+                  : `coming up, ${step.total} phrases`;
 
               return (
-                <li key={lesson.id}>
-                  <button
-                    className="situation-row"
-                    onClick={() => startLesson(lesson)}
-                    aria-label={`${done ? "Practice again" : "Practice"}: ${
-                      lesson.title
-                    }`}
-                  >
-                    <span className="situation-row-copy">
-                      <strong>{lesson.title}</strong>
-                      <span>{lesson.description}</span>
-                    </span>
-                    <span className="situation-row-end">
-                      <span className="situation-row-meta">
-                        <span>{lesson.minutes} min</span>
-                        {done ? <span>Practiced</span> : null}
-                      </span>
-                      <Icon name="arrow" />
-                    </span>
-                  </button>
+                <li
+                  key={step.id}
+                  className={`roadmap-step roadmap-step-${step.status}`}
+                  aria-current={
+                    step.status === "current" ? "step" : undefined
+                  }
+                >
+                  {step.status === "current" ? (
+                    <Link
+                      href="/words/daily"
+                      aria-label={`Set ${step.index + 1}, ${step.title}, ${accessibleStatus}`}
+                    >
+                      {stepContent}
+                    </Link>
+                  ) : (
+                    <div
+                      aria-label={`Set ${step.index + 1}, ${step.title}, ${accessibleStatus}`}
+                    >
+                      {stepContent}
+                    </div>
+                  )}
                 </li>
               );
             })}
-          </ul>
+          </ol>
         </section>
       </main>
     </AppShell>
@@ -2246,11 +2292,7 @@ export default function PalukuApp({
     );
   } else {
     content = (
-      <TodayView
-        state={state}
-        startLesson={startLesson}
-        notify={setToast}
-      />
+      <TodayView state={state} notify={setToast} />
     );
   }
 

@@ -45,3 +45,21 @@ export function resolvePracticePath(packs, confidence) {
     allComplete: false,
   };
 }
+
+export function resolvePracticeRoadmap(packs, confidence) {
+  const path = resolvePracticePath(packs, confidence);
+
+  return packs.map((pack, index) => {
+    const practiced = pack.words.filter((word) =>
+      Boolean(confidence[phraseKey(word)]),
+    ).length;
+    const completed = practiced === pack.words.length;
+    const current = !path.allComplete && index === path.packIndex;
+
+    return {
+      status: completed ? "completed" : current ? "current" : "upcoming",
+      practiced,
+      total: pack.words.length,
+    };
+  });
+}
