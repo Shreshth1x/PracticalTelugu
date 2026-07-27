@@ -29,7 +29,6 @@ type SavedState = {
 
 type Preferences = {
   showRomanization: boolean;
-  teluguFirst: boolean;
   autoplay: boolean;
 };
 
@@ -79,7 +78,6 @@ const defaultState: SavedState = {
 
 const defaultPreferences: Preferences = {
   showRomanization: true,
-  teluguFirst: true,
   autoplay: false,
 };
 
@@ -96,7 +94,7 @@ function findDailyWord(lessonId: string, english: string) {
 
 const dailyWords: DailyWord[] = [
   {
-    word: findDailyWord("hello-goodbye", "hello / respectful greeting"),
+    word: findDailyWord("hello-goodbye", "hello"),
     exampleTelugu: "నమస్కారం, అత్తయ్య.",
     exampleEnglish: "Hello, auntie.",
   },
@@ -402,6 +400,39 @@ function ProgressBar({
   );
 }
 
+function PhraseStack({
+  word,
+  showRomanization = true,
+  size = "row",
+  headingAs = "strong",
+  headingId,
+  className = "",
+}: {
+  word: Pick<TeluguWord, "english" | "roman" | "telugu">;
+  showRomanization?: boolean;
+  size?: "row" | "sheet" | "hero" | "lesson" | "recap";
+  headingAs?: "h1" | "h2" | "strong";
+  headingId?: string;
+  className?: string;
+}) {
+  const Heading = headingAs;
+  const english =
+    word.english.charAt(0).toLocaleUpperCase() + word.english.slice(1);
+  return (
+    <div className={`phrase-stack phrase-${size} ${className}`.trim()}>
+      <Heading id={headingId} className="phrase-english">
+        {english}
+      </Heading>
+      {showRomanization ? (
+        <span className="phrase-roman">{word.roman}</span>
+      ) : null}
+      <span className="phrase-telugu" lang="te">
+        {word.telugu}
+      </span>
+    </div>
+  );
+}
+
 const navItems: {
   screen: Extract<AppScreen, "today" | "learn" | "words">;
   href: string;
@@ -547,10 +578,16 @@ function TodayView({
               alt="Mayu the peacock saying hello in Telugu"
               className="landing-mayu"
             />
-            <span className="hello-chip">
-              <strong lang="te">నమస్కారం</strong>
-              <span>namaskaaram · hello</span>
-            </span>
+            <div className="hello-chip">
+              <PhraseStack
+                word={{
+                  english: "Hello",
+                  roman: "namaskaaram",
+                  telugu: "నమస్కారం",
+                }}
+                size="row"
+              />
+            </div>
           </div>
         </section>
 
@@ -713,13 +750,11 @@ function WordRow({
   return (
     <article className="word-row">
       <button className="word-row-main" onClick={() => onOpen(item)}>
-        <span className="word-row-telugu" lang="te">
-          {item.telugu}
-        </span>
-        <span className="word-row-meaning">
-          {showRomanization ? <small>{item.roman}</small> : null}
-          <strong>{item.english}</strong>
-        </span>
+        <PhraseStack
+          word={item}
+          showRomanization={showRomanization}
+          size="row"
+        />
       </button>
       <span className="word-row-actions">
         <button
@@ -969,11 +1004,13 @@ function PhrasebookView({
               </button>
             </div>
             <div className="sheet-word">
-              <h2 id="word-sheet-title" lang="te">
-                {selectedWord.telugu}
-              </h2>
-              {preferences.showRomanization ? <p>{selectedWord.roman}</p> : null}
-              <strong>{selectedWord.english}</strong>
+              <PhraseStack
+                word={selectedWord}
+                showRomanization={preferences.showRomanization}
+                size="sheet"
+                headingAs="h2"
+                headingId="word-sheet-title"
+              />
             </div>
             <button
               className="audio-wide-button"
@@ -1096,14 +1133,18 @@ function DailySession({
           </p>
           <div className="recap-list">
             {dailyWords.map(({ word }, index) => (
-              <span key={word.telugu}>
-                <b lang="te">{word.telugu}</b>
+              <div className="recap-item" key={word.telugu}>
+                <PhraseStack
+                  word={word}
+                  showRomanization={preferences.showRomanization}
+                  size="recap"
+                />
                 <small>
                   {results[index] === "ready"
                     ? "Ready to use"
                     : "Review once more"}
                 </small>
-              </span>
+              </div>
             ))}
           </div>
           <div className="recap-actions">
@@ -1153,16 +1194,13 @@ function DailySession({
             ? "QUICK REFRESH"
             : `PHRASE ${wordIndex + 1} OF 5`}
         </span>
-        <h1
-          id="daily-word-title"
-          lang="te"
-          className={preferences.teluguFirst ? "" : "telugu-secondary"}
-        >
-          {current.word.telugu}
-        </h1>
-        {preferences.showRomanization ? (
-          <p className="word-roman">{current.word.roman}</p>
-        ) : null}
+        <PhraseStack
+          word={current.word}
+          showRomanization={preferences.showRomanization}
+          size="hero"
+          headingAs="h1"
+          headingId="daily-word-title"
+        />
         <button className="listen-button" onClick={playAudio}>
           <Icon name="audio" />
           Hear the phrase
@@ -1170,17 +1208,20 @@ function DailySession({
 
         {revealed ? (
           <div className="revealed-meaning">
-            <span className="overline">MEANING</span>
-            <h2>{current.word.english}</h2>
+            <span className="overline">IN CONTEXT</span>
             <div className="example-card">
               <span className="overline">SAY IT LIKE THIS</span>
-              <strong lang="te">{current.exampleTelugu}</strong>
-              <p>{current.exampleEnglish}</p>
+              <strong className="example-english">
+                {current.exampleEnglish}
+              </strong>
+              <p className="example-telugu" lang="te">
+                {current.exampleTelugu}
+              </p>
             </div>
           </div>
         ) : (
           <button className="primary-button reveal-button" onClick={() => setRevealed(true)}>
-            See meaning
+            See it in context
           </button>
         )}
       </section>
@@ -1275,12 +1316,6 @@ function SettingsView({
             onChange={() => updatePreference("showRomanization")}
           />
           <SwitchRow
-            label="Show Telugu larger"
-            description="Give the Telugu phrase the most space during quick practice."
-            checked={preferences.teluguFirst}
-            onChange={() => updatePreference("teluguFirst")}
-          />
-          <SwitchRow
             label="Play available audio automatically"
             description="Only plays when a family recording is available."
             checked={preferences.autoplay}
@@ -1297,8 +1332,8 @@ function SettingsView({
           </div>
           <p>
             Telugu changes by region, family, and formality. PalukuLingo starts
-            with approachable spoken phrases, keeps Telugu and pronunciation
-            together, and leaves room for your family’s own recordings.
+            with the English thought, gives you an approachable pronunciation,
+            and keeps the Telugu script nearby for recognition.
           </p>
         </section>
 
@@ -1409,8 +1444,8 @@ function MatchingExercise({
       <div>
         {words.map((word, index) => (
           <button
-            key={word.telugu}
-            className={`match-card ${
+            key={word.english}
+            className={`match-card match-english ${
               leftSelected === index ? "answer-selected" : ""
             } ${matched.has(index) ? "answer-correct" : ""} ${
               mismatch?.startsWith(`${index}-`) ? "answer-wrong" : ""
@@ -1419,16 +1454,15 @@ function MatchingExercise({
             onClick={() => setLeftSelected(index)}
             aria-pressed={leftSelected === index}
           >
-            <span lang="te">{word.telugu}</span>
-            {showRomanization ? <small>{word.roman}</small> : null}
+            {word.english}
           </button>
         ))}
       </div>
       <div>
         {rightOrder.map((wordIndex) => (
           <button
-            key={words[wordIndex].english}
-            className={`match-card match-english ${
+            key={words[wordIndex].telugu}
+            className={`match-card ${
               rightSelected === wordIndex ? "answer-selected" : ""
             } ${matched.has(wordIndex) ? "answer-correct" : ""} ${
               mismatch?.endsWith(`-${wordIndex}`) ? "answer-wrong" : ""
@@ -1437,7 +1471,14 @@ function MatchingExercise({
             onClick={() => setRightSelected(wordIndex)}
             aria-pressed={rightSelected === wordIndex}
           >
-            {words[wordIndex].english}
+            {showRomanization ? (
+              <span className="answer-pronunciation">
+                {words[wordIndex].roman}
+              </span>
+            ) : null}
+            <small className="answer-telugu" lang="te">
+              {words[wordIndex].telugu}
+            </small>
           </button>
         ))}
       </div>
@@ -1627,9 +1668,7 @@ function LessonView({
     step.type === "arrange"
   ) {
     answerText =
-      step.type === "true-false"
-        ? `${step.word.english} — ${step.word.telugu}`
-        : `${step.word.telugu} (${step.word.roman})`;
+      `${step.word.english} — ${step.word.roman} · ${step.word.telugu}`;
   }
 
   return (
@@ -1674,9 +1713,12 @@ function LessonView({
               >
                 <Icon name="audio" />
               </button>
-              <h1 lang="te">{step.word.telugu}</h1>
-              {preferences.showRomanization ? <p>{step.word.roman}</p> : null}
-              <strong>{step.word.english}</strong>
+              <PhraseStack
+                word={step.word}
+                showRomanization={preferences.showRomanization}
+                size="lesson"
+                headingAs="h1"
+              />
             </div>
             <p className="lesson-guidance">
               Hear it, then say it once as if you needed it right now.
@@ -1706,8 +1748,14 @@ function LessonView({
                     onClick={() => setSelected(option.telugu)}
                     aria-pressed={isSelected}
                   >
-                    <strong lang="te">{option.telugu}</strong>
-                    {preferences.showRomanization ? <span>{option.roman}</span> : null}
+                    {preferences.showRomanization ? (
+                      <strong className="answer-pronunciation">
+                        {option.roman}
+                      </strong>
+                    ) : null}
+                    <span className="answer-telugu" lang="te">
+                      {option.telugu}
+                    </span>
                   </button>
                 );
               })}
@@ -1720,9 +1768,16 @@ function LessonView({
             <span className="overline">CHECK THE MEANING</span>
             <h1>Does this pairing feel right?</h1>
             <div className="statement-card">
-              <strong lang="te">{step.word.telugu}</strong>
-              <span>means</span>
-              <b>“{step.shownMeaning}”</b>
+              <strong className="statement-english">
+                “{step.shownMeaning}”
+              </strong>
+              <span>matches</span>
+              {preferences.showRomanization ? (
+                <b className="statement-pronunciation">{step.word.roman}</b>
+              ) : null}
+              <small className="statement-telugu" lang="te">
+                {step.word.telugu}
+              </small>
             </div>
             <div className="true-false-grid">
               {[
@@ -1758,7 +1813,7 @@ function LessonView({
           <section className="matching-exercise">
             <span className="overline">MAKE THREE PAIRS</span>
             <h1>Match each phrase to its meaning.</h1>
-            <p>Choose one Telugu phrase, then the English meaning beside it.</p>
+            <p>Choose an English meaning, then the phrase you would say.</p>
             <MatchingExercise
               words={step.words}
               matched={matched}
@@ -1946,10 +2001,6 @@ function parsePreferences(value: unknown): Preferences {
       typeof candidate.showRomanization === "boolean"
         ? candidate.showRomanization
         : defaultPreferences.showRomanization,
-    teluguFirst:
-      typeof candidate.teluguFirst === "boolean"
-        ? candidate.teluguFirst
-        : defaultPreferences.teluguFirst,
     autoplay:
       typeof candidate.autoplay === "boolean"
         ? candidate.autoplay

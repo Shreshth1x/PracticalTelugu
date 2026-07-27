@@ -19,17 +19,24 @@
   --error: #9d4936;
   --error-soft: #f6e7e2;
   --shadow-soft:
-    0 0 0 1px rgba(16, 49, 40, 0.055),
-    0 1px 2px -1px rgba(16, 49, 40, 0.08),
-    0 12px 30px -20px rgba(16, 49, 40, 0.28);
+    0 0 0 1px rgba(16, 49, 40, 0.075),
+    0 1px 2px rgba(16, 49, 40, 0.035),
+    0 8px 22px -20px rgba(16, 49, 40, 0.28);
+  --shadow-hover:
+    0 0 0 1px rgba(16, 49, 40, 0.095),
+    0 2px 4px rgba(16, 49, 40, 0.04),
+    0 12px 26px -20px rgba(16, 49, 40, 0.34);
   --shadow-raised:
-    0 0 0 1px rgba(16, 49, 40, 0.07),
-    0 3px 8px -4px rgba(16, 49, 40, 0.18),
-    0 22px 50px -30px rgba(16, 49, 40, 0.38);
+    0 0 0 1px rgba(16, 49, 40, 0.09),
+    0 8px 20px -12px rgba(16, 49, 40, 0.22),
+    0 28px 60px -32px rgba(16, 49, 40, 0.42);
   --radius-sm: 12px;
   --radius-md: 18px;
-  --radius-lg: 26px;
-  --radius-xl: 34px;
+  --radius-lg: 24px;
+  --radius-xl: 24px;
+  --motion-fast: 150ms;
+  --motion-standard: 180ms;
+  --motion-ease: cubic-bezier(0.2, 0, 0, 1);
 }
 
 * {
@@ -99,10 +106,7 @@ h3,
 .wordmark,
 .daily-feature strong,
 .course-card > strong,
-.word-row-telugu,
-.sheet-word h2,
-.lesson-word-card h1,
-.daily-word-stage > h1 {
+.phrase-english {
   font-family: "Capriola", "Noto Sans Telugu", sans-serif;
 }
 
@@ -196,8 +200,8 @@ small {
   font-weight: 700;
   line-height: 1;
   transition-property: transform, background-color, color, box-shadow, opacity;
-  transition-duration: 150ms;
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .primary-button {
@@ -223,7 +227,7 @@ small {
 
 .secondary-button:hover:not(:disabled) {
   color: var(--peacock);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--shadow-hover);
 }
 
 .light-button {
@@ -274,8 +278,8 @@ small {
   background: transparent;
   color: var(--forest);
   transition-property: transform, background-color, color, box-shadow;
-  transition-duration: 150ms;
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .icon-button:hover {
@@ -350,7 +354,7 @@ small {
 .nav-link {
   min-height: 48px;
   padding: 0 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   gap: 13px;
@@ -431,7 +435,7 @@ small {
 .mobile-header .wordmark-mark {
   width: 34px;
   height: 34px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
 }
 
 .mobile-header .icon-button {
@@ -472,7 +476,7 @@ small {
 .top-brand .wordmark-mark {
   width: 36px;
   height: 36px;
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
 }
 
 .top-nav {
@@ -560,7 +564,7 @@ small {
 
 .bottom-nav-link {
   min-height: 54px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -597,7 +601,7 @@ small {
 .page-header {
   max-width: 680px;
   margin-bottom: 40px;
-  animation: rise-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .page-header h1 {
@@ -647,8 +651,8 @@ small {
   display: block;
   background: var(--saffron);
   transition-property: width;
-  transition-duration: 260ms;
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-duration: var(--motion-standard);
+  transition-timing-function: var(--motion-ease);
 }
 
 /* Today */
@@ -664,7 +668,7 @@ small {
   grid-template-columns: minmax(0, 1.08fr) minmax(330px, 0.92fr);
   align-items: center;
   gap: clamp(42px, 7vw, 96px);
-  animation: rise-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .landing-copy {
@@ -703,7 +707,7 @@ small {
 .landing-primary {
   min-height: 56px;
   padding: 0 18px 0 22px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   color: var(--forest-deep);
   box-shadow:
     0 0 0 1px rgba(128, 62, 12, 0.08),
@@ -787,31 +791,36 @@ small {
   bottom: 38px;
   min-width: 190px;
   padding: 13px 16px 12px;
-  border: 1px solid rgba(21, 60, 50, 0.08);
-  border-radius: 17px;
+  border-radius: var(--radius-md);
   display: grid;
   gap: 1px;
   background: rgba(255, 253, 248, 0.96);
-  box-shadow: 0 15px 34px -26px rgba(21, 60, 50, 0.5);
+  box-shadow: var(--shadow-soft);
 }
 
-.hello-chip strong {
+.hello-chip .phrase-english {
   color: var(--forest);
   font-size: 20px;
+  font-weight: 400;
+}
+
+.hello-chip .phrase-roman {
+  color: var(--peacock);
+  font-size: 13px;
   font-weight: 700;
 }
 
-.hello-chip span {
+.hello-chip .phrase-telugu {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .situation-preview {
   margin-top: 44px;
   padding-top: 42px;
   border-top: 1px solid rgba(21, 60, 50, 0.12);
-  animation: rise-in 420ms 90ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) 70ms var(--motion-ease) both;
 }
 
 .situation-preview-heading {
@@ -926,7 +935,7 @@ small {
   overflow: hidden;
   background: rgba(255, 253, 247, 0.58);
   box-shadow: var(--shadow-soft);
-  animation: rise-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .today-copy {
@@ -971,7 +980,7 @@ small {
   transition-property: transform, box-shadow, background-color;
   transition-duration: 180ms;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
-  animation: rise-in 420ms 70ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) 50ms var(--motion-ease) both;
 }
 
 .daily-feature::before {
@@ -1058,7 +1067,7 @@ small {
   border-radius: var(--radius-lg);
   background: var(--paper);
   box-shadow: var(--shadow-soft);
-  animation: rise-in 420ms 140ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) 80ms var(--motion-ease) both;
 }
 
 .card-heading-row,
@@ -1116,8 +1125,8 @@ small {
   justify-content: space-between;
   gap: 24px;
   background: rgba(255, 253, 247, 0.42);
-  box-shadow: 0 0 0 1px rgba(16, 49, 40, 0.06);
-  animation: rise-in 420ms 210ms cubic-bezier(0.2, 0, 0, 1) both;
+  box-shadow: var(--shadow-soft);
+  animation: rise-in var(--motion-standard) 110ms var(--motion-ease) both;
 }
 
 .review-row h2 {
@@ -1156,7 +1165,6 @@ small {
   min-height: 176px;
   margin-bottom: 24px;
   padding: 26px 28px;
-  border: 1px solid rgba(217, 111, 24, 0.12);
   border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
@@ -1164,8 +1172,8 @@ small {
   gap: 28px;
   background: var(--saffron-soft);
   color: var(--forest);
-  box-shadow: none;
-  animation: rise-in 420ms 60ms cubic-bezier(0.2, 0, 0, 1) both;
+  box-shadow: var(--shadow-soft);
+  animation: rise-in var(--motion-standard) 40ms var(--motion-ease) both;
 }
 
 .continue-banner h2 {
@@ -1200,15 +1208,14 @@ small {
   flex-direction: column;
   align-items: flex-start;
   overflow: hidden;
-  border: 1px solid rgba(21, 60, 50, 0.08);
   background: rgba(255, 253, 248, 0.66);
   color: var(--ink);
   text-align: left;
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
   transition-property: transform, background-color, box-shadow;
   transition-duration: 180ms;
   transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
-  animation: rise-in 420ms 120ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) 70ms var(--motion-ease) both;
 }
 
 .course-card:nth-child(2) {
@@ -1217,14 +1224,14 @@ small {
 
 .course-card:hover {
   background: var(--paper);
-  box-shadow: 0 12px 30px -26px rgba(21, 60, 50, 0.52);
+  box-shadow: var(--shadow-hover);
 }
 
 .course-card-selected {
   background: var(--paper);
   box-shadow:
     0 0 0 2px var(--peacock),
-    0 15px 34px -26px rgba(7, 67, 56, 0.48);
+    0 10px 24px -20px rgba(7, 67, 56, 0.42);
 }
 
 .course-number {
@@ -1272,10 +1279,9 @@ small {
   margin-top: 34px;
   padding: 26px;
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(21, 60, 50, 0.08);
   background: rgba(255, 253, 248, 0.72);
-  box-shadow: none;
-  animation: rise-in 420ms 220ms cubic-bezier(0.2, 0, 0, 1) both;
+  box-shadow: var(--shadow-soft);
+  animation: rise-in var(--motion-standard) 100ms var(--motion-ease) both;
 }
 
 .section-title-row {
@@ -1429,7 +1435,7 @@ small {
 
 .word-tabs {
   padding: 5px;
-  border-radius: 17px;
+  border-radius: var(--radius-md);
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   background: rgba(21, 60, 50, 0.07);
@@ -1465,7 +1471,7 @@ small {
 .search-field,
 .filter-field {
   min-height: 50px;
-  border-radius: 15px;
+  border-radius: var(--radius-sm);
   background: var(--paper);
   border: 1px solid rgba(21, 60, 50, 0.08);
   box-shadow: none;
@@ -1511,7 +1517,7 @@ small {
 .today-word-note {
   margin: 18px 0;
   padding: 14px 17px;
-  border-radius: 15px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1531,13 +1537,12 @@ small {
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--paper);
-  border: 1px solid rgba(21, 60, 50, 0.08);
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .word-row {
-  min-height: 92px;
-  padding: 10px 12px 10px 20px;
+  min-height: 98px;
+  padding: 12px 12px 12px 20px;
   border-bottom: 1px solid rgba(221, 213, 196, 0.78);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1551,29 +1556,148 @@ small {
 
 .word-row-main {
   min-width: 0;
-  min-height: 68px;
+  min-height: 72px;
   padding: 0;
-  display: grid;
-  grid-template-columns: minmax(140px, 0.72fr) minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 20px;
   background: transparent;
   text-align: left;
-  transition-property: transform, opacity;
-  transition-duration: 150ms;
+  transition-property: transform, color;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .word-row-main:hover {
-  opacity: 0.72;
+  color: var(--peacock);
 }
 
-.word-row-telugu {
+.phrase-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.phrase-english,
+.phrase-roman,
+.phrase-telugu {
+  display: block;
+  margin: 0;
+}
+
+.phrase-english {
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: 24px;
-  font-weight: 600;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
 }
 
+.phrase-roman {
+  color: var(--peacock);
+  font-family: "Nunito Sans", system-ui, sans-serif;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.phrase-telugu {
+  color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.phrase-row {
+  gap: 1px;
+}
+
+.phrase-row .phrase-english {
+  font-size: 18px;
+}
+
+.phrase-row .phrase-roman {
+  font-size: 14px;
+}
+
+.phrase-row .phrase-telugu {
+  margin-top: 1px;
+  font-size: 13px;
+}
+
+.phrase-sheet {
+  gap: 4px;
+}
+
+.phrase-sheet .phrase-english {
+  font-size: clamp(34px, 8vw, 46px);
+}
+
+.phrase-sheet .phrase-roman {
+  font-size: 19px;
+}
+
+.phrase-sheet .phrase-telugu {
+  margin-top: 4px;
+  font-size: 19px;
+}
+
+.phrase-hero {
+  align-items: center;
+  gap: 5px;
+  text-align: center;
+}
+
+.phrase-hero .phrase-english {
+  font-size: clamp(42px, 10vw, 68px);
+  line-height: 1.08;
+}
+
+.phrase-hero .phrase-roman {
+  font-size: clamp(19px, 3vw, 23px);
+}
+
+.phrase-hero .phrase-telugu {
+  margin-top: 2px;
+  font-size: clamp(17px, 3vw, 20px);
+}
+
+.phrase-lesson {
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.phrase-lesson .phrase-english {
+  font-size: clamp(34px, 7vw, 52px);
+  line-height: 1.1;
+}
+
+.phrase-lesson .phrase-roman {
+  font-size: 19px;
+}
+
+.phrase-lesson .phrase-telugu {
+  margin-top: 2px;
+  font-size: 18px;
+}
+
+.phrase-recap {
+  gap: 1px;
+}
+
+.phrase-recap .phrase-english {
+  font-size: 17px;
+}
+
+.phrase-recap .phrase-roman {
+  font-size: 13px;
+}
+
+.phrase-recap .phrase-telugu {
+  font-size: 12px;
+}
+
+/* Compatibility for any phrase rows rendered from an older cached shell. */
 .word-row-meaning {
   min-width: 0;
   display: flex;
@@ -1582,13 +1706,24 @@ small {
 
 .word-row-meaning small {
   color: var(--peacock);
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 700;
+  order: 2;
 }
 
 .word-row-meaning strong {
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 700;
+  color: var(--forest);
+  font-family: "Capriola", sans-serif;
+  font-size: 18px;
+  font-weight: 400;
+  order: 1;
+}
+
+.word-row-telugu {
+  color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .word-row-actions {
@@ -1659,8 +1794,8 @@ small {
   padding: 26px;
   overflow-y: auto;
   background: var(--paper);
-  box-shadow: -24px 0 60px -40px rgba(4, 31, 25, 0.7);
-  animation: sheet-in 220ms cubic-bezier(0.2, 0, 0, 1) both;
+  box-shadow: var(--shadow-raised);
+  animation: sheet-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .sheet-header {
@@ -1672,44 +1807,53 @@ small {
 
 .sheet-word {
   padding: 52px 4px 38px;
+  display: flex;
+  flex-direction: column;
 }
 
-.sheet-word h2 {
-  margin-bottom: 4px;
+.sheet-word > h2 {
+  margin: 0;
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: 48px;
-  font-weight: 600;
+  font-size: clamp(34px, 8vw, 46px);
+  font-weight: 400;
+  order: 1;
 }
 
-.sheet-word p {
-  margin-bottom: 18px;
+.sheet-word > p {
+  margin: 4px 0 0;
   color: var(--peacock);
-  font-size: 17px;
+  font-size: 19px;
+  font-weight: 700;
+  order: 2;
 }
 
-.sheet-word strong {
-  color: var(--ink);
-  font-size: 23px;
+.sheet-word > strong {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 19px;
+  font-weight: 600;
+  order: 3;
 }
 
 .audio-wide-button {
   width: 100%;
   min-height: 72px;
   padding: 10px 16px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
   gap: 14px;
-  background: var(--forest);
+  background: var(--peacock);
   color: var(--paper);
   text-align: left;
   transition-property: transform, background-color;
-  transition-duration: 150ms;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .audio-wide-button:hover {
-  background: #194d40;
+  background: var(--forest);
 }
 
 .audio-wide-button > svg {
@@ -1728,7 +1872,7 @@ small {
 .usage-note {
   margin: 26px 0;
   padding: 20px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   background: var(--ivory);
 }
 
@@ -1753,9 +1897,7 @@ small {
 .completion-screen,
 .missing-lesson {
   min-height: 100dvh;
-  background:
-    radial-gradient(circle at 50% -20%, rgba(242, 138, 46, 0.13), transparent 32rem),
-    var(--paper-warm);
+  background: var(--paper-warm);
 }
 
 .session-header,
@@ -1772,6 +1914,7 @@ small {
   align-items: center;
   gap: 18px;
   background: rgba(251, 247, 236, 0.91);
+  box-shadow: 0 1px 0 rgba(16, 49, 40, 0.07);
   backdrop-filter: blur(18px);
 }
 
@@ -1802,7 +1945,7 @@ small {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  animation: rise-in 380ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .daily-word-mayu {
@@ -1814,20 +1957,24 @@ small {
 .daily-word-stage > h1 {
   margin: 18px 0 1px;
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: clamp(47px, 11vw, 76px);
-  font-weight: 600;
-  line-height: 1.16;
+  font-size: clamp(42px, 10vw, 68px);
+  font-weight: 400;
+  line-height: 1.08;
 }
 
 .daily-word-stage > h1.telugu-secondary {
-  font-size: clamp(40px, 9vw, 62px);
+  font-size: clamp(38px, 8vw, 54px);
+}
+
+.daily-word-stage .phrase-hero {
+  margin: 18px 0 24px;
 }
 
 .word-roman {
-  margin-bottom: 24px;
+  margin-bottom: 8px;
   color: var(--peacock);
   font-size: 20px;
+  font-weight: 700;
 }
 
 .listen-button {
@@ -1841,7 +1988,8 @@ small {
   color: var(--peacock);
   font-weight: 700;
   transition-property: transform, background-color;
-  transition-duration: 150ms;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .listen-button:hover {
@@ -1855,7 +2003,7 @@ small {
 .revealed-meaning {
   width: 100%;
   margin-top: 42px;
-  animation: reveal-in 240ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: reveal-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .revealed-meaning > h2 {
@@ -1865,23 +2013,27 @@ small {
 
 .example-card {
   padding: 22px;
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
   background: var(--paper);
   box-shadow: var(--shadow-soft);
 }
 
-.example-card strong {
+.example-english {
   margin-top: 13px;
   display: block;
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: 24px;
-  font-weight: 600;
+  font-family: "Capriola", sans-serif;
+  font-size: clamp(21px, 4vw, 26px);
+  font-weight: 400;
+  line-height: 1.35;
 }
 
-.example-card p {
-  margin: 5px 0 0;
+.example-telugu {
+  margin: 8px 0 0;
   color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .daily-actions {
@@ -1897,7 +2049,7 @@ small {
   justify-content: center;
   gap: 12px;
   background: rgba(255, 253, 247, 0.95);
-  box-shadow: 0 -18px 42px -34px rgba(8, 49, 40, 0.6);
+  box-shadow: 0 -1px 0 rgba(16, 49, 40, 0.08);
   backdrop-filter: blur(18px);
 }
 
@@ -1940,15 +2092,15 @@ small {
 .recap-list {
   width: 100%;
   margin: 18px 0 24px;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--paper);
   box-shadow: var(--shadow-soft);
 }
 
-.recap-list > span {
-  min-height: 58px;
-  padding: 10px 17px;
+.recap-item {
+  min-height: 78px;
+  padding: 12px 17px;
   border-bottom: 1px solid rgba(221, 213, 196, 0.72);
   display: flex;
   align-items: center;
@@ -1957,17 +2109,16 @@ small {
   text-align: left;
 }
 
-.recap-list > span:last-child {
+.recap-item:last-child {
   border-bottom: 0;
 }
 
-.recap-list b {
-  color: var(--forest);
-  font-size: 18px;
-}
-
-.recap-list small {
+.recap-item > small {
+  flex: 0 0 auto;
   color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
 }
 
 .recap-actions {
@@ -1986,8 +2137,7 @@ small {
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--paper);
-  border: 1px solid rgba(21, 60, 50, 0.08);
-  box-shadow: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .settings-group-heading {
@@ -2148,8 +2298,8 @@ small {
   padding: 28px;
   border-radius: var(--radius-lg);
   background: var(--paper);
-  box-shadow: 0 30px 80px -42px rgba(4, 31, 25, 0.8);
-  animation: reveal-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+  box-shadow: var(--shadow-raised);
+  animation: reveal-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .confirm-dialog h2 {
@@ -2191,7 +2341,7 @@ small {
 .true-false-exercise,
 .matching-exercise,
 .arrange-exercise {
-  animation: rise-in 360ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .introduce-exercise {
@@ -2212,9 +2362,13 @@ small {
   width: 100%;
   margin-top: 18px;
   padding: 38px 30px 32px;
-  border-radius: 30px;
+  border-radius: var(--radius-lg);
   background: var(--paper);
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--shadow-soft);
+}
+
+.lesson-word-card .phrase-lesson {
+  padding: 0 48px;
 }
 
 .audio-circle-button {
@@ -2230,32 +2384,35 @@ small {
   background: var(--peacock-light);
   color: var(--peacock);
   transition-property: transform, background-color;
-  transition-duration: 150ms;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .audio-circle-button:active {
   transform: scale(0.96);
 }
 
-.lesson-word-card h1 {
+.lesson-word-card > h1 {
   margin: 0 48px 5px;
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: clamp(40px, 9vw, 66px);
-  font-weight: 600;
-  line-height: 1.25;
+  font-size: clamp(34px, 7vw, 52px);
+  font-weight: 400;
+  line-height: 1.1;
 }
 
-.lesson-word-card p {
+.lesson-word-card > p {
   margin-bottom: 21px;
   color: var(--peacock);
-  font-size: 18px;
+  font-size: 19px;
+  font-weight: 700;
 }
 
-.lesson-word-card strong {
+.lesson-word-card > strong {
   display: block;
-  color: var(--ink);
-  font-size: 24px;
+  color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .lesson-guidance {
@@ -2297,7 +2454,7 @@ small {
 .match-card {
   min-height: 92px;
   padding: 16px;
-  border-radius: 18px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2307,26 +2464,33 @@ small {
   color: var(--forest);
   box-shadow: var(--shadow-soft);
   transition-property: transform, background-color, color, box-shadow, opacity;
-  transition-duration: 150ms;
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .answer-card:hover:not(:disabled),
 .match-card:hover:not(:disabled) {
-  box-shadow: var(--shadow-raised);
+  box-shadow: var(--shadow-hover);
 }
 
 .answer-card strong {
   font-size: 18px;
 }
 
-.answer-card strong[lang="te"] {
-  font-size: 23px;
+.answer-pronunciation {
+  color: var(--forest);
+  font-family: "Nunito Sans", system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.3;
 }
 
-.answer-card span {
+.answer-telugu {
   color: var(--muted);
-  font-size: 13px;
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .answer-selected {
@@ -2336,10 +2500,19 @@ small {
     0 12px 24px -20px rgba(12, 106, 90, 0.52);
 }
 
+.answer-selected .answer-pronunciation {
+  color: var(--peacock);
+}
+
 .answer-correct {
   background: var(--success-soft);
   color: var(--success);
   box-shadow: 0 0 0 2px var(--success);
+}
+
+.answer-correct .answer-pronunciation,
+.answer-correct .answer-telugu {
+  color: var(--success);
 }
 
 .answer-wrong {
@@ -2348,10 +2521,15 @@ small {
   box-shadow: 0 0 0 2px var(--error);
 }
 
+.answer-wrong .answer-pronunciation,
+.answer-wrong .answer-telugu {
+  color: var(--error);
+}
+
 .statement-card {
   margin-bottom: 16px;
   padding: 30px 24px;
-  border-radius: 24px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2360,21 +2538,33 @@ small {
   text-align: center;
 }
 
-.statement-card strong {
+.statement-english {
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: 36px;
-  font-weight: 600;
+  font-family: "Capriola", sans-serif;
+  font-size: clamp(26px, 6vw, 36px);
+  font-weight: 400;
+  line-height: 1.2;
 }
 
-.statement-card span {
+.statement-card > span:not(.statement-pronunciation) {
   margin: 10px 0 3px;
   color: var(--muted);
   font-size: 13px;
 }
 
-.statement-card b {
+.statement-pronunciation {
+  color: var(--peacock);
+  font-family: "Nunito Sans", system-ui, sans-serif;
   font-size: 20px;
+  font-weight: 800;
+}
+
+.statement-telugu {
+  margin-top: 3px;
+  color: var(--muted);
+  font-family: "Noto Sans Telugu", sans-serif;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .true-false-grid {
@@ -2404,9 +2594,7 @@ small {
 }
 
 .match-card span {
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 18px;
 }
 
 .match-card small {
@@ -2414,13 +2602,16 @@ small {
 }
 
 .match-english {
-  font-weight: 700;
+  color: var(--forest);
+  font-family: "Capriola", sans-serif;
+  font-size: 16px;
+  font-weight: 400;
 }
 
 .answer-tray {
   min-height: 96px;
   padding: 15px;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -2428,9 +2619,7 @@ small {
   gap: 8px;
   background: var(--paper);
   color: var(--muted);
-  box-shadow:
-    inset 0 0 0 1px rgba(16, 49, 40, 0.07),
-    0 10px 24px -22px rgba(16, 49, 40, 0.3);
+  box-shadow: var(--shadow-soft);
 }
 
 .answer-tray button,
@@ -2440,10 +2629,11 @@ small {
   border-radius: 12px;
   background: var(--peacock-light);
   color: var(--forest);
-  font-family: "Noto Sans Telugu", sans-serif;
-  font-weight: 600;
+  font-family: "Nunito Sans", system-ui, sans-serif;
+  font-weight: 800;
   transition-property: transform, background-color, opacity;
-  transition-duration: 150ms;
+  transition-duration: var(--motion-fast);
+  transition-timing-function: var(--motion-ease);
 }
 
 .answer-tray button:active,
@@ -2477,7 +2667,7 @@ small {
   min-height: calc(106px + env(safe-area-inset-bottom));
   padding: 18px 20px calc(18px + env(safe-area-inset-bottom));
   background: rgba(255, 253, 247, 0.96);
-  box-shadow: 0 -18px 42px -34px rgba(8, 49, 40, 0.6);
+  box-shadow: 0 -1px 0 rgba(16, 49, 40, 0.08);
   backdrop-filter: blur(18px);
   transition-property: background-color;
   transition-duration: 180ms;
@@ -2549,7 +2739,7 @@ small {
   flex-direction: column;
   align-items: center;
   text-align: center;
-  animation: rise-in 420ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: rise-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .completion-mayu {
@@ -2572,7 +2762,7 @@ small {
   width: min(100%, 420px);
   margin: 22px 0 26px;
   padding: 6px;
-  border-radius: 22px;
+  border-radius: var(--radius-lg);
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 6px;
@@ -2582,7 +2772,7 @@ small {
 .completion-stats > span {
   min-height: 88px;
   padding: 13px;
-  border-radius: 16px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2660,7 +2850,7 @@ small {
   background: var(--paper);
   box-shadow: 0 40px 90px -48px rgba(0, 0, 0, 0.85);
   text-align: center;
-  animation: reveal-in 280ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: reveal-in var(--motion-standard) var(--motion-ease) both;
 }
 
 .onboarding-mayu {
@@ -2691,7 +2881,7 @@ small {
 .onboarding-choices button {
   min-height: 142px;
   padding: 18px;
-  border-radius: 20px;
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -2772,14 +2962,14 @@ small {
   max-width: min(360px, calc(100vw - 36px));
   min-height: 48px;
   padding: 13px 18px;
-  border-radius: 14px;
+  border-radius: var(--radius-sm);
   display: flex;
   align-items: center;
   background: var(--forest-deep);
   color: var(--paper);
   box-shadow: 0 20px 42px -24px rgba(4, 31, 25, 0.76);
   font-size: 14px;
-  animation: toast-in 210ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation: toast-in var(--motion-standard) var(--motion-ease) both;
 }
 
 @keyframes rise-in {
@@ -3023,7 +3213,7 @@ small {
   }
 
   .word-row-telugu {
-    font-size: 21px;
+    font-size: 13px;
   }
 
   .saved-empty {
@@ -3088,7 +3278,12 @@ small {
     padding: 35px 20px 28px;
   }
 
-  .lesson-word-card h1 {
+  .lesson-word-card .phrase-lesson {
+    padding-right: 36px;
+    padding-left: 36px;
+  }
+
+  .lesson-word-card > h1 {
     margin-right: 37px;
     margin-left: 37px;
   }
@@ -3272,7 +3467,7 @@ small {
   .top-brand .wordmark-mark {
     width: 34px;
     height: 34px;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
   }
 
   .top-nav {

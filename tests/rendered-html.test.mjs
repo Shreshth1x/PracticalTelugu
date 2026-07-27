@@ -69,6 +69,26 @@ test("focused word and lesson sessions omit global navigation", async () => {
   }
 });
 
+test("teaches each phrase in English, pronunciation, Telugu order", async () => {
+  for (const pathname of ["/words/daily", "/lesson/hello-goodbye"]) {
+    const response = await render(pathname);
+    const html = await response.text();
+    const englishIndex = html.indexOf("phrase-english");
+    const pronunciationIndex = html.indexOf("phrase-roman");
+    const teluguIndex = html.indexOf("phrase-telugu");
+
+    assert.ok(englishIndex >= 0, `${pathname}: English phrase is present`);
+    assert.ok(
+      pronunciationIndex > englishIndex,
+      `${pathname}: pronunciation follows English`,
+    );
+    assert.ok(
+      teluguIndex > pronunciationIndex,
+      `${pathname}: Telugu follows pronunciation`,
+    );
+  }
+});
+
 test("unknown lesson URLs return a real not-found response", async () => {
   const response = await render("/lesson/not-a-real-lesson");
   assert.equal(response.status, 404);
@@ -105,6 +125,11 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(app, /findDailyWord\("hello-goodbye"/);
   assert.match(app, /type: "introduce"/);
   assert.match(app, /type: "matching"/);
+  assert.match(
+    app,
+    /className="phrase-english"[\s\S]*className="phrase-roman"[\s\S]*className="phrase-telugu"/,
+  );
+  assert.doesNotMatch(app, /teluguFirst|Show Telugu larger/);
   assert.match(courseData, /SituationGroup/);
   assert.match(courseData, /situationGroups/);
   assert.match(courseData, /quick-start/);

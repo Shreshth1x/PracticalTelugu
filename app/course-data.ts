@@ -73,7 +73,7 @@ export const practicalLessons: Lesson[] = [
       {
         telugu: "నమస్కారం",
         roman: "namaskaaram",
-        english: "hello / respectful greeting",
+        english: "hello",
         note: "A respectful greeting that is safe with elders and new people.",
       },
       {
