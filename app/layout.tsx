@@ -14,6 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
+  const socialImage = `${origin}/og.png`;
 
   return {
     metadataBase: new URL(origin),
@@ -33,12 +34,21 @@ export async function generateMetadata(): Promise<Metadata> {
         "Short, practical Telugu for the real moments you’re preparing for.",
       type: "website",
       url: origin,
+      images: [
+        {
+          url: socialImage,
+          width: 1200,
+          height: 630,
+          alt: "PracticalTelugu wordmark with the Telugu letters తె",
+        },
+      ],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: "PracticalTelugu | Speak useful Telugu sooner",
       description:
         "Short, practical Telugu for the real moments you’re preparing for.",
+      images: [socialImage],
     },
   };
 }
