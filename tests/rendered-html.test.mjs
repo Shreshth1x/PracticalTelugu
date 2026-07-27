@@ -211,6 +211,14 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     css,
     /@media \(max-width: 980px\)[\s\S]*?\.home-hero h1\s*\{[^}]*white-space:\s*normal;/,
   );
+  assert.match(
+    css,
+    /\.wordmark-mark\s*\{[^}]*width:\s*41px;[^}]*transform:\s*translateY\(8px\);/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 440px\)[\s\S]*?\.wordmark-mark\s*\{[^}]*width:\s*34px;[^}]*transform:\s*translateY\(6px\);/,
+  );
   assert.doesNotMatch(productCopy, /[—·]/);
   assert.doesNotMatch(app, /overline|pixel-meta/);
   assert.match(app, /practicedDaily/);
