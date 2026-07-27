@@ -676,12 +676,58 @@ svg {
   object-fit: contain;
 }
 
+.mayu-intro {
+  position: absolute;
+  z-index: 3;
+  top: 42px;
+  right: 278px;
+  padding: 9px 13px 8px;
+  border-radius: 15px;
+  background: rgba(255, 253, 249, 0.96);
+  color: var(--ink-strong);
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  box-shadow:
+    0 0 0 1px rgba(8, 47, 40, 0.07),
+    0 8px 18px rgba(18, 61, 52, 0.09);
+  transform: rotate(-1.5deg);
+}
+
+.mayu-intro::after {
+  position: absolute;
+  right: -8px;
+  bottom: 7px;
+  width: 10px;
+  height: 13px;
+  background: inherit;
+  clip-path: polygon(0 0, 0 100%, 100% 50%);
+  content: "";
+}
+
 .home-mayu {
   position: absolute;
   right: -25px;
   bottom: -82px;
   width: 430px;
   height: 430px;
+}
+
+.home-mayu img {
+  animation: mayu-sway 4.2s ease-in-out infinite;
+  transform-origin: 52% 88%;
+}
+
+@keyframes mayu-sway {
+  0%,
+  100% {
+    transform: rotate(-0.35deg);
+  }
+
+  50% {
+    transform: translateY(-2px) rotate(0.55deg);
+  }
 }
 
 .situation-preview {
@@ -2181,6 +2227,18 @@ svg {
     transform: translateX(50%);
   }
 
+  .mayu-intro {
+    top: 222px;
+    right: 50%;
+    transform: translateX(132px) rotate(-1.5deg);
+  }
+
+  .mayu-intro::after {
+    right: auto;
+    left: -8px;
+    clip-path: polygon(100% 0, 100% 100%, 0 50%);
+  }
+
   .situation-preview {
     margin-top: 64px;
   }
@@ -2462,6 +2520,12 @@ svg {
   .wordmark-mark img {
     width: 40px;
     height: 40px;
+  }
+
+  .mayu-intro {
+    top: 276px;
+    right: 22px;
+    transform: rotate(-1.5deg);
   }
 
   .section-heading {

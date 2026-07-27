@@ -575,6 +575,7 @@ function TodayView({
             <PhraseStack word={hello} size="card" />
             <AudioButton word={hello} notify={notify} />
           </div>
+          <span className="mayu-intro">Meet Mayu</span>
           <MayuImage
             variant="guide"
             alt=""

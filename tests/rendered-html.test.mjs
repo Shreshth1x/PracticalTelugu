@@ -110,6 +110,11 @@ test("keeps the home hero focused on one compact action cluster", async () => {
     html.indexOf('class="home-guide"', actionsEnd) > actionsEnd,
     "hello guide immediately follows the hero",
   );
+  const guideStart = html.indexOf('class="home-guide"', actionsEnd);
+  const guideEnd = html.indexOf("</section>", guideStart);
+  const mayuIntro = html.indexOf("Meet Mayu", guideStart);
+  assert.ok(mayuIntro > guideStart, "Mayu is introduced inside the hello guide");
+  assert.ok(mayuIntro < guideEnd, "Mayu introduction stays with the mascot");
 });
 
 test("teaches each phrase in English, pronunciation, Telugu order", async () => {
@@ -226,6 +231,8 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(app, /event\.key === "ArrowRight"/);
   assert.match(app, /type MayuVariant = "guide" \| "success"/);
   assert.match(app, /mayu-\$\{variant\}-v2\.webp/);
+  assert.match(css, /\.home-mayu img\s*\{[^}]*animation:\s*mayu-sway/);
+  assert.match(css, /@keyframes mayu-sway/);
   assert.doesNotMatch(
     app,
     /mayu-(?:welcome|teach|listen|encourage|celebrate|read)\.webp/,
