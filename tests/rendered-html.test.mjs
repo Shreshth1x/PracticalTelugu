@@ -31,7 +31,7 @@ async function render(pathname = "/") {
 }
 
 const routeCases = [
-  ["/", /Useful Telugu in four minutes\./],
+  ["/", /Say something useful today\./],
   ["/learn", /What do you need to say\?/],
   ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
@@ -89,7 +89,6 @@ test("keeps prior progress while enforcing the practical Telugu product contract
 
   assert.match(app, /palukulu\.progress\.v2/);
   assert.match(app, /palukulu\.progress\.v1/);
-  assert.match(app, /palukulu\.onboarded\.v1/);
   assert.match(app, /LEGACY_STORAGE_KEY/);
   assert.match(
     app,
@@ -119,12 +118,16 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     /from beginning|full course|telugu script & sounds|foundationLessons|selectedTrack/i,
   );
   assert.doesNotMatch(app, /\b(?:xp|streak|energy|dailyGoal)\b/i);
+  assert.doesNotMatch(app, /showOnboarding|onboarding-screen/);
 
   const exactDisplayFontEmbed =
-    "https://fonts.googleapis.com/css2?family=Capriola&family=Geist+Pixel&family=Turret+Road:wght@200;300;400;500;700;800&display=swap";
+    "https://fonts.googleapis.com/css2?family=Capriola&family=Nunito+Sans:opsz,wght@6..12,400;6..12,500;6..12,600;6..12,700;6..12,800&display=swap";
   assert.ok(layout.includes(exactDisplayFontEmbed));
+  assert.doesNotMatch(layout, /Geist\+Pixel|Turret\+Road/);
   assert.match(layout, /Noto\+Sans\+Telugu/);
   assert.match(css, /"Noto Sans Telugu"/);
+  assert.match(css, /"Nunito Sans"/);
+  assert.doesNotMatch(css, /"Geist Pixel"|"Turret Road"/);
   assert.doesNotMatch(css, /transition(?:-property)?:\s*all\b/);
 
   for (const pose of [

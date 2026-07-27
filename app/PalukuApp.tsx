@@ -69,7 +69,6 @@ type DailyWord = {
 
 const STORAGE_KEY = "palukulu.progress.v2";
 const LEGACY_STORAGE_KEY = "palukulu.progress.v1";
-const ONBOARDED_KEY = "palukulu.onboarded.v1";
 const PREFERENCES_KEY = "palukulu.preferences.v1";
 const SAVED_WORDS_KEY = "palukulu.saved-words.v1";
 
@@ -407,11 +406,10 @@ const navItems: {
   screen: Extract<AppScreen, "today" | "learn" | "words">;
   href: string;
   label: string;
-  icon: "today" | "learn" | "words";
 }[] = [
-  { screen: "today", href: "/", label: "Today", icon: "today" },
-  { screen: "learn", href: "/learn", label: "Situations", icon: "learn" },
-  { screen: "words", href: "/words", label: "Phrasebook", icon: "words" },
+  { screen: "today", href: "/", label: "Today" },
+  { screen: "learn", href: "/learn", label: "Situations" },
+  { screen: "words", href: "/words", label: "Phrasebook" },
 ];
 
 function Wordmark() {
@@ -436,78 +434,46 @@ function AppShell({
 }) {
   return (
     <div className="app-frame">
-      <aside className="side-nav">
-        <Link href="/" className="side-brand" aria-label="PalukuLingo home">
-          <Wordmark />
-        </Link>
-        <nav aria-label="Primary navigation" className="side-nav-links">
-          {navItems.map((item) => (
-            <Link
-              href={item.href}
-              key={item.screen}
-              className={`nav-link ${screen === item.screen ? "nav-link-active" : ""}`}
-              aria-current={screen === item.screen ? "page" : undefined}
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </Link>
-          ))}
-        </nav>
-        <Link
-          href="/settings"
-          className={`nav-link settings-link ${screen === "settings" ? "nav-link-active" : ""}`}
-          aria-current={screen === "settings" ? "page" : undefined}
-        >
-          <Icon name="settings" />
-          <span>Settings</span>
-        </Link>
-        <p className="side-note">
-          <span lang="te">తెలుగు</span>
-          <small>The Telugu you can use today.</small>
-        </p>
-      </aside>
-
-      <header className="mobile-header">
-        <Link href="/" aria-label="PalukuLingo home">
-          <Wordmark />
-        </Link>
-        <Link
-          href="/settings"
-          className="icon-button"
-          aria-label="Open settings"
-          aria-current={screen === "settings" ? "page" : undefined}
-        >
-          <Icon name="settings" />
-        </Link>
+      <header className="top-header">
+        <div className="top-header-inner">
+          <Link
+            href="/"
+            className="top-brand"
+            aria-label="PalukuLingo home"
+          >
+            <Wordmark />
+          </Link>
+          <nav aria-label="Primary navigation" className="top-nav">
+            {navItems.map((item) => (
+              <Link
+                href={item.href}
+                key={item.screen}
+                className={`top-nav-link ${
+                  screen === item.screen ? "top-nav-link-active" : ""
+                }`}
+                aria-current={screen === item.screen ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+          <Link
+            href="/settings"
+            className={`top-settings ${
+              screen === "settings" ? "top-settings-active" : ""
+            }`}
+            aria-label="Open settings"
+            aria-current={screen === "settings" ? "page" : undefined}
+          >
+            <Icon name="settings" />
+            <span>Settings</span>
+          </Link>
+        </div>
       </header>
 
       <div className="app-content">{children}</div>
-
-      <nav aria-label="Primary navigation" className="bottom-nav">
-        {navItems.map((item) => (
-          <Link
-            href={item.href}
-            key={item.screen}
-            className={`bottom-nav-link ${
-              screen === item.screen ? "bottom-nav-link-active" : ""
-            }`}
-            aria-current={screen === item.screen ? "page" : undefined}
-          >
-            <Icon name={item.icon} />
-            <span>{item.label}</span>
-          </Link>
-        ))}
-      </nav>
     </div>
   );
-}
-
-function formatToday() {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  }).format(new Date());
 }
 
 function formatWeekday() {
@@ -525,14 +491,6 @@ function getServerDateLabel() {
   return "Today";
 }
 
-function useLocalToday() {
-  return useSyncExternalStore(
-    subscribeToLocalClock,
-    formatToday,
-    getServerDateLabel,
-  );
-}
-
 function useLocalWeekday() {
   return useSyncExternalStore(
     subscribeToLocalClock,
@@ -548,80 +506,95 @@ function TodayView({
   state: SavedState;
   startLesson: (lesson: Lesson) => void;
 }) {
-  const todayLabel = useLocalToday();
-  const nextSituation =
-    practicalLessons.find((lesson) => !state.completed.includes(lesson.id)) ??
-    practicalLessons[0];
-  const retainedWords = new Set(
-    allLessons
-      .filter((lesson) => state.completed.includes(lesson.id))
-      .flatMap((lesson) => lesson.words.map((word) => word.telugu)),
-  ).size;
+  const featuredSituationIds = [
+    "family-words",
+    "food-water",
+    "when-stuck",
+    "building-blocks-milestone",
+  ];
+  const featuredSituations = practicalLessons.filter((lesson) =>
+    featuredSituationIds.includes(lesson.id),
+  );
 
   return (
     <AppShell screen="today">
       <main className="page page-today">
-        <section className="today-intro">
-          <div className="today-copy">
-            <time className="overline">{todayLabel}</time>
-            <h1>Useful Telugu in four minutes.</h1>
-            <p>
-              Practice the five phrases you are most likely to need, then try
-              one real-life situation.
+        <section className="landing-hero" aria-labelledby="today-heading">
+          <div className="landing-copy">
+            <p className="overline">Practical Telugu for real life</p>
+            <h1 id="today-heading">Say something useful today.</h1>
+            <p className="landing-description">
+              Learn five useful phrases for greeting family, sitting down at
+              the table, and asking for help—then use them in real life.
             </p>
-          </div>
-          <MayuImage
-            pose="welcome"
-            alt="Mayu the peacock welcoming you back"
-            className="today-mayu"
-          />
-        </section>
-
-        <Link href="/words/daily" className="daily-feature pressable">
-          <span className="daily-feature-copy">
-            <span className="overline overline-light">QUICK FIVE</span>
-            <strong>Start speaking sooner</strong>
-            <span>Hello, thank you, your name, water, and how to ask someone to repeat.</span>
-          </span>
-          <span className="daily-feature-action">
-            <span className="pixel-meta">5 PHRASES · 4 MIN</span>
-            <span className="round-arrow" aria-hidden="true">
-              <Icon name="arrow" />
-            </span>
-          </span>
-        </Link>
-
-        <section className="resume-card">
-          <div className="card-heading-row">
-            <div>
-              <span className="overline">NEXT SITUATION</span>
-              <h2>{nextSituation.title}</h2>
+            <div className="landing-actions">
+              <Link
+                href="/words/daily"
+                className="primary-button landing-primary"
+              >
+                <span>Start the quick five</span>
+                <span className="landing-primary-meta">4 min</span>
+                <Icon name="arrow" />
+              </Link>
+              <Link href="/learn" className="landing-secondary">
+                Browse all situations
+              </Link>
             </div>
-            <span className="course-chip">{nextSituation.minutes} min</span>
           </div>
-          <p>{nextSituation.description}</p>
-          <button
-            className="text-action"
-            onClick={() => startLesson(nextSituation)}
-          >
-            <span>
-              {state.completed.includes(nextSituation.id)
-                ? "Run it again"
-                : "Practice this situation"}
+          <div className="landing-visual">
+            <MayuImage
+              pose="welcome"
+              alt="Mayu the peacock saying hello in Telugu"
+              className="landing-mayu"
+            />
+            <span className="hello-chip">
+              <strong lang="te">నమస్కారం</strong>
+              <span>namaskaaram · hello</span>
             </span>
-            <Icon name="arrow" />
-          </button>
+          </div>
         </section>
 
-        <p className="quiet-summary">
-          <span>
-            <b className="tabular">{state.completed.length}</b> situations practiced
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            <b className="tabular">{retainedWords}</b> useful phrases met
-          </span>
-        </p>
+        <section
+          className="situation-preview"
+          aria-labelledby="situation-preview-title"
+        >
+          <header className="situation-preview-heading">
+            <div>
+              <p className="overline">Choose a moment</p>
+              <h2 id="situation-preview-title">What are you walking into?</h2>
+            </div>
+            <p>Short practice for the situations that come up most.</p>
+          </header>
+          <ul className="situation-preview-list">
+            {featuredSituations.map((lesson) => {
+              const done = state.completed.includes(lesson.id);
+              return (
+                <li key={lesson.id}>
+                  <button
+                    className="situation-row"
+                    onClick={() => startLesson(lesson)}
+                    aria-label={`${done ? "Practice again" : "Practice"}: ${
+                      lesson.title
+                    }`}
+                  >
+                    <span className="situation-row-copy">
+                      <small>{lesson.eyebrow}</small>
+                      <strong>{lesson.title}</strong>
+                      <span>{lesson.description}</span>
+                    </span>
+                    <span className="situation-row-meta">
+                      <span>
+                        {lesson.minutes} min
+                        {done ? " · Practiced" : ""}
+                      </span>
+                      <Icon name="arrow" />
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
       </main>
     </AppShell>
   );
@@ -1915,75 +1888,6 @@ function LessonView({
   );
 }
 
-function Onboarding({
-  onSkip,
-  onStart,
-}: {
-  onSkip: () => void;
-  onStart: () => void;
-}) {
-  const [step, setStep] = useState(0);
-  const dialogRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    dialogRef.current?.focus();
-  }, [step]);
-
-  return (
-    <main className="onboarding-screen">
-      <section
-        ref={dialogRef}
-        className="onboarding-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="onboarding-title"
-        tabIndex={-1}
-      >
-        <MayuImage
-          pose="welcome"
-          alt="Mayu the peacock welcoming you to PalukuLingo"
-          className="onboarding-mayu"
-        />
-        {step === 0 ? (
-          <>
-            <span className="overline">PRACTICAL TELUGU, FAST</span>
-            <h1 id="onboarding-title">Say something useful today.</h1>
-            <p>
-              Practice the Telugu you’ll use with family, at the table, while
-              visiting, and when you need help.
-            </p>
-          </>
-        ) : (
-          <>
-            <span className="overline">YOUR QUICK START</span>
-            <h1 id="onboarding-title">Your first five phrases are ready.</h1>
-            <p>
-              Hear each phrase, read the pronunciation, and mark what already
-              feels familiar.
-            </p>
-          </>
-        )}
-        <div className="onboarding-actions">
-          <button className="text-button" onClick={onSkip}>
-            Explore first
-          </button>
-          <span className="step-dots" aria-label={`Step ${step + 1} of 2`}>
-            <i className={step === 0 ? "dot-active" : ""} />
-            <i className={step === 1 ? "dot-active" : ""} />
-          </span>
-          <button
-            className="primary-button"
-            onClick={step === 0 ? () => setStep(1) : onStart}
-          >
-            {step === 0 ? "See the quick start" : "Start quick practice"}
-            <Icon name="arrow" />
-          </button>
-        </div>
-      </section>
-    </main>
-  );
-}
-
 function MissingLesson({ onExit }: { onExit: () => void }) {
   return (
     <main className="missing-lesson">
@@ -2065,7 +1969,6 @@ export default function PalukuApp({
   const [preferences, setPreferences] =
     useState<Preferences>(defaultPreferences);
   const [savedWords, setSavedWords] = useState<string[]>([]);
-  const [showOnboarding, setShowOnboarding] = useState(false);
   const [toast, setToast] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const activeLesson = findLesson(initialLessonId);
@@ -2113,11 +2016,6 @@ export default function PalukuApp({
         setSavedWords([]);
       }
 
-      try {
-        setShowOnboarding(!window.localStorage.getItem(ONBOARDED_KEY));
-      } catch {
-        setShowOnboarding(false);
-      }
       setHydrated(true);
     }, 0);
     return () => window.clearTimeout(restoreTimer);
@@ -2184,21 +2082,6 @@ export default function PalukuApp({
     }));
   };
 
-  const markOnboarded = () => {
-    try {
-      window.localStorage.setItem(ONBOARDED_KEY, "true");
-    } catch {
-      // Closing the welcome flow should never depend on storage access.
-    }
-    setShowOnboarding(false);
-  };
-
-  const startQuickFive = () => {
-    markOnboarded();
-    router.push("/words/daily");
-    window.scrollTo({ top: 0 });
-  };
-
   let content: React.ReactNode;
 
   if (screen === "lesson") {
@@ -2253,17 +2136,7 @@ export default function PalukuApp({
 
   return (
     <>
-      {hydrated &&
-      showOnboarding &&
-      screen !== "lesson" &&
-      screen !== "daily" ? (
-        <Onboarding
-          onSkip={markOnboarded}
-          onStart={startQuickFive}
-        />
-      ) : (
-        content
-      )}
+      {content}
       {toast ? (
         <div className="toast" role="status">
           {toast}
