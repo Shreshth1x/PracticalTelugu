@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import PalukuApp from "../../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Today’s five words · PalukuLingo",
-  description: "A quiet five-word Telugu session for today.",
+  title: "Quick five · PalukuLingo",
+  description: "Five practical Telugu phrases to get ready for a real conversation.",
 };
 
 export default function DailyWordsPage() {

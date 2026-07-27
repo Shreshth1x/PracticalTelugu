@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import PalukuApp from "../PalukuApp";
 
 export const metadata: Metadata = {
-  title: "Learn · PalukuLingo",
+  title: "Situations · PalukuLingo",
   description:
-    "Choose Telugu Essentials or learn Telugu from the beginning, one useful topic at a time.",
+    "Choose a real-life Telugu situation and practice the phrases you need now.",
 };
 
 export default function LearnPage() {

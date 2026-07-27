@@ -19,19 +19,19 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase: new URL(origin),
     title: {
-      default: "PalukuLingo — Learn practical Telugu",
+      default: "PalukuLingo — Practical Telugu for real life",
       template: "%s",
     },
     description:
-      "Learn the Telugu you need now, or start from the beginning with Mayu the peacock.",
+      "Get up to speed with the Telugu you’ll use with family, at the table, while visiting, and when you need help.",
     icons: {
       icon: "/maya-peacock.webp",
       shortcut: "/maya-peacock.webp",
     },
     openGraph: {
-      title: "PalukuLingo — Telugu that feels close to home",
+      title: "PalukuLingo — Speak useful Telugu sooner",
       description:
-        "A practical Telugu crash course and a friendly path from the beginning.",
+        "Short, practical Telugu for the real moments you’re preparing for.",
       type: "website",
       url: origin,
       images: [
@@ -45,9 +45,9 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     twitter: {
       card: "summary_large_image",
-      title: "PalukuLingo — Telugu that feels close to home",
+      title: "PalukuLingo — Speak useful Telugu sooner",
       description:
-        "A practical Telugu crash course and a friendly path from the beginning.",
+        "Short, practical Telugu for the real moments you’re preparing for.",
       images: [socialImage],
     },
   };

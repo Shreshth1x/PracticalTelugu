@@ -4,7 +4,7 @@ import PalukuApp from "./PalukuApp";
 export const metadata: Metadata = {
   title: "Today · PalukuLingo",
   description:
-    "Meet five useful Telugu words and continue your course with Mayu.",
+    "Practice five useful Telugu phrases, then choose a real-life situation.",
 };
 
 export default function Home() {

@@ -15,7 +15,7 @@ export async function generateMetadata({
   return {
     title: lesson
       ? `${lesson.title} · PalukuLingo`
-      : "Telugu lesson · PalukuLingo",
+      : "Telugu practice · PalukuLingo",
     description: lesson?.description,
   };
 }

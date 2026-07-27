@@ -12,31 +12,25 @@ import {
 } from "react";
 import {
   allLessons,
-  essentialsLessons,
   findLesson,
-  foundationLessons,
-  lockedUnits,
+  practicalLessons,
+  situationGroups,
   type Lesson,
+  type SituationGroup,
   type TeluguWord,
-  type TrackId,
 } from "./course-data";
 
 export type AppScreen = "today" | "learn" | "words" | "daily" | "settings" | "lesson";
 
 type SavedState = {
-  xp: number;
-  streak: number;
-  energy: number;
-  dailyGoal: number;
-  selectedTrack: TrackId;
   completed: string[];
+  confidence: Record<string, "learning" | "ready">;
 };
 
 type Preferences = {
   showRomanization: boolean;
   teluguFirst: boolean;
   autoplay: boolean;
-  reminder: boolean;
 };
 
 type Step =
@@ -64,7 +58,7 @@ type MayuPose =
 type LibraryWord = TeluguWord & {
   key: string;
   lessonTitle: string;
-  track: TrackId;
+  group: SituationGroup;
 };
 
 type DailyWord = {
@@ -73,50 +67,57 @@ type DailyWord = {
   exampleEnglish: string;
 };
 
-const STORAGE_KEY = "palukulu.progress.v1";
+const STORAGE_KEY = "palukulu.progress.v2";
+const LEGACY_STORAGE_KEY = "palukulu.progress.v1";
 const ONBOARDED_KEY = "palukulu.onboarded.v1";
 const PREFERENCES_KEY = "palukulu.preferences.v1";
 const SAVED_WORDS_KEY = "palukulu.saved-words.v1";
 
 const defaultState: SavedState = {
-  xp: 0,
-  streak: 0,
-  energy: 5,
-  dailyGoal: 20,
-  selectedTrack: "essentials",
   completed: [],
+  confidence: {},
 };
 
 const defaultPreferences: Preferences = {
   showRomanization: true,
   teluguFirst: true,
   autoplay: false,
-  reminder: false,
 };
+
+function findDailyWord(lessonId: string, english: string) {
+  const lesson = findLesson(lessonId);
+  const word = lesson?.words.find(
+    (candidate) => normalize(candidate.english) === normalize(english),
+  );
+  if (!word) {
+    throw new Error(`Missing daily phrase: ${lessonId}/${english}`);
+  }
+  return word;
+}
 
 const dailyWords: DailyWord[] = [
   {
-    word: essentialsLessons[0].words[0],
+    word: findDailyWord("hello-goodbye", "hello / respectful greeting"),
     exampleTelugu: "నమస్కారం, అత్తయ్య.",
     exampleEnglish: "Hello, auntie.",
   },
   {
-    word: essentialsLessons[1].words[0],
+    word: findDailyWord("please-thank-you", "thank you"),
     exampleTelugu: "భోజనానికి ధన్యవాదాలు.",
     exampleEnglish: "Thank you for the meal.",
   },
   {
-    word: essentialsLessons[3].words[0],
-    exampleTelugu: "అమ్మ ఇంట్లో ఉన్నారు.",
-    exampleEnglish: "Mom is at home.",
+    word: findDailyWord("names-introductions", "what is your name?"),
+    exampleTelugu: "మీ పేరు ఏంటి?",
+    exampleEnglish: "What is your name?",
   },
   {
-    word: essentialsLessons[4].words[0],
+    word: findDailyWord("food-water", "I would like water"),
     exampleTelugu: "నాకు నీళ్లు కావాలి.",
     exampleEnglish: "I would like some water.",
   },
   {
-    word: essentialsLessons[5].words[2],
+    word: findDailyWord("when-stuck", "please say it again"),
     exampleTelugu: "దయచేసి మళ్లీ చెప్పండి.",
     exampleEnglish: "Please say it again.",
   },
@@ -135,7 +136,7 @@ const libraryWords: LibraryWord[] = (() => {
         ...word,
         key,
         lessonTitle: lesson.title,
-        track: lesson.track,
+        group: lesson.group,
       });
     });
   });
@@ -409,8 +410,8 @@ const navItems: {
   icon: "today" | "learn" | "words";
 }[] = [
   { screen: "today", href: "/", label: "Today", icon: "today" },
-  { screen: "learn", href: "/learn", label: "Learn", icon: "learn" },
-  { screen: "words", href: "/words", label: "Words", icon: "words" },
+  { screen: "learn", href: "/learn", label: "Situations", icon: "learn" },
+  { screen: "words", href: "/words", label: "Phrasebook", icon: "words" },
 ];
 
 function Wordmark() {
@@ -462,7 +463,7 @@ function AppShell({
         </Link>
         <p className="side-note">
           <span lang="te">తెలుగు</span>
-          <small>Spoken gently, one day at a time.</small>
+          <small>The Telugu you can use today.</small>
         </p>
       </aside>
 
@@ -548,16 +549,9 @@ function TodayView({
   startLesson: (lesson: Lesson) => void;
 }) {
   const todayLabel = useLocalToday();
-  const lessons =
-    state.selectedTrack === "essentials"
-      ? essentialsLessons
-      : foundationLessons;
-  const nextLesson =
-    lessons.find((lesson) => !state.completed.includes(lesson.id)) ??
-    lessons[lessons.length - 1];
-  const reviewLesson = lessons.find((lesson) =>
-    state.completed.includes(lesson.id),
-  );
+  const nextSituation =
+    practicalLessons.find((lesson) => !state.completed.includes(lesson.id)) ??
+    practicalLessons[0];
   const retainedWords = new Set(
     allLessons
       .filter((lesson) => state.completed.includes(lesson.id))
@@ -570,9 +564,10 @@ function TodayView({
         <section className="today-intro">
           <div className="today-copy">
             <time className="overline">{todayLabel}</time>
-            <h1>A little Telugu for today.</h1>
+            <h1>Useful Telugu in four minutes.</h1>
             <p>
-              Five useful words, then pick up your course wherever you left it.
+              Practice the five phrases you are most likely to need, then try
+              one real-life situation.
             </p>
           </div>
           <MayuImage
@@ -584,12 +579,12 @@ function TodayView({
 
         <Link href="/words/daily" className="daily-feature pressable">
           <span className="daily-feature-copy">
-            <span className="overline overline-light">TODAY’S WORDS</span>
-            <strong>Five words for real life</strong>
-            <span>Greetings, family, and the phrases that keep a conversation going.</span>
+            <span className="overline overline-light">QUICK FIVE</span>
+            <strong>Start speaking sooner</strong>
+            <span>Hello, thank you, your name, water, and how to ask someone to repeat.</span>
           </span>
           <span className="daily-feature-action">
-            <span className="pixel-meta">5 WORDS · 4 MIN</span>
+            <span className="pixel-meta">5 PHRASES · 4 MIN</span>
             <span className="round-arrow" aria-hidden="true">
               <Icon name="arrow" />
             </span>
@@ -599,43 +594,32 @@ function TodayView({
         <section className="resume-card">
           <div className="card-heading-row">
             <div>
-              <span className="overline">CONTINUE LEARNING</span>
-              <h2>{nextLesson.title}</h2>
+              <span className="overline">NEXT SITUATION</span>
+              <h2>{nextSituation.title}</h2>
             </div>
-            <span className="course-chip">
-              {state.selectedTrack === "essentials"
-                ? "Essentials"
-                : "From beginning"}
-            </span>
+            <span className="course-chip">{nextSituation.minutes} min</span>
           </div>
-          <p>{nextLesson.description}</p>
-          <button className="text-action" onClick={() => startLesson(nextLesson)}>
-            <span>{state.completed.includes(nextLesson.id) ? "Practice again" : "Resume lesson"}</span>
+          <p>{nextSituation.description}</p>
+          <button
+            className="text-action"
+            onClick={() => startLesson(nextSituation)}
+          >
+            <span>
+              {state.completed.includes(nextSituation.id)
+                ? "Run it again"
+                : "Practice this situation"}
+            </span>
             <Icon name="arrow" />
           </button>
         </section>
 
-        {reviewLesson ? (
-          <section className="review-row">
-            <div>
-              <span className="overline">OPTIONAL REVIEW</span>
-              <h2>Two quiet minutes with familiar words</h2>
-              <p>Revisit {reviewLesson.title.toLowerCase()} whenever it feels useful.</p>
-            </div>
-            <button className="secondary-button" onClick={() => startLesson(reviewLesson)}>
-              Review
-            </button>
-          </section>
-        ) : null}
-
         <p className="quiet-summary">
           <span>
-            <b className="tabular">{state.streak}</b> day
-            {state.streak === 1 ? "" : "s"} in your current rhythm
+            <b className="tabular">{state.completed.length}</b> situations practiced
           </span>
           <span aria-hidden="true">·</span>
           <span>
-            <b className="tabular">{retainedWords}</b> words met in completed lessons
+            <b className="tabular">{retainedWords}</b> useful phrases met
           </span>
         </p>
       </main>
@@ -643,169 +627,96 @@ function TodayView({
   );
 }
 
-function courseProgress(lessons: Lesson[], completed: string[]) {
-  const count = lessons.filter((lesson) => completed.includes(lesson.id)).length;
-  return {
-    count,
-    percentage: Math.round((count / lessons.length) * 100),
-  };
-}
-
-function LearnView({
+function SituationsView({
   state,
-  setState,
   startLesson,
 }: {
   state: SavedState;
-  setState: React.Dispatch<React.SetStateAction<SavedState>>;
   startLesson: (lesson: Lesson) => void;
 }) {
-  const essentials = courseProgress(essentialsLessons, state.completed);
-  const foundations = courseProgress(foundationLessons, state.completed);
-  const selectedLessons =
-    state.selectedTrack === "essentials"
-      ? essentialsLessons
-      : foundationLessons;
-  const selectedProgress =
-    state.selectedTrack === "essentials" ? essentials : foundations;
-  const nextLesson =
-    selectedLessons.find((lesson) => !state.completed.includes(lesson.id)) ??
-    selectedLessons[selectedLessons.length - 1];
-
-  const selectTrack = (selectedTrack: TrackId) =>
-    setState((current) => ({ ...current, selectedTrack }));
+  const nextSituation =
+    practicalLessons.find((lesson) => !state.completed.includes(lesson.id)) ??
+    practicalLessons[0];
 
   return (
     <AppShell screen="learn">
       <main className="page page-learn">
         <header className="page-header">
-          <span className="overline">YOUR COURSES</span>
-          <h1>Learn in the order that fits you.</h1>
-          <p>Start with the phrases you need now or build Telugu from the beginning.</p>
+          <span className="overline">REAL-LIFE TELUGU</span>
+          <h1>What do you need to say?</h1>
+          <p>
+            Choose the moment in front of you. Every situation is open, short,
+            and built around phrases you can use right away.
+          </p>
         </header>
 
         <section className="continue-banner">
           <div>
-            <span className="overline overline-light">PICK UP WHERE YOU LEFT OFF</span>
-            <h2>{nextLesson.title}</h2>
-            <p>{nextLesson.description}</p>
+            <span className="overline overline-light">A GOOD NEXT STEP</span>
+            <h2>{nextSituation.title}</h2>
+            <p>{nextSituation.outcome}</p>
           </div>
-          <button className="light-button" onClick={() => startLesson(nextLesson)}>
-            Continue
+          <button
+            className="light-button"
+            onClick={() => startLesson(nextSituation)}
+          >
+            Practice now
             <Icon name="arrow" />
           </button>
         </section>
 
-        <div className="course-switcher" aria-label="Choose a course">
-          <button
-            className={`course-card ${
-              state.selectedTrack === "essentials" ? "course-card-selected" : ""
-            }`}
-            onClick={() => selectTrack("essentials")}
-            aria-pressed={state.selectedTrack === "essentials"}
-          >
-            <span className="course-number">01</span>
-            <span className="overline">SHORT COURSE</span>
-            <strong>Telugu Essentials</strong>
-            <span>Useful phrases for greetings, family, food, and getting unstuck.</span>
-            <span className="course-card-progress">
-              <ProgressBar
-                value={essentials.count}
-                max={essentialsLessons.length}
-                label="Telugu Essentials progress"
-              />
-              <small className="pixel-meta">
-                {essentials.count}/{essentialsLessons.length} TOPICS
-              </small>
-            </span>
-          </button>
-
-          <button
-            className={`course-card ${
-              state.selectedTrack === "foundations" ? "course-card-selected" : ""
-            }`}
-            onClick={() => selectTrack("foundations")}
-            aria-pressed={state.selectedTrack === "foundations"}
-          >
-            <span className="course-number">02</span>
-            <span className="overline">FULL COURSE</span>
-            <strong>From beginning</strong>
-            <span>Build vocabulary, sentences, sounds, and script step by step.</span>
-            <span className="course-card-progress">
-              <ProgressBar
-                value={foundations.count}
-                max={foundationLessons.length}
-                label="From beginning progress"
-              />
-              <small className="pixel-meta">
-                {foundations.count}/{foundationLessons.length} TOPICS
-              </small>
-            </span>
-          </button>
-        </div>
-
-        <section className="topic-section">
-          <div className="section-title-row">
-            <div>
-              <span className="overline">
-                {state.selectedTrack === "essentials" ? "TELUGU ESSENTIALS" : "UNIT 1"}
-              </span>
-              <h2>
-                {state.selectedTrack === "essentials"
-                  ? "Seven useful moments"
-                  : "Building blocks"}
-              </h2>
-            </div>
-            <span className="pixel-meta">{selectedProgress.percentage}% COMPLETE</span>
-          </div>
-
-          <ol className="topic-list">
-            {selectedLessons.map((lesson, index) => {
-              const done = state.completed.includes(lesson.id);
-              const isNext = lesson.id === nextLesson.id;
-              return (
-                <li key={lesson.id} className={isNext ? "topic-row-next" : ""}>
-                  <span className={`topic-index ${done ? "topic-index-done" : ""}`}>
-                    {done ? <Icon name="check" /> : String(index + 1).padStart(2, "0")}
-                  </span>
-                  <span className="topic-copy">
-                    <strong>{lesson.title}</strong>
-                    <span>{lesson.description}</span>
-                  </span>
-                  <button
-                    className="topic-action"
-                    onClick={() => startLesson(lesson)}
-                    aria-label={`${done ? "Practice" : "Start"} ${lesson.title}`}
-                  >
-                    {done ? "Practice" : isNext ? "Start" : "Open"}
-                    <Icon name="arrow" />
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-        </section>
-
-        {state.selectedTrack === "foundations" ? (
-          <section className="upcoming-units">
-            <div className="section-title-row">
-              <div>
-                <span className="overline">AFTER BUILDING BLOCKS</span>
-                <h2>What comes next</h2>
+        {situationGroups.map((group) => {
+          const lessons = practicalLessons.filter(
+            (lesson) => lesson.group === group.id,
+          );
+          return (
+            <section className="topic-section" key={group.id}>
+              <div className="section-title-row">
+                <div>
+                  <span className="overline">{group.eyebrow}</span>
+                  <h2>{group.title}</h2>
+                  <p>{group.description}</p>
+                </div>
               </div>
-            </div>
-            {lockedUnits.map((unit) => (
-              <details key={unit.number} className="unit-disclosure">
-                <summary>
-                  <span className="pixel-meta">UNIT {unit.number}</span>
-                  <strong>{unit.title}</strong>
-                  <span>Up next</span>
-                </summary>
-                <p>{unit.unlockCopy.replace("unlock", "continue")}</p>
-              </details>
-            ))}
-          </section>
-        ) : null}
+
+              <ol className="topic-list">
+                {lessons.map((lesson, index) => {
+                  const done = state.completed.includes(lesson.id);
+                  return (
+                    <li key={lesson.id}>
+                      <span
+                        className={`topic-index ${
+                          done ? "topic-index-done" : ""
+                        }`}
+                      >
+                        {done ? (
+                          <Icon name="check" />
+                        ) : (
+                          String(index + 1).padStart(2, "0")
+                        )}
+                      </span>
+                      <span className="topic-copy">
+                        <strong>{lesson.title}</strong>
+                        <span>{lesson.description}</span>
+                        <small className="pixel-meta">
+                          {lesson.minutes} MIN · {lesson.words.length} PHRASES
+                        </small>
+                      </span>
+                      <button
+                        className="topic-action"
+                        onClick={() => startLesson(lesson)}
+                        aria-label={`${done ? "Run again" : "Open"} ${lesson.title}`}
+                      >
+                        {done ? "Run again" : "Open"}
+                        <Icon name="arrow" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          );
+        })}
       </main>
     </AppShell>
   );
@@ -858,7 +769,7 @@ function WordRow({
   );
 }
 
-function WordsView({
+function PhrasebookView({
   preferences,
   savedWords,
   setSavedWords,
@@ -871,7 +782,9 @@ function WordsView({
 }) {
   const [tab, setTab] = useState<WordTab>("today");
   const [query, setQuery] = useState("");
-  const [trackFilter, setTrackFilter] = useState<"all" | TrackId>("all");
+  const [situationFilter, setSituationFilter] = useState<
+    "all" | SituationGroup
+  >("all");
   const [selectedWord, setSelectedWord] = useState<LibraryWord | null>(null);
   const weekdayLabel = useLocalWeekday();
   const closeWordSheet = useCallback(() => setSelectedWord(null), []);
@@ -905,13 +818,15 @@ function WordsView({
     return libraryWords.filter((word) => {
       if (tab === "today" && !todayKeys.has(word.key)) return false;
       if (tab === "saved" && !savedWords.includes(word.key)) return false;
-      if (trackFilter !== "all" && word.track !== trackFilter) return false;
+      if (situationFilter !== "all" && word.group !== situationFilter) {
+        return false;
+      }
       if (!normalizedQuery) return true;
       return normalize(`${word.telugu} ${word.roman} ${word.english}`).includes(
         normalizedQuery,
       );
     });
-  }, [query, savedWords, tab, todayKeys, trackFilter]);
+  }, [query, savedWords, situationFilter, tab, todayKeys]);
 
   const playAudio = (word: TeluguWord) => {
     if (!word.audioSrc) {
@@ -936,21 +851,23 @@ function WordsView({
       <main className="page page-words">
         <header className="page-header words-header">
           <div>
-            <span className="overline">YOUR WORDS</span>
-            <h1>Words worth keeping close.</h1>
-            <p>Hear them, save them, and return when you need a phrase.</p>
+            <span className="overline">QUICK PHRASEBOOK</span>
+            <h1>Find what you need to say.</h1>
+            <p>
+              Search, hear, and save Telugu for the moments you actually face.
+            </p>
           </div>
           <Link href="/words/daily" className="primary-button">
-            Today’s five
+            Quick five
             <Icon name="arrow" />
           </Link>
         </header>
 
-        <div className="word-tabs" role="tablist" aria-label="Word collections">
+        <div className="word-tabs" role="tablist" aria-label="Phrase collections">
           {(
             [
-              ["today", "Today"],
-              ["all", "All words"],
+              ["today", "Quick five"],
+              ["all", "All phrases"],
               ["saved", "Saved"],
             ] as const
           ).map(([value, label]) => (
@@ -972,7 +889,7 @@ function WordsView({
           <div className="word-tools">
             <label className="search-field">
               <Icon name="search" />
-              <span className="sr-only">Search words</span>
+              <span className="sr-only">Search phrases</span>
               <input
                 type="search"
                 value={query}
@@ -981,25 +898,32 @@ function WordsView({
               />
             </label>
             <label className="filter-field">
-              <span className="sr-only">Filter by course</span>
+              <span className="sr-only">Filter by situation</span>
               <select
-                value={trackFilter}
+                value={situationFilter}
                 onChange={(event) =>
-                  setTrackFilter(event.target.value as "all" | TrackId)
+                  setSituationFilter(
+                    event.target.value as "all" | SituationGroup,
+                  )
                 }
               >
-                <option value="all">All courses</option>
-                <option value="essentials">Essentials</option>
-                <option value="foundations">From beginning</option>
+                <option value="all">All situations</option>
+                {situationGroups.map((group) => (
+                  <option value={group.id} key={group.id}>
+                    {group.title}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
         ) : (
           <div className="today-word-note">
             <span className="pixel-meta">
-              {weekdayLabel.toUpperCase()} SET · 5 WORDS
+              {weekdayLabel.toUpperCase()} SET · 5 PHRASES
             </span>
-            <p>Today’s small set mixes a greeting, family, and two useful requests.</p>
+            <p>
+              Hello, thank you, your name, water, and a phrase for getting unstuck.
+            </p>
           </div>
         )}
 
@@ -1008,7 +932,7 @@ function WordsView({
           className="word-list"
           role="tabpanel"
           aria-labelledby={`words-tab-${tab}`}
-          aria-label={`${tab === "all" ? "All words" : tab === "saved" ? "Saved words" : "Today’s words"}`}
+          aria-label={`${tab === "all" ? "All phrases" : tab === "saved" ? "Saved phrases" : "Quick five phrases"}`}
         >
           {visibleWords.length ? (
             visibleWords.map((word) => (
@@ -1026,20 +950,20 @@ function WordsView({
             <div className="saved-empty">
               <MayuImage
                 pose="read"
-                alt="Mayu reading beside an empty saved words list"
+                alt="Mayu reading beside an empty saved phrase list"
               />
               <div>
-                <h2>Save the words you want nearby.</h2>
-                <p>Use the bookmark on any word and it will wait for you here.</p>
+                <h2>Save the phrases you want nearby.</h2>
+                <p>Use the bookmark on any phrase and it will wait for you here.</p>
                 <button className="secondary-button" onClick={() => setTab("all")}>
-                  Browse all words
+                  Browse all phrases
                 </button>
               </div>
             </div>
           ) : (
             <div className="no-results">
-              <h2>No words found.</h2>
-              <p>Try a different spelling or course filter.</p>
+              <h2>No phrases found.</h2>
+              <p>Try a different spelling or situation filter.</p>
             </div>
           )}
         </section>
@@ -1065,7 +989,7 @@ function WordsView({
               <button
                 className="icon-button"
                 onClick={closeWordSheet}
-                aria-label="Close word details"
+                aria-label="Close phrase details"
                 autoFocus
               >
                 <Icon name="close" />
@@ -1085,7 +1009,7 @@ function WordsView({
             >
               <Icon name="audio" />
               <span>
-                <strong>Hear this word</strong>
+                <strong>Hear this phrase</strong>
                 <small>
                   {selectedWord.audioSrc
                     ? "Play family-recorded audio"
@@ -1094,10 +1018,10 @@ function WordsView({
               </span>
             </button>
             <div className="usage-note">
-              <span className="overline">USE IT</span>
+              <span className="overline">WHEN TO USE IT</span>
               <p>
-                Say it once slowly, then again in the kind of moment where you
-                would naturally reach for “{selectedWord.english}.”
+                {selectedWord.note ??
+                  `Say it once slowly, then again in the kind of moment where you would naturally reach for “${selectedWord.english}.”`}
               </p>
             </div>
             <button
@@ -1108,7 +1032,9 @@ function WordsView({
               aria-pressed={savedWords.includes(selectedWord.key)}
             >
               <Icon name="bookmark" />
-              {savedWords.includes(selectedWord.key) ? "Saved" : "Save this word"}
+              {savedWords.includes(selectedWord.key)
+                ? "Saved"
+                : "Save for later"}
             </button>
           </aside>
         </div>
@@ -1118,17 +1044,24 @@ function WordsView({
 }
 
 function DailySession({
+  state,
+  setState,
   preferences,
   notify,
 }: {
+  state: SavedState;
+  setState: React.Dispatch<React.SetStateAction<SavedState>>;
   preferences: Preferences;
   notify: (message: string) => void;
 }) {
   const [wordIndex, setWordIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const [results, setResults] = useState<("learning" | "got-it")[]>([]);
+  const [results, setResults] = useState<("learning" | "ready")[]>([]);
   const finished = wordIndex >= dailyWords.length;
   const current = finished ? null : dailyWords[wordIndex];
+  const currentConfidence = current
+    ? state.confidence[`${current.word.telugu}::${current.word.english}`]
+    : undefined;
 
   useEffect(() => {
     if (!preferences.autoplay || !current?.word.audioSrc) return;
@@ -1149,21 +1082,31 @@ function DailySession({
     });
   };
 
-  const markWord = (result: "learning" | "got-it") => {
+  const markWord = (result: "learning" | "ready") => {
+    if (current) {
+      const key = `${current.word.telugu}::${current.word.english}`;
+      setState((currentState) => ({
+        completed: currentState.completed,
+        confidence: {
+          ...currentState.confidence,
+          [key]: result,
+        },
+      }));
+    }
     setResults((currentResults) => [...currentResults, result]);
     setRevealed(false);
     setWordIndex((currentIndex) => currentIndex + 1);
   };
 
   if (finished) {
-    const ready = results.filter((result) => result === "got-it").length;
+    const ready = results.filter((result) => result === "ready").length;
     return (
       <main className="daily-session daily-recap">
         <header className="session-header">
-          <Link href="/words" className="icon-button" aria-label="Close daily words">
+          <Link href="/words" className="icon-button" aria-label="Close quick five">
             <Icon name="close" />
           </Link>
-          <span className="pixel-meta">TODAY’S FIVE</span>
+          <span className="pixel-meta">QUICK FIVE</span>
           <span className="session-header-spacer" aria-hidden="true" />
         </header>
         <div className="recap-content">
@@ -1172,18 +1115,20 @@ function DailySession({
             alt="Mayu opening her tail in a gentle celebration"
             className="recap-mayu"
           />
-          <span className="overline">SESSION COMPLETE</span>
-          <h1>Five words, met.</h1>
+          <span className="overline">QUICK PRACTICE DONE</span>
+          <h1>You’re ready to use these today.</h1>
           <p>
-            {ready} feel familiar. {dailyWords.length - ready} can stay in your
-            next gentle review.
+            {ready} are ready to use. {dailyWords.length - ready} will stay
+            marked for another quick review.
           </p>
           <div className="recap-list">
             {dailyWords.map(({ word }, index) => (
               <span key={word.telugu}>
                 <b lang="te">{word.telugu}</b>
                 <small>
-                  {results[index] === "got-it" ? "Got it" : "Still learning"}
+                  {results[index] === "ready"
+                    ? "Ready to use"
+                    : "Review once more"}
                 </small>
               </span>
             ))}
@@ -1193,7 +1138,7 @@ function DailySession({
               Back to Today
             </Link>
             <Link href="/words" className="secondary-button">
-              See all words
+              Open phrasebook
             </Link>
           </div>
         </div>
@@ -1206,14 +1151,14 @@ function DailySession({
   return (
     <main className="daily-session">
       <header className="session-header">
-        <Link href="/words" className="icon-button" aria-label="Close daily words">
+        <Link href="/words" className="icon-button" aria-label="Close quick five">
           <Icon name="close" />
         </Link>
         <ProgressBar
           value={wordIndex + 1}
           max={dailyWords.length}
           className="session-progress"
-          label="Daily words progress"
+          label="Quick five progress"
         />
         <span className="pixel-meta">
           {wordIndex + 1}/{dailyWords.length}
@@ -1225,12 +1170,16 @@ function DailySession({
           pose={revealed ? "teach" : "listen"}
           alt={
             revealed
-              ? "Mayu teaching today’s Telugu word"
+              ? "Mayu teaching today’s Telugu phrase"
               : "Mayu listening carefully"
           }
           className="daily-word-mayu"
         />
-        <span className="overline">WORD {wordIndex + 1} OF 5</span>
+        <span className="overline">
+          {currentConfidence === "ready"
+            ? "QUICK REFRESH"
+            : `PHRASE ${wordIndex + 1} OF 5`}
+        </span>
         <h1
           id="daily-word-title"
           lang="te"
@@ -1243,7 +1192,7 @@ function DailySession({
         ) : null}
         <button className="listen-button" onClick={playAudio}>
           <Icon name="audio" />
-          Hear the word
+          Hear the phrase
         </button>
 
         {revealed ? (
@@ -1251,25 +1200,28 @@ function DailySession({
             <span className="overline">MEANING</span>
             <h2>{current.word.english}</h2>
             <div className="example-card">
-              <span className="overline">IN A REAL MOMENT</span>
+              <span className="overline">SAY IT LIKE THIS</span>
               <strong lang="te">{current.exampleTelugu}</strong>
               <p>{current.exampleEnglish}</p>
             </div>
           </div>
         ) : (
           <button className="primary-button reveal-button" onClick={() => setRevealed(true)}>
-            Reveal meaning
+            See meaning
           </button>
         )}
       </section>
 
       {revealed ? (
         <footer className="daily-actions">
-          <button className="secondary-button" onClick={() => markWord("learning")}>
-            Still learning
+          <button
+            className="secondary-button"
+            onClick={() => markWord("learning")}
+          >
+            Review once more
           </button>
-          <button className="primary-button" onClick={() => markWord("got-it")}>
-            Got it
+          <button className="primary-button" onClick={() => markWord("ready")}>
+            Ready to use
             <Icon name="arrow" />
           </button>
         </footer>
@@ -1309,12 +1261,10 @@ function SwitchRow({
 }
 
 function SettingsView({
-  state,
   setState,
   preferences,
   setPreferences,
 }: {
-  state: SavedState;
   setState: React.Dispatch<React.SetStateAction<SavedState>>;
   preferences: Preferences;
   setPreferences: React.Dispatch<React.SetStateAction<Preferences>>;
@@ -1334,24 +1284,26 @@ function SettingsView({
       <main className="page page-settings">
         <header className="page-header">
           <span className="overline">SETTINGS</span>
-          <h1>Make the words easier to meet.</h1>
-          <p>Keep the learning surface quiet and choose only the support you want.</p>
+          <h1>Set up Telugu your way.</h1>
+          <p>
+            Choose only the support that helps you speak sooner.
+          </p>
         </header>
 
         <section className="settings-group" aria-labelledby="display-settings">
           <div className="settings-group-heading">
             <span className="overline">READING & AUDIO</span>
-            <h2 id="display-settings">How lessons appear</h2>
+            <h2 id="display-settings">How phrases appear</h2>
           </div>
           <SwitchRow
             label="Show pronunciation"
-            description="Keep romanized Telugu below the script."
+            description="Show an easy-to-read pronunciation below each phrase."
             checked={preferences.showRomanization}
             onChange={() => updatePreference("showRomanization")}
           />
           <SwitchRow
-            label="Emphasize today’s Telugu"
-            description="Keep the Telugu word at the largest size in daily practice."
+            label="Show Telugu larger"
+            description="Give the Telugu phrase the most space during quick practice."
             checked={preferences.teluguFirst}
             onChange={() => updatePreference("teluguFirst")}
           />
@@ -1363,56 +1315,25 @@ function SettingsView({
           />
         </section>
 
-        <section className="settings-group" aria-labelledby="rhythm-settings">
-          <div className="settings-group-heading">
-            <span className="overline">YOUR RHYTHM</span>
-            <h2 id="rhythm-settings">A gentle daily pace</h2>
-          </div>
-          <SwitchRow
-            label="Daily reminder"
-            description="Remember your preference on this device."
-            checked={preferences.reminder}
-            onChange={() => updatePreference("reminder")}
-          />
-          <div className="setting-row setting-goal-row">
-            <span>
-              <strong>Practice goal</strong>
-              <small>The existing XP goal stays behind the scenes.</small>
-            </span>
-            <div className="goal-buttons" aria-label="Practice goal">
-              {[20, 50, 100].map((goal) => (
-                <button
-                  key={goal}
-                  aria-pressed={state.dailyGoal === goal}
-                  className={state.dailyGoal === goal ? "goal-button-active" : ""}
-                  onClick={() =>
-                    setState((current) => ({ ...current, dailyGoal: goal }))
-                  }
-                >
-                  {goal === 20 ? "Light" : goal === 50 ? "Regular" : "Deep"}
-                </button>
-              ))}
-            </div>
-          </div>
-        </section>
-
         <section className="settings-group settings-about" aria-labelledby="about-settings">
           <div className="settings-group-heading">
-            <span className="overline">ABOUT THE TELUGU</span>
-            <h2 id="about-settings">Friendly spoken forms first</h2>
+            <span className="overline">SPOKEN TELUGU FIRST</span>
+            <h2 id="about-settings">
+              Designed for conversations, not textbook drills.
+            </h2>
           </div>
           <p>
-            Telugu changes across regions, families, and formal settings.
-            PalukuLingo keeps the script beside an approachable spoken form and
-            leaves room for family-recorded audio.
+            Telugu changes by region, family, and formality. PalukuLingo starts
+            with approachable spoken phrases, keeps Telugu and pronunciation
+            together, and leaves room for your family’s own recordings.
           </p>
         </section>
 
         <section className="danger-zone">
           <div>
             <span className="overline">ON THIS DEVICE</span>
-            <h2>Start over</h2>
-            <p>Clear course progress, the quiet streak, and the stored practice goal.</p>
+            <h2>Clear practice history</h2>
+            <p>Clear practiced situations and quick-five confidence on this device.</p>
           </div>
           <button className="danger-button" onClick={() => setConfirmReset(true)}>
             Reset progress
@@ -1430,8 +1351,11 @@ function SettingsView({
             aria-labelledby="reset-title"
           >
             <span className="overline">RESET LOCAL PROGRESS</span>
-            <h2 id="reset-title">Start again from the first lesson?</h2>
-            <p>This clears the progress stored in this browser. Saved words stay saved.</p>
+            <h2 id="reset-title">Clear your practice history?</h2>
+            <p>
+              This clears practiced situations and confidence stored in this
+              browser. Saved phrases stay saved.
+            </p>
             <div className="dialog-actions">
               <button className="secondary-button" onClick={closeResetDialog}>
                 Keep progress
@@ -1550,18 +1474,14 @@ function MatchingExercise({
 
 function LessonView({
   lesson,
-  state,
   onExit,
   onComplete,
-  onLoseEnergy,
   notify,
   preferences,
 }: {
   lesson: Lesson;
-  state: SavedState;
   onExit: () => void;
   onComplete: (lesson: Lesson, correct: number, graded: number) => void;
-  onLoseEnergy: () => void;
   notify: (message: string) => void;
   preferences: Preferences;
 }) {
@@ -1571,7 +1491,6 @@ function LessonView({
   const [selected, setSelected] = useState<string | null>(null);
   const [correctCount, setCorrectCount] = useState(0);
   const [gradedCount, setGradedCount] = useState(0);
-  const [lessonEnergy, setLessonEnergy] = useState(state.energy);
   const [matched, setMatched] = useState<Set<number>>(new Set());
   const [leftSelected, setLeftSelected] = useState<number | null>(null);
   const [rightSelected, setRightSelected] = useState<number | null>(null);
@@ -1631,8 +1550,6 @@ function LessonView({
       setCorrectCount((current) => current + 1);
       setResult("correct");
     } else {
-      setLessonEnergy((current) => Math.max(0, current - 1));
-      onLoseEnergy();
       setResult("wrong");
     }
   };
@@ -1662,10 +1579,6 @@ function LessonView({
 
   if (finished) {
     const passed = gradedCount === 0 || correctCount / gradedCount >= 0.6;
-    const earned =
-      passed
-        ? correctCount * 10 + (correctCount === gradedCount ? 15 : 0)
-        : 0;
     return (
       <main className="completion-screen">
         <div className="completion-content">
@@ -1673,27 +1586,33 @@ function LessonView({
             pose={passed ? "celebrate" : "encourage"}
             alt={
               passed
-                ? "Mayu celebrating the completed lesson"
+                ? "Mayu celebrating the completed situation practice"
                 : "Mayu encouraging another gentle try"
             }
             className="completion-mayu"
           />
-          <span className="overline">{passed ? "LESSON COMPLETE" : "READY TO REVISIT"}</span>
-          <h1>{passed ? "Those phrases are yours now." : "One more pass will help."}</h1>
+          <span className="overline">
+            {passed ? "READY TO USE" : "ONE QUICK REPLAY"}
+          </span>
+          <h1>
+            {passed
+              ? "You can use these phrases now."
+              : "Run these phrases once more."}
+          </h1>
           <p>
             {passed
-              ? `You practiced ${lesson.words.length} useful ${
+              ? `${lesson.outcome} You practiced ${lesson.words.length} useful ${
                   lesson.words.length === 1 ? "phrase" : "phrases"
-                } from ${lesson.title.toLowerCase()}.`
-              : "Take the lesson again slowly. The answers stay visible after each check."}
+                }.`
+              : "Run through the situation again slowly. The answers stay visible after each check."}
           </p>
           <div className="completion-stats">
             <span>
-              <small>PHRASES MET</small>
+              <small>PHRASES PRACTICED</small>
               <strong>{lesson.words.length}</strong>
             </span>
             <span>
-              <small>ACCURACY</small>
+              <small>CHECKS RIGHT</small>
               <strong>
                 {gradedCount
                   ? Math.round((correctCount / gradedCount) * 100)
@@ -1704,17 +1623,14 @@ function LessonView({
           </div>
           <div className="completion-actions">
             <button className="primary-button" onClick={passed ? onExit : restart}>
-              {passed ? "Back to course" : "Practice again"}
+              {passed ? "Back to situations" : "Run it again"}
             </button>
             {passed ? (
               <button className="secondary-button" onClick={restart}>
-                Practice again
+                Run it again
               </button>
             ) : null}
           </div>
-          <span className="sr-only" aria-live="polite">
-            {passed ? `${earned} XP earned.` : "No XP earned yet."}
-          </span>
         </div>
       </main>
     );
@@ -1744,16 +1660,20 @@ function LessonView({
   }
 
   return (
-    <div className="lesson-shell" data-energy-remaining={lessonEnergy}>
+    <div className="lesson-shell">
       <header className="lesson-header">
-        <button onClick={onExit} className="icon-button" aria-label="Leave lesson">
+        <button
+          onClick={onExit}
+          className="icon-button"
+          aria-label="Leave practice"
+        >
           <Icon name="close" />
         </button>
         <ProgressBar
           value={stepIndex + 1}
           max={steps.length}
           className="lesson-progress"
-          label="Lesson progress"
+          label="Situation practice progress"
         />
         <span className="pixel-meta">
           {stepIndex + 1}/{steps.length}
@@ -1769,12 +1689,10 @@ function LessonView({
           <section className="introduce-exercise">
             <MayuImage
               pose="teach"
-              alt="Mayu introducing a Telugu word"
+              alt="Mayu introducing a Telugu phrase"
               className="lesson-mayu"
             />
-            <span className="overline">
-              NEW {step.word.telugu.trim().includes(" ") ? "PHRASE" : "WORD"}
-            </span>
+            <span className="overline">USEFUL PHRASE</span>
             <div className="lesson-word-card">
               <button
                 className="audio-circle-button"
@@ -1788,7 +1706,7 @@ function LessonView({
               <strong>{step.word.english}</strong>
             </div>
             <p className="lesson-guidance">
-              Hear it, then say it once at your own pace.
+              Hear it, then say it once as if you needed it right now.
             </p>
           </section>
         ) : null}
@@ -1866,8 +1784,8 @@ function LessonView({
         {step.type === "matching" ? (
           <section className="matching-exercise">
             <span className="overline">MAKE THREE PAIRS</span>
-            <h1>Match each word to its meaning.</h1>
-            <p>Choose one Telugu word, then the English meaning beside it.</p>
+            <h1>Match each phrase to its meaning.</h1>
+            <p>Choose one Telugu phrase, then the English meaning beside it.</p>
             <MatchingExercise
               words={step.words}
               matched={matched}
@@ -1953,7 +1871,7 @@ function LessonView({
             ) : (
               <span>
                 {step.type === "introduce"
-                  ? "Meet the word before moving on."
+                  ? "Say it once before moving on."
                   : step.type === "matching"
                     ? matchingDone
                       ? "All three pairs are together."
@@ -1987,7 +1905,7 @@ function LessonView({
             </button>
           ) : (
             <button className="primary-button" onClick={advance}>
-              {isLast ? "Finish lesson" : "Continue"}
+              {isLast ? "Finish practice" : "Continue"}
               <Icon name="arrow" />
             </button>
           )}
@@ -1998,13 +1916,11 @@ function LessonView({
 }
 
 function Onboarding({
-  selectedTrack,
-  onTrack,
-  onDone,
+  onSkip,
+  onStart,
 }: {
-  selectedTrack: TrackId;
-  onTrack: (track: TrackId) => void;
-  onDone: () => void;
+  onSkip: () => void;
+  onStart: () => void;
 }) {
   const [step, setStep] = useState(0);
   const dialogRef = useRef<HTMLElement>(null);
@@ -2030,42 +1946,26 @@ function Onboarding({
         />
         {step === 0 ? (
           <>
-            <span className="overline">పలుకు · SPEAK</span>
-            <h1 id="onboarding-title">Telugu can feel close to home.</h1>
+            <span className="overline">PRACTICAL TELUGU, FAST</span>
+            <h1 id="onboarding-title">Say something useful today.</h1>
             <p>
-              Meet five useful words each day, or follow a course with Mayu beside you.
+              Practice the Telugu you’ll use with family, at the table, while
+              visiting, and when you need help.
             </p>
           </>
         ) : (
           <>
-            <span className="overline">CHOOSE A START</span>
-            <h1 id="onboarding-title">What would help first?</h1>
-            <p>You can change courses anytime from Learn.</p>
-            <div className="onboarding-choices">
-              <button
-                className={selectedTrack === "essentials" ? "choice-active" : ""}
-                onClick={() => onTrack("essentials")}
-                aria-pressed={selectedTrack === "essentials"}
-              >
-                <span className="pixel-meta">SHORT COURSE</span>
-                <strong>Useful Telugu now</strong>
-                <small>Greetings, family, food, and help.</small>
-              </button>
-              <button
-                className={selectedTrack === "foundations" ? "choice-active" : ""}
-                onClick={() => onTrack("foundations")}
-                aria-pressed={selectedTrack === "foundations"}
-              >
-                <span className="pixel-meta">FULL COURSE</span>
-                <strong>From beginning</strong>
-                <small>Vocabulary, sentences, sounds, and script.</small>
-              </button>
-            </div>
+            <span className="overline">YOUR QUICK START</span>
+            <h1 id="onboarding-title">Your first five phrases are ready.</h1>
+            <p>
+              Hear each phrase, read the pronunciation, and mark what already
+              feels familiar.
+            </p>
           </>
         )}
         <div className="onboarding-actions">
-          <button className="text-button" onClick={onDone}>
-            Skip
+          <button className="text-button" onClick={onSkip}>
+            Explore first
           </button>
           <span className="step-dots" aria-label={`Step ${step + 1} of 2`}>
             <i className={step === 0 ? "dot-active" : ""} />
@@ -2073,9 +1973,9 @@ function Onboarding({
           </span>
           <button
             className="primary-button"
-            onClick={step === 0 ? () => setStep(1) : onDone}
+            onClick={step === 0 ? () => setStep(1) : onStart}
           >
-            {step === 0 ? "Continue" : "Begin"}
+            {step === 0 ? "See the quick start" : "Start quick practice"}
             <Icon name="arrow" />
           </button>
         </div>
@@ -2087,14 +1987,70 @@ function Onboarding({
 function MissingLesson({ onExit }: { onExit: () => void }) {
   return (
     <main className="missing-lesson">
-      <span className="overline">LESSON NOT FOUND</span>
-      <h1>That lesson is not on this path.</h1>
-      <p>Return to Learn and choose any open topic.</p>
+      <span className="overline">PRACTICE NOT FOUND</span>
+      <h1>That situation is not available.</h1>
+      <p>Return to Situations and choose any practical moment.</p>
       <button className="primary-button" onClick={onExit}>
-        Back to Learn
+        Back to situations
       </button>
     </main>
   );
+}
+
+function completedFrom(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(value.filter((item): item is string => typeof item === "string")),
+  );
+}
+
+function confidenceFrom(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, "learning" | "ready"] =>
+        entry[1] === "learning" || entry[1] === "ready",
+    ),
+  );
+}
+
+function parseCurrentProgress(value: unknown): SavedState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return {
+    completed: completedFrom(candidate.completed),
+    confidence: confidenceFrom(candidate.confidence),
+  };
+}
+
+function parseLegacyProgress(value: unknown): SavedState | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  return {
+    completed: completedFrom(candidate.completed),
+    confidence: {},
+  };
+}
+
+function parsePreferences(value: unknown): Preferences {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return defaultPreferences;
+  }
+  const candidate = value as Record<string, unknown>;
+  return {
+    showRomanization:
+      typeof candidate.showRomanization === "boolean"
+        ? candidate.showRomanization
+        : defaultPreferences.showRomanization,
+    teluguFirst:
+      typeof candidate.teluguFirst === "boolean"
+        ? candidate.teluguFirst
+        : defaultPreferences.teluguFirst,
+    autoplay:
+      typeof candidate.autoplay === "boolean"
+        ? candidate.autoplay
+        : defaultPreferences.autoplay,
+  };
 }
 
 export default function PalukuApp({
@@ -2116,25 +2072,32 @@ export default function PalukuApp({
 
   useEffect(() => {
     const restoreTimer = window.setTimeout(() => {
+      let restoredProgress: SavedState | null = null;
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (raw) {
-          setState({
-            ...defaultState,
-            ...(JSON.parse(raw) as Partial<SavedState>),
-          });
+          restoredProgress = parseCurrentProgress(JSON.parse(raw));
         }
       } catch {
-        setState(defaultState);
+        restoredProgress = null;
       }
+
+      if (!restoredProgress) {
+        try {
+          const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+          if (legacyRaw) {
+            restoredProgress = parseLegacyProgress(JSON.parse(legacyRaw));
+          }
+        } catch {
+          restoredProgress = null;
+        }
+      }
+      setState(restoredProgress ?? defaultState);
 
       try {
         const rawPreferences = window.localStorage.getItem(PREFERENCES_KEY);
         if (rawPreferences) {
-          setPreferences({
-            ...defaultPreferences,
-            ...(JSON.parse(rawPreferences) as Partial<Preferences>),
-          });
+          setPreferences(parsePreferences(JSON.parse(rawPreferences)));
         }
       } catch {
         setPreferences(defaultPreferences);
@@ -2191,43 +2154,17 @@ export default function PalukuApp({
   }, [hydrated, savedWords]);
 
   useEffect(() => {
-    if (
-      !hydrated ||
-      !activeLesson ||
-      state.selectedTrack === activeLesson.track
-    ) {
-      return;
-    }
-    const trackTimer = window.setTimeout(() => {
-      setState((current) => ({
-        ...current,
-        selectedTrack: activeLesson.track,
-      }));
-    }, 0);
-    return () => window.clearTimeout(trackTimer);
-  }, [activeLesson, hydrated, state.selectedTrack]);
-
-  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   const startLesson = (lesson: Lesson) => {
-    const nextState = { ...state, selectedTrack: lesson.track };
-    setState(nextState);
-    if (hydrated) {
-      try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-      } catch {
-        // Navigation still works when storage is unavailable.
-      }
-    }
     router.push(`/lesson/${lesson.id}`);
     window.scrollTo({ top: 0 });
   };
 
-  const goToLearn = () => {
+  const goToSituations = () => {
     router.push("/learn");
     window.scrollTo({ top: 0 });
   };
@@ -2239,18 +2176,15 @@ export default function PalukuApp({
   ) => {
     const passed = graded === 0 || correct / graded >= 0.6;
     if (!passed) return;
-    const earned = correct * 10 + (correct === graded ? 15 : 0);
     setState((current) => ({
-      ...current,
-      xp: current.xp + earned,
-      streak: Math.max(1, current.streak),
       completed: current.completed.includes(lesson.id)
         ? current.completed
         : [...current.completed, lesson.id],
+      confidence: current.confidence,
     }));
   };
 
-  const closeOnboarding = () => {
+  const markOnboarded = () => {
     try {
       window.localStorage.setItem(ONBOARDED_KEY, "true");
     } catch {
@@ -2259,8 +2193,11 @@ export default function PalukuApp({
     setShowOnboarding(false);
   };
 
-  const selectOnboardingTrack = (selectedTrack: TrackId) =>
-    setState((current) => ({ ...current, selectedTrack }));
+  const startQuickFive = () => {
+    markOnboarded();
+    router.push("/words/daily");
+    window.scrollTo({ top: 0 });
+  };
 
   let content: React.ReactNode;
 
@@ -2269,34 +2206,33 @@ export default function PalukuApp({
       <LessonView
         key={`${activeLesson.id}-${hydrated ? "restored" : "initial"}`}
         lesson={activeLesson}
-        state={state}
-        onExit={goToLearn}
+        onExit={goToSituations}
         onComplete={completeLesson}
-        onLoseEnergy={() =>
-          setState((current) => ({
-            ...current,
-            energy: Math.max(0, current.energy - 1),
-          }))
-        }
         notify={setToast}
         preferences={preferences}
       />
     ) : (
-      <MissingLesson onExit={goToLearn} />
+      <MissingLesson onExit={goToSituations} />
     );
   } else if (screen === "daily") {
-    content = <DailySession preferences={preferences} notify={setToast} />;
-  } else if (screen === "learn") {
     content = (
-      <LearnView
+      <DailySession
         state={state}
         setState={setState}
+        preferences={preferences}
+        notify={setToast}
+      />
+    );
+  } else if (screen === "learn") {
+    content = (
+      <SituationsView
+        state={state}
         startLesson={startLesson}
       />
     );
   } else if (screen === "words") {
     content = (
-      <WordsView
+      <PhrasebookView
         preferences={preferences}
         savedWords={savedWords}
         setSavedWords={setSavedWords}
@@ -2306,7 +2242,6 @@ export default function PalukuApp({
   } else if (screen === "settings") {
     content = (
       <SettingsView
-        state={state}
         setState={setState}
         preferences={preferences}
         setPreferences={setPreferences}
@@ -2323,9 +2258,8 @@ export default function PalukuApp({
       screen !== "lesson" &&
       screen !== "daily" ? (
         <Onboarding
-          selectedTrack={state.selectedTrack}
-          onTrack={selectOnboardingTrack}
-          onDone={closeOnboarding}
+          onSkip={markOnboarded}
+          onStart={startQuickFive}
         />
       ) : (
         content

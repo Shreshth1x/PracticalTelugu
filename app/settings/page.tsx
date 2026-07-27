@@ -4,7 +4,7 @@ import PalukuApp from "../PalukuApp";
 export const metadata: Metadata = {
   title: "Settings · PalukuLingo",
   description:
-    "Choose how Telugu script, pronunciation, audio, and local progress behave.",
+    "Choose pronunciation, audio, and quick-practice preferences.",
 };
 
 export default function SettingsPage() {

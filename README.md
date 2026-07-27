@@ -1,14 +1,13 @@
 # PalukuLingo
 
-PalukuLingo is a practical Telugu-learning app built around two ways in:
+PalukuLingo is a fast, phrase-first Telugu companion for people who want to
+participate in real conversations. It skips alphabet units, grammar detours,
+and locked curricula in favor of short, open practice for family visits,
+meals, errands, travel, and moments when someone needs help.
 
-- **The essentials** — a short crash course for greetings, names, family,
-  food, and getting unstuck.
-- **From the beginning** — a friendly lesson path for learners who want the
-  language step by step.
-
-Mayu, an original Indian peacock mascot, guides both paths. Progress, XP,
-streaks, energy, and lesson completion are stored locally in the browser.
+Mayu, an original Indian peacock mascot, guides each practical situation.
+Completed situations and phrase confidence are stored locally in the browser;
+no account or AI service is required.
 
 ## Run locally
 
@@ -21,11 +20,11 @@ npm run dev
 
 The development server prints the local URL when it starts.
 
-## Curriculum and family audio
+## Practical situations and family audio
 
-Lesson content lives in `app/course-data.ts`. Every vocabulary item supports an
+Situation content lives in `app/course-data.ts`. Every phrase supports an
 optional `audioSrc`, so family-recorded pronunciation clips can be added without
-changing the lesson engine.
+changing the practice engine.
 
 ## Verification
 

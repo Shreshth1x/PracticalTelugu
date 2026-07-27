@@ -31,15 +31,15 @@ async function render(pathname = "/") {
 }
 
 const routeCases = [
-  ["/", /A little Telugu for today\./],
-  ["/learn", /Learn in the order that fits you\./],
-  ["/words", /Words worth keeping close\./],
+  ["/", /Useful Telugu in four minutes\./],
+  ["/learn", /What do you need to say\?/],
+  ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
-  ["/settings", /Make the words easier to meet\./],
+  ["/settings", /Set up Telugu your way\./],
   ["/lesson/hello-goodbye", /class="introduce-exercise"/],
 ];
 
-test("server-renders every V2 route with a unique primary heading", async () => {
+test("server-renders every practical route with a unique primary heading", async () => {
   for (const [pathname, heading] of routeCases) {
     const response = await render(pathname);
     assert.equal(response.status, 200, pathname);
@@ -77,42 +77,48 @@ test("unknown lesson URLs return a real not-found response", async () => {
   assert.match(html, /href="\/"/);
 });
 
-test("keeps the V1 progress contract while adding the V2 routes", async () => {
-  const [app, courseData, layout, css, packageJson] = await Promise.all([
+test("keeps prior progress while enforcing the practical Telugu product contract", async () => {
+  const [app, courseData, layout, css, packageJson, readme] = await Promise.all([
     readFile(new URL("../app/PalukuApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/course-data.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
   ]);
 
+  assert.match(app, /palukulu\.progress\.v2/);
   assert.match(app, /palukulu\.progress\.v1/);
   assert.match(app, /palukulu\.onboarded\.v1/);
-  assert.match(app, /\.\.\.defaultState,[\s\S]*JSON\.parse\(raw\)/);
+  assert.match(app, /LEGACY_STORAGE_KEY/);
   assert.match(
     app,
-    /getItem\(STORAGE_KEY\)[\s\S]*catch \{[\s\S]*setState\(defaultState\);[\s\S]*getItem\(PREFERENCES_KEY\)/,
+    /getItem\(STORAGE_KEY\)[\s\S]*getItem\(LEGACY_STORAGE_KEY\)/,
   );
+  assert.match(app, /completed: completedFrom\(candidate\.completed\)/);
+  assert.match(app, /confidence: confidenceFrom\(candidate\.confidence\)/);
   assert.match(app, /if \(!hydrated\) return;/);
-  assert.match(app, /selectedTrack: lesson\.track/);
   assert.match(app, /correct \/ graded >= 0\.6/);
-  assert.match(
-    app,
-    /correct \* 10 \+ \(correct === graded \? 15 : 0\)/,
-  );
   assert.match(
     app,
     /current\.completed\.includes\(lesson\.id\)[\s\S]*\[\.\.\.current\.completed, lesson\.id\]/,
   );
-  assert.match(app, /setLessonEnergy\(\(current\) => Math\.max\(0, current - 1\)\)/);
-  assert.match(
-    app,
-    /energy: Math\.max\(0, current\.energy - 1\)/,
-  );
+  assert.match(app, /findDailyWord\("hello-goodbye"/);
   assert.match(app, /type: "introduce"/);
   assert.match(app, /type: "matching"/);
+  assert.match(courseData, /SituationGroup/);
+  assert.match(courseData, /situationGroups/);
+  assert.match(courseData, /quick-start/);
+  assert.match(courseData, /minutes: 4/);
   assert.match(courseData, /essentials-milestone/);
   assert.match(courseData, /building-blocks-milestone/);
+
+  const productCopy = `${app}\n${courseData}\n${layout}\n${readme}`;
+  assert.doesNotMatch(
+    productCopy,
+    /from beginning|full course|telugu script & sounds|foundationLessons|selectedTrack/i,
+  );
+  assert.doesNotMatch(app, /\b(?:xp|streak|energy|dailyGoal)\b/i);
 
   const exactDisplayFontEmbed =
     "https://fonts.googleapis.com/css2?family=Capriola&family=Geist+Pixel&family=Turret+Road:wght@200;300;400;500;700;800&display=swap";
@@ -134,6 +140,17 @@ test("keeps the V1 progress contract while adding the V2 routes", async () => {
   assert.match(app, /maya-peacock\.webp/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", templateRoot)));
+});
+
+test("prior lesson links remain available as open practical situations", async () => {
+  for (const pathname of [
+    "/lesson/i-you-we",
+    "/lesson/building-blocks-milestone",
+  ]) {
+    const response = await render(pathname);
+    assert.equal(response.status, 200, pathname);
+    assert.match(await response.text(), /class="introduce-exercise"/, pathname);
+  }
 });
 
 test("route modules select the intended screen without manual history routing", async () => {
