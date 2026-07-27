@@ -26,13 +26,13 @@ export async function generateMetadata(): Promise<Metadata> {
       "Get up to speed with the Telugu you’ll use with family, at the table, while visiting, and when you need help.",
     icons: {
       icon: {
-        url: "/practicaltelugu-favicon-v3.png",
+        url: "/practicaltelugu-favicon-v3.png?v=approved-1",
         type: "image/png",
         sizes: "64x64",
       },
-      shortcut: "/practicaltelugu-favicon-v3.png",
+      shortcut: "/practicaltelugu-favicon-v3.png?v=approved-1",
       apple: {
-        url: "/practicaltelugu-apple-icon-v3.png",
+        url: "/practicaltelugu-apple-icon-v3.png?v=approved-1",
         type: "image/png",
         sizes: "180x180",
       },

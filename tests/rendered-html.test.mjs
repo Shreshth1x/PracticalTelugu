@@ -73,8 +73,11 @@ test("uses the approved peacock mark across brand surfaces", async () => {
   const response = await render("/");
   const html = await response.text();
 
-  assert.match(html, /practicaltelugu-peacock-mark-v3\.png/);
-  assert.match(html, /practicaltelugu-favicon-v3\.png/);
+  assert.match(
+    html,
+    /practicaltelugu-peacock-mark-v3\.png\?v=approved-1/,
+  );
+  assert.match(html, /practicaltelugu-favicon-v3\.png\?v=approved-1/);
   assert.match(html, /og\.png\?v=user-logo-3/);
   assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
 });
