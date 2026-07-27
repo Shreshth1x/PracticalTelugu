@@ -75,7 +75,7 @@ test("uses the fused peacock Telugu mark across brand surfaces", async () => {
 
   assert.match(html, /practicaltelugu-peacock-mark-v2\.png/);
   assert.match(html, /practicaltelugu-favicon-v2\.png/);
-  assert.match(html, /og-peacock-v2\.png/);
+  assert.match(html, /og\.png\?v=peacock-2/);
   assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
 });
 
@@ -192,7 +192,7 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   await access(
     new URL("public/practicaltelugu-apple-icon-v2.png", templateRoot),
   );
-  await access(new URL("public/og-peacock-v2.png", templateRoot));
+  await access(new URL("public/og.png", templateRoot));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   await assert.rejects(access(new URL("../app/_sites-preview", templateRoot)));
 });
