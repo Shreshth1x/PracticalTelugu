@@ -463,7 +463,7 @@ function Wordmark() {
     <span className="wordmark">
       <span className="wordmark-mark" aria-hidden="true">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/practicaltelugu-peacock-mark-v2.png" alt="" />
+        <img src="/practicaltelugu-peacock-mark-v3.png" alt="" />
       </span>
       <span className="wordmark-name">
         practical<span>telugu</span>

@@ -14,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
-  const socialImage = `${origin}/og.png?v=peacock-2`;
+  const socialImage = `${origin}/og.png?v=user-logo-3`;
 
   return {
     metadataBase: new URL(origin),
@@ -26,13 +26,13 @@ export async function generateMetadata(): Promise<Metadata> {
       "Get up to speed with the Telugu you’ll use with family, at the table, while visiting, and when you need help.",
     icons: {
       icon: {
-        url: "/practicaltelugu-favicon-v2.png",
+        url: "/practicaltelugu-favicon-v3.png",
         type: "image/png",
         sizes: "64x64",
       },
-      shortcut: "/practicaltelugu-favicon-v2.png",
+      shortcut: "/practicaltelugu-favicon-v3.png",
       apple: {
-        url: "/practicaltelugu-apple-icon-v2.png",
+        url: "/practicaltelugu-apple-icon-v3.png",
         type: "image/png",
         sizes: "180x180",
       },
@@ -48,7 +48,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: socialImage,
           width: 1200,
           height: 630,
-          alt: "PracticalTelugu with a peacock-shaped Telugu letter logo",
+          alt: "PracticalTelugu with its flowing blue peacock logo",
         },
       ],
     },

@@ -139,7 +139,7 @@ svg {
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
   color: var(--ink-strong);
   font-family: var(--font-display);
   font-size: 18px;
@@ -152,8 +152,8 @@ svg {
 
 .wordmark-mark {
   display: block;
-  width: 42px;
-  height: 42px;
+  width: 48px;
+  height: 48px;
   flex: 0 0 auto;
   transform: translateY(-1px);
 }
@@ -2417,13 +2417,13 @@ svg {
 
 @media (max-width: 440px) {
   .wordmark {
-    gap: 5px;
+    gap: 4px;
     font-size: 16px;
   }
 
   .wordmark-mark {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
   }
 
   .home-actions {

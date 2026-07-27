@@ -69,13 +69,13 @@ test("focused word and lesson sessions omit global navigation", async () => {
   }
 });
 
-test("uses the fused peacock Telugu mark across brand surfaces", async () => {
+test("uses the approved peacock mark across brand surfaces", async () => {
   const response = await render("/");
   const html = await response.text();
 
-  assert.match(html, /practicaltelugu-peacock-mark-v2\.png/);
-  assert.match(html, /practicaltelugu-favicon-v2\.png/);
-  assert.match(html, /og\.png\?v=peacock-2/);
+  assert.match(html, /practicaltelugu-peacock-mark-v3\.png/);
+  assert.match(html, /practicaltelugu-favicon-v3\.png/);
+  assert.match(html, /og\.png\?v=user-logo-3/);
   assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
 });
 
@@ -184,13 +184,13 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   await access(new URL("public/mayu-guide-v2.webp", templateRoot));
   await access(new URL("public/mayu-success-v2.webp", templateRoot));
   await access(
-    new URL("public/practicaltelugu-peacock-mark-v2.png", templateRoot),
+    new URL("public/practicaltelugu-peacock-mark-v3.png", templateRoot),
   );
   await access(
-    new URL("public/practicaltelugu-favicon-v2.png", templateRoot),
+    new URL("public/practicaltelugu-favicon-v3.png", templateRoot),
   );
   await access(
-    new URL("public/practicaltelugu-apple-icon-v2.png", templateRoot),
+    new URL("public/practicaltelugu-apple-icon-v3.png", templateRoot),
   );
   await access(new URL("public/og.png", templateRoot));
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
