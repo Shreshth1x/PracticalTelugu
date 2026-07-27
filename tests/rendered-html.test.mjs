@@ -82,6 +82,36 @@ test("uses the approved peacock mark across brand surfaces", async () => {
   assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
 });
 
+test("keeps the home hero focused on one compact action cluster", async () => {
+  const response = await render("/");
+  const html = await response.text();
+  const actionsStart = html.indexOf('class="home-actions"');
+  const actionsEnd = html.indexOf("</div>", actionsStart);
+  const practiceIndex = html.indexOf("Practice five phrases", actionsStart);
+  const durationIndex = html.indexOf("About 4 minutes", actionsStart);
+  const situationIndex = html.indexOf("Choose a situation", actionsStart);
+
+  assert.doesNotMatch(
+    html,
+    /Five practical Telugu phrases for family visits/,
+  );
+  assert.ok(actionsStart >= 0, "home action cluster is present");
+  assert.ok(practiceIndex > actionsStart, "practice action begins the cluster");
+  assert.ok(durationIndex > practiceIndex, "duration follows the practice action");
+  assert.ok(
+    situationIndex > durationIndex,
+    "situation link follows the duration",
+  );
+  assert.ok(
+    situationIndex < actionsEnd,
+    "situation link stays inside the action cluster",
+  );
+  assert.ok(
+    html.indexOf('class="home-guide"', actionsEnd) > actionsEnd,
+    "hello guide immediately follows the hero",
+  );
+});
+
 test("teaches each phrase in English, pronunciation, Telugu order", async () => {
   for (const pathname of ["/words/daily", "/lesson/hello-goodbye"]) {
     const response = await render(pathname);

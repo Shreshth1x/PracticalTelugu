@@ -600,21 +600,15 @@ svg {
   text-wrap: balance;
 }
 
-.home-hero > p {
-  max-width: 640px;
-  margin: 23px 0 0;
-  color: var(--muted);
-  font-size: clamp(18px, 2.5vw, 21px);
-  line-height: 1.62;
-  text-wrap: pretty;
-}
-
 .home-actions {
   display: flex;
+  width: 100%;
+  max-width: 680px;
   align-items: center;
-  flex-direction: column;
-  gap: 11px;
-  margin-top: 32px;
+  flex-flow: row wrap;
+  justify-content: center;
+  gap: 12px 22px;
+  margin-top: 34px;
 }
 
 .home-actions .primary-button {
@@ -625,10 +619,12 @@ svg {
   color: var(--muted-light);
   font-size: 14px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.home-hero > .text-link {
-  margin-top: 24px;
+.home-actions .text-link {
+  white-space: nowrap;
 }
 
 .home-guide {
@@ -637,7 +633,7 @@ svg {
   min-height: 310px;
   grid-template-columns: minmax(0, 1fr) 380px;
   align-items: center;
-  margin-top: 76px;
+  margin-top: 48px;
   overflow: hidden;
   border: 1px solid #c8d7cd;
   border-top: 5px solid var(--saffron);
@@ -2147,7 +2143,6 @@ svg {
     font-size: clamp(43px, 13vw, 60px);
   }
 
-  .home-hero > p,
   .page-header p {
     font-size: 17px;
   }
@@ -2156,7 +2151,7 @@ svg {
     min-height: 460px;
     grid-template-columns: 1fr;
     align-items: start;
-    margin-top: 58px;
+    margin-top: 44px;
   }
 
   .home-guide-copy {
@@ -2415,6 +2410,28 @@ svg {
   }
 }
 
+@media (max-width: 560px) {
+  .home-actions {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 10px 18px;
+    margin-top: 28px;
+  }
+
+  .home-actions .primary-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .action-time {
+    justify-self: start;
+  }
+
+  .home-actions .text-link {
+    justify-self: end;
+  }
+}
+
 @media (max-width: 440px) {
   .wordmark {
     gap: 4px;
@@ -2424,14 +2441,6 @@ svg {
   .wordmark-mark {
     width: 40px;
     height: 40px;
-  }
-
-  .home-actions {
-    gap: 12px;
-  }
-
-  .home-actions .primary-button {
-    width: 100%;
   }
 
   .section-heading {

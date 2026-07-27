@@ -551,10 +551,6 @@ function TodayView({
       <main className="page home-page">
         <section className="home-hero" aria-labelledby="today-heading">
           <h1 id="today-heading">Learn Telugu you’ll actually use</h1>
-          <p>
-            Five practical Telugu phrases for family visits, meals, and the
-            moments when you need a little help.
-          </p>
           <div className="home-actions">
             <Link href="/words/daily" className="primary-button">
               {practicedDaily === dailyWords.length
@@ -566,11 +562,11 @@ function TodayView({
                 ? `${practicedDaily} of ${dailyWords.length} practiced`
                 : "About 4 minutes"}
             </span>
+            <Link href="/learn" className="text-link">
+              Choose a situation
+              <Icon name="arrow" />
+            </Link>
           </div>
-          <Link href="/learn" className="text-link">
-            Choose a situation
-            <Icon name="arrow" />
-          </Link>
         </section>
 
         <section className="home-guide" aria-labelledby="home-guide-title">
