@@ -615,11 +615,11 @@ test("keeps meaning, romanized Telugu, pronunciation, and script distinct", asyn
       `${pathname}: Telugu follows pronunciation`,
     );
     assert.ok(
-      html.indexOf("(HI)", pronunciationIndex) >
+      html.indexOf("(nuh-muh-SKAA-rum)", pronunciationIndex) >
         pronunciationIndex,
       `${pathname}: easy pronunciation is enclosed in parentheses`,
     );
-    assert.doesNotMatch(html, /\(haay\)/);
+    assert.doesNotMatch(html, /\(namaskaaram\)/);
   }
 });
 
@@ -697,7 +697,7 @@ test("every phrase has a separate curated speaking cue", () => {
   assert.equal(seenById.size, 49);
 });
 
-test("leads with everyday Telugu while preserving earlier progress keys", async () => {
+test("uses complete Telugu phrases while preserving earlier progress keys", async () => {
   const hello = findLesson("hello-goodbye")?.words[0];
   const thankYou = findLesson("please-thank-you")?.words[0];
   const water = findLesson("food-water")?.words[0];
@@ -705,9 +705,9 @@ test("leads with everyday Telugu while preserving earlier progress keys", async 
   assert.ok(hello);
   assert.ok(thankYou);
   assert.ok(water);
-  assert.equal(hello.telugu, "హాయ్");
+  assert.equal(hello.telugu, "నమస్కారం");
   assert.equal(phraseKey(hello), "నమస్కారం::hello");
-  assert.equal(thankYou.telugu, "థ్యాంక్స్");
+  assert.equal(thankYou.telugu, "ధన్యవాదాలు");
   assert.equal(phraseKey(thankYou), "ధన్యవాదాలు::thank you");
   assert.equal(water.telugu, "నీళ్లు ఇస్తారా?");
   assert.equal(
@@ -723,16 +723,45 @@ test("leads with everyday Telugu while preserving earlier progress keys", async 
 
   const response = await render("/lesson/hello-goodbye");
   const html = await response.text();
-  const everydayIndex = html.indexOf("హాయ్");
-  const registerIndex = html.indexOf("With elders or someone new");
+  const greetingIndex = html.indexOf(">నమస్కారం</span>");
+  const registerIndex = html.indexOf("Extra respectful");
   const respectfulIndex = html.indexOf("నమస్కారం అండి");
 
-  assert.ok(everydayIndex >= 0, "everyday greeting is taught first");
-  assert.ok(registerIndex > everydayIndex, "register guidance follows it");
+  assert.ok(greetingIndex >= 0, "the Telugu greeting is taught first");
+  assert.ok(registerIndex > greetingIndex, "register guidance follows it");
   assert.ok(
     respectfulIndex > registerIndex,
     "respectful greeting is clearly secondary",
   );
+});
+
+test("never presents a copied English pronunciation as Telugu", () => {
+  const copiedTelugu =
+    /హాయ్|థ్యాంక్స్|ప్లీజ్|సారీ|హ్యాపీ|బస్ స్టాప్|చేంజ్|డాక్టర్/;
+  const copiedRoman =
+    /\b(?:haay|thanks|please|saari|happi\w*|bus stop|change|doctor)\b/i;
+
+  for (const word of allLessons.flatMap((lesson) => lesson.words)) {
+    assert.doesNotMatch(word.telugu, copiedTelugu, `${word.id}: Telugu phrase`);
+    assert.doesNotMatch(
+      word.roman,
+      copiedRoman,
+      `${word.id}: romanized Telugu`,
+    );
+
+    for (const alternative of word.alternatives ?? []) {
+      assert.doesNotMatch(
+        alternative.telugu,
+        copiedTelugu,
+        `${word.id}: alternative Telugu phrase`,
+      );
+      assert.doesNotMatch(
+        alternative.roman,
+        copiedRoman,
+        `${word.id}: alternative romanized Telugu`,
+      );
+    }
+  }
 });
 
 test("migrates every phrasebook key from the previous course", () => {
