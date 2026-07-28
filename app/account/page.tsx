@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { AccountPage } from "./AccountPage";
 
 export const metadata: Metadata = {
@@ -8,5 +9,9 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
-  return <AccountPage />;
+  return (
+    <Suspense fallback={<main className="account-page" aria-busy="true" />}>
+      <AccountPage />
+    </Suspense>
+  );
 }
