@@ -330,7 +330,7 @@ test("keeps the permanent Gemini key on the server", async () => {
   assert.match(routeSource, /"Retry-After"/);
 });
 
-test("uses the approved peacock mark across brand surfaces", async () => {
+test("uses the approved peacock mark and Mayu favicon", async () => {
   const response = await render("/");
   const html = await response.text();
 
@@ -338,7 +338,9 @@ test("uses the approved peacock mark across brand surfaces", async () => {
     html,
     /practicaltelugu-peacock-mark-v3\.png\?v=approved-1/,
   );
-  assert.match(html, /practicaltelugu-favicon-v3\.png\?v=approved-1/);
+  assert.match(html, /practicaltelugu-mayu-favicon-32-v4\.png\?v=mayu-1/);
+  assert.match(html, /practicaltelugu-mayu-favicon-v4\.png\?v=mayu-1/);
+  assert.doesNotMatch(html, /practicaltelugu-favicon-v3\.png/);
   assert.match(html, /og\.png\?v=user-logo-3/);
   assert.doesNotMatch(html, /class="wordmark-mark"[^>]*>\s*తె\s*</);
 });
@@ -1374,7 +1376,10 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     new URL("public/practicaltelugu-peacock-mark-v3.png", templateRoot),
   );
   await access(
-    new URL("public/practicaltelugu-favicon-v3.png", templateRoot),
+    new URL("public/practicaltelugu-mayu-favicon-32-v4.png", templateRoot),
+  );
+  await access(
+    new URL("public/practicaltelugu-mayu-favicon-v4.png", templateRoot),
   );
   await access(
     new URL("public/practicaltelugu-apple-icon-v3.png", templateRoot),
