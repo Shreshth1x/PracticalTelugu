@@ -78,6 +78,10 @@ type LearningContextValue = {
 
 const LearningContext = createContext<LearningContextValue | null>(null);
 
+function registeredLearningUser(user: User | null | undefined) {
+  return user?.is_anonymous ? null : (user ?? null);
+}
+
 function cloneSnapshot(snapshot: LearningSnapshot): LearningSnapshot {
   return {
     state: {
@@ -238,18 +242,32 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
     let active = true;
-
-    supabase.auth.getSession().then(({ data }) => {
+    const authTimer = window.setTimeout(() => {
       if (!active) return;
-      setUser(data.session?.user ?? null);
       setAuthReady(true);
-    });
+    }, 8_000);
+
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        window.clearTimeout(authTimer);
+        setUser(registeredLearningUser(data.session?.user));
+        setAuthReady(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        window.clearTimeout(authTimer);
+        setUser(null);
+        setAuthReady(true);
+      });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!active) return;
-      const nextUser = session?.user ?? null;
+      window.clearTimeout(authTimer);
+      const nextUser = registeredLearningUser(session?.user);
       setUser((currentUser) =>
         currentUser?.id === nextUser?.id ? currentUser : nextUser,
       );
@@ -258,6 +276,7 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       active = false;
+      window.clearTimeout(authTimer);
       subscription.unsubscribe();
     };
   }, []);

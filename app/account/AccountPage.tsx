@@ -228,6 +228,9 @@ export function AccountPage() {
                   Try again
                 </button>
               ) : null}
+              <Link href="/recordings" className="secondary-button">
+                Open family recorder
+              </Link>
               <Link href={returnTo} className="primary-button">
                 Back to practice
               </Link>

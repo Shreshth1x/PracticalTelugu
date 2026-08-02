@@ -14,10 +14,13 @@ import {
   findLesson,
   practicePacks,
   practicalLessons,
+  resolveTeluguFormUsage,
   situationGroups,
+  teluguRelationshipGuidance,
   type Lesson,
   type SituationGroup,
   type TeluguAlternative,
+  type TeluguFormUsage,
   type TeluguWord,
 } from "./course-data";
 import {
@@ -101,6 +104,29 @@ function SpokenGuide({
   );
 }
 
+function FormUsageContext({
+  usage,
+  label,
+}: {
+  usage?: TeluguFormUsage;
+  label?: string;
+}) {
+  const resolved = resolveTeluguFormUsage(usage);
+
+  if (!resolved.showContext) return null;
+
+  return (
+    <span
+      className={`register-label register-context-${resolved.kind}`}
+      title={resolved.guidance}
+      aria-label={`${label ?? resolved.label}. ${resolved.guidance}`}
+      data-audience={resolved.audience}
+    >
+      {label ?? resolved.label}
+    </span>
+  );
+}
+
 function RegisterAlternatives({
   alternatives,
   notify,
@@ -114,18 +140,47 @@ function RegisterAlternatives({
 }) {
   if (!alternatives?.length) return null;
 
+  const hasListenerChoice = alternatives.some(
+    (alternative) => alternative.usage?.kind === "relationship",
+  );
+
   return (
     <section
       className={`register-alternatives ${className}`.trim()}
-      aria-label="Other useful ways to say this"
+      aria-label={
+        hasListenerChoice
+          ? "Forms for different listener relationships"
+          : "Other useful ways to say this"
+      }
     >
+      <span className="register-label">
+        {hasListenerChoice
+          ? "Choose for the person you’re speaking to"
+          : "Another useful form"}
+      </span>
+      {hasListenerChoice ? (
+        <p className="register-relationship-guidance">
+          {teluguRelationshipGuidance}
+        </p>
+      ) : null}
       {alternatives.map((alternative) => (
         <div
           className="register-alternative"
           key={`${alternative.label}:${alternative.telugu}`}
         >
           <div className="register-alternative-copy">
-            <span className="register-label">{alternative.label}</span>
+            {resolveTeluguFormUsage(alternative.usage).showContext ? (
+              <FormUsageContext
+                usage={alternative.usage}
+                label={
+                  alternative.usage?.kind === "relationship"
+                    ? undefined
+                    : alternative.label
+                }
+              />
+            ) : (
+              <span className="register-label">{alternative.label}</span>
+            )}
             <SpokenGuide
               word={alternative}
               showPronunciation={showPronunciation}
@@ -406,6 +461,7 @@ function ProgressBar({
 function PhraseStack({
   word,
   showPronunciation = true,
+  showUsageContext,
   size = "row",
   headingAs = "strong",
   headingId,
@@ -413,9 +469,10 @@ function PhraseStack({
 }: {
   word: Pick<
     TeluguWord,
-    "english" | "roman" | "pronunciation" | "telugu"
+    "english" | "roman" | "pronunciation" | "telugu" | "usage"
   >;
   showPronunciation?: boolean;
+  showUsageContext?: boolean;
   size?: "row" | "card" | "hero" | "lesson" | "recap" | "feedback";
   headingAs?: "h1" | "h2" | "h3" | "strong";
   headingId?: string;
@@ -424,12 +481,17 @@ function PhraseStack({
   const Heading = headingAs;
   const english =
     word.english.charAt(0).toLocaleUpperCase() + word.english.slice(1);
+  const shouldShowUsageContext =
+    showUsageContext ?? resolveTeluguFormUsage(word.usage).showContext;
 
   return (
     <div className={`phrase-stack phrase-${size} ${className}`.trim()}>
       <Heading id={headingId} className="phrase-english">
         {english}
       </Heading>
+      {shouldShowUsageContext ? (
+        <FormUsageContext usage={word.usage} />
+      ) : null}
       <SpokenGuide
         word={word}
         showPronunciation={showPronunciation}
@@ -1999,6 +2061,7 @@ function LessonView({
                   roman: step.word.roman,
                   pronunciation: step.word.pronunciation,
                   telugu: step.word.telugu,
+                  usage: step.word.usage,
                 }}
                 showPronunciation={preferences.showPronunciation}
                 size="card"

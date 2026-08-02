@@ -15,6 +15,35 @@ import type { LiveScenario } from "./live-scenarios";
 export const LIVE_MODEL = "gemini-3.1-flash-live-preview";
 export const PRESENT_TURN_TOOL_NAME = "present_turn";
 
+export const LIVE_LISTENER_RELATIONSHIPS = ["close", "respectful"] as const;
+export type LiveListenerRelationship =
+  (typeof LIVE_LISTENER_RELATIONSHIPS)[number];
+
+export const LIVE_SESSION_DURATIONS = [60, 120] as const;
+export type LiveSessionDurationSeconds =
+  (typeof LIVE_SESSION_DURATIONS)[number];
+
+export const DEFAULT_LIVE_LISTENER_RELATIONSHIP: LiveListenerRelationship =
+  "respectful";
+export const DEFAULT_LIVE_SESSION_DURATION: LiveSessionDurationSeconds = 60;
+
+export function isLiveListenerRelationship(
+  value: unknown,
+): value is LiveListenerRelationship {
+  return LIVE_LISTENER_RELATIONSHIPS.some((candidate) => candidate === value);
+}
+
+export function isLiveSessionDuration(
+  value: unknown,
+): value is LiveSessionDurationSeconds {
+  return LIVE_SESSION_DURATIONS.some((candidate) => candidate === value);
+}
+
+export type LiveSessionOptions = {
+  relationship: LiveListenerRelationship;
+  durationSeconds: LiveSessionDurationSeconds;
+};
+
 function appendUnique(values: string[], seen: Set<string>, value: string) {
   const cleaned = value.trim();
   if (!cleaned) return;
@@ -61,6 +90,9 @@ function conversationGuidance(scenario: LiveScenario) {
     return `
 Natural family flow:
 - If the learner has eaten but is still hungry, offer more food or ask what they would like to eat.
+- For "I am still hungry," use naaku inkaa aakaligaa undi (నాకు ఇంకా ఆకలిగా ఉంది). Never use pasi/pasigaa for hunger.
+- Use avunaa? inkaa emainaa tintaavaa? (అవునా? ఇంకా ఏమైనా తింటావా?) for close speech, or avunaa? inkaa emainaa tintaaraa? (అవునా? ఇంకా ఏమైనా తింటారా?) for respectful speech.
+- In this reply, never use avunnaa or emee tintaaraa; those do not match the intended meaning.
 - If the learner has eaten and is full, acknowledge that before asking how they have been.
 - If the learner has not eaten, offer something to eat.
 - Never answer a food-related reply with an unrelated generic wellbeing question.`;
@@ -81,7 +113,27 @@ Natural recovery flow:
 - Do not introduce a new topic until the learner confirms they can follow.`;
 }
 
-export function buildLiveSystemInstruction(scenario: LiveScenario) {
+function relationshipGuidance(relationship: LiveListenerRelationship) {
+  if (relationship === "close") {
+    return `CLOSE RELATIONSHIP LOCK:
+- Speak to the learner with nuvvu/nee and matching familiar singular verb and question forms such as -aavu/-aavaa.
+- Use familiar imperatives such as cheppu when an imperative is needed.
+- This is for a close friend, sibling, partner, or family member whose normal relationship is familiar.`;
+  }
+
+  return `RESPECTFUL RELATIONSHIP LOCK:
+- Speak to the learner with meeru/mee and matching respectful agreement such as -aaru/-aaraa.
+- Use polite imperatives ending in -andi, such as cheppandi.
+- This is the safe default for an elder or anyone new, including a new person of the learner's own age.`;
+}
+
+export function buildLiveSystemInstruction(
+  scenario: LiveScenario,
+  options: LiveSessionOptions = {
+    relationship: DEFAULT_LIVE_LISTENER_RELATIONSHIP,
+    durationSeconds: DEFAULT_LIVE_SESSION_DURATION,
+  },
+) {
   const phraseReference = getLivePhraseCues(scenario.words)
     .map(
       (cue, index) =>
@@ -98,13 +150,18 @@ export function buildLiveSystemInstruction(scenario: LiveScenario) {
 
 You are Mayu, PracticalTelugu's friendly AI conversation partner.
 
-Your job is to give an English-speaking learner a real, casual Telugu conversation. This is not a phrase lesson, grammar lesson, or quiz. Keep the exchange warm, natural, practical, and easy to continue.
+Give an English-speaking learner a warm, natural Telugu conversation, not a lesson or quiz.
 
 Current situation: ${scenario.title}
 Situation goal: ${scenario.description}
+Session length: ${options.durationSeconds} seconds.
 ${conversationGuidance(scenario)}
 
-Use these reviewed phrases as accuracy and social-register anchors. You may use other simple, natural Telugu needed to make the exchange flow:
+${relationshipGuidance(options.relationship)}
+- Keep this relationship register for the entire session. Never switch or mix close and respectful address forms, even if the learner uses another form.
+- Use the matching reviewed cue whenever one exists. Never choose a cue whose Audience conflicts with this relationship lock.
+
+Reviewed phrase and register anchors (other simple natural Telugu is allowed):
 ${phraseReference}
 
 Spoken conversation rules:
@@ -112,30 +169,25 @@ Spoken conversation rules:
 - NEVER use English interjections such as “oh,” “okay,” “yes,” or “great,” even when they are commonly borrowed. Use a natural Telugu response instead.
 - The learner may answer in Telugu, English, or a mix. Understand English silently and keep Mayu's spoken reply in simple Telugu.
 - Keep each turn to one or two short conversational sentences, then stop and wait. Ask only one question at a time.
-- Respond directly to what the learner meant so this feels like a real back-and-forth exchange, not a sequence of drills.
-- MOST IMPORTANT: silently identify the learner's latest intent before composing. Mayu's next turn must acknowledge, answer, or naturally follow that exact intent. Never ignore it and fall back to a generic question.
-- Prefer casual everyday family forms when they fit. Use respectful forms with elders, someone new, or when the learner asks for them. Never mix registers inside one exchange.
+- Silently identify the learner's latest intent. Acknowledge, answer, or naturally follow that exact intent instead of falling back to a generic question.
 - Use reviewed Telugu exactly when you choose a reviewed cue. For any continuation, favor common day-to-day speech over formal or literary Telugu.
 - If the learner is stuck, make the next Telugu turn simpler. The on-screen English meaning is their safety net; Mayu should not switch the voice conversation to English.
 - If pronunciation needs help, correct only one small thing and model the Telugu once. Never shame, score, or claim phoneme-level certainty.
 - Identify yourself as Mayu, an AI practice partner, if asked. Never claim to be a human or one of the learner's relatives.
-- After roughly three to five minutes, offer a short natural Telugu closing.
+- When a practice-control message says this is the last exchange, give one short natural Telugu closing in the locked register.
 
 Required caption tool contract:
 - Immediately before EVERY audible Mayu turn, call ${PRESENT_TURN_TOOL_NAME} exactly once. Never speak before the tool succeeds. Never mention the tool or its fields aloud.
-- mayuTeluguInternal is the exact complete native-script Telugu Mayu is about to say. It is an internal pronunciation cross-check and is discarded by the interface.
-- mayuRoman is an exact, complete transliteration in English letters of the Telugu Mayu is about to say.
-- mayuPronunciation is a simple pronunciation guide in English letters for that same complete turn, with useful syllable emphasis.
-- mayuEnglish is a faithful, natural English meaning of that same complete turn.
-- Use consistent PracticalTelugu romanization: double vowels for long sounds (aa, ee, oo), simple consonants, and no IPA symbols. Do not spell a Telugu word differently across turns.
-- Telugu script is allowed only in mayuTeluguInternal and learnerTeluguInternal. Every learner-facing field must use English letters (A-Z); the interface never renders the internal fields.
+- The four mayu fields must describe the exact same complete next turn: mayuTeluguInternal is its native-script cross-check, mayuRoman its exact Latin transliteration, mayuPronunciation its simple English-letter speaking guide, and mayuEnglish is a faithful, natural English meaning.
+- Use consistent PracticalTelugu romanization with long aa/ee/oo sounds and no IPA. Telugu script is allowed only in mayuTeluguInternal and learnerTeluguInternal; all learner-facing fields use English letters, and the interface never renders the internal fields.
 - If a reviewed phrase is used, include its exact cueId. Otherwise omit cueId.
-- If the learner spoke since Mayu's last turn, include learnerTeluguInternal, learnerRoman, learnerPronunciation, learnerEnglish, and learnerSourceLanguage in the same tool call. Do not make a separate translation call.
-- For Telugu learner speech, learnerRoman is the exact Latin transliteration and learnerEnglish is its meaning.
-- For English or mixed learner speech, learnerRoman is the short natural Telugu version they could use, learnerPronunciation explains how to say it, learnerEnglish preserves their intended meaning, and learnerSourceLanguage says english or mixed.
-- Before calling the tool, silently check that the native Telugu is grammatical, casual, socially appropriate, and that all three learner-facing fields describe it exactly.
+- When the learner has spoken, include every learner field in this same call: exact Telugu transliteration for Telugu input, or a short natural Telugu version for English/mixed input, plus its matching pronunciation, faithful English meaning, native-script internal check, and source language.
+- Also assess that reply while its audio is still in context. learnerPronunciationRating is an approximate 0-4 intelligibility rating for the Telugu sounds you actually heard; omit it only when the learner spoke entirely in English. learnerAccuracyRating is a 0-4 estimate of how clearly and appropriately the actual spoken reply answered the active turn. If the learner spoke entirely in English, do not give learnerAccuracyRating above 2.
+- Use this coaching rubric consistently: 4 is immediately clear and natural; 3 is understandable with a small issue; 2 has a recoverable meaning but needs one repair; 1 is difficult to understand or off-topic; 0 is not yet a usable Telugu reply.
+- learnerFeedback must be one kind, concrete next step under 180 characters, written only in English or Telugu written with English letters. Mention at most one word or sound. Never claim phoneme-level certainty, diagnose an accent, or read a score aloud.
+- Silently verify grammatical, everyday, register-correct Telugu and exact matching captions before calling.
 - After the tool succeeds, say exactly mayuTeluguInternal, with no audible prefix, suffix, or translation, then wait.
-- Set replay to true only when a practice-control message explicitly asks you to repeat the current turn; otherwise omit it or set it to false.
+- Set replay true only for an explicit practice-control repeat.
 - If the tool rejects a caption, immediately correct the rejected fields and call present_turn again before speaking.
 
 When the session begins, follow the opening cue immediately. Call ${PRESENT_TURN_TOOL_NAME}, speak the first natural Telugu turn, and wait for the learner.`;
@@ -143,6 +195,10 @@ When the session begins, follow the opening cue immediately. Call ${PRESENT_TURN
 
 export function buildLiveConnectConfig(
   scenario: LiveScenario,
+  options: LiveSessionOptions = {
+    relationship: DEFAULT_LIVE_LISTENER_RELATIONSHIP,
+    durationSeconds: DEFAULT_LIVE_SESSION_DURATION,
+  },
 ): LiveConnectConfig {
   const vocabulary = buildScenarioVocabulary(scenario);
   const cueIds = buildCueIds(scenario);
@@ -154,7 +210,7 @@ export function buildLiveConnectConfig(
         prebuiltVoiceConfig: { voiceName: "Aoede" },
       },
     },
-    systemInstruction: buildLiveSystemInstruction(scenario),
+    systemInstruction: buildLiveSystemInstruction(scenario, options),
     inputAudioTranscription: {
       languageCodes: ["te-IN", "en-US"],
       customVocabulary: vocabulary,
@@ -165,7 +221,7 @@ export function buildLiveConnectConfig(
         startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
         endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
         prefixPaddingMs: 100,
-        silenceDurationMs: 600,
+        silenceDurationMs: 500,
       },
       activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
       turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
@@ -184,7 +240,7 @@ export function buildLiveConnectConfig(
             name: PRESENT_TURN_TOOL_NAME,
             behavior: Behavior.BLOCKING,
             description:
-              "Publish Telugu written in English letters and an English meaning for the complete next spoken turn before Mayu says it.",
+              "Publish the next Telugu turn and, after a learner reply, its private coaching evidence before Mayu speaks.",
             parametersJsonSchema: {
               type: "object",
               additionalProperties: false,
@@ -239,6 +295,26 @@ export function buildLiveConnectConfig(
                   description:
                     "Whether the learner spoke Telugu, English, or a mix.",
                   enum: ["telugu", "english", "mixed"],
+                },
+                learnerPronunciationRating: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 4,
+                  description:
+                    "Approximate 0-4 intelligibility of the Telugu sounds actually heard. Omit only when the learner spoke entirely in English.",
+                },
+                learnerAccuracyRating: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 4,
+                  description:
+                    "0-4 estimate of how clearly and appropriately the actual spoken reply answered the active conversational turn.",
+                },
+                learnerFeedback: {
+                  type: "string",
+                  maxLength: 180,
+                  description:
+                    "One kind, concrete next step in English or Telugu written with English letters. Mention at most one word or sound.",
                 },
                 replay: {
                   type: "boolean",

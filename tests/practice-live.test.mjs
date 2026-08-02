@@ -31,12 +31,20 @@ const words = [
     pronunciation: "tin-NAA-vaa?",
     english: "have you eaten?",
     note: "A warm family check-in.",
+    usage: {
+      audience: "familiar",
+      kind: "relationship",
+    },
     alternatives: [
       {
         label: "With elders or someone new",
         telugu: "తిన్నారా?",
         roman: "tinnaaraa?",
         pronunciation: "tin-NAA-raa?",
+        usage: {
+          audience: "respectful",
+          kind: "relationship",
+        },
       },
     ],
   },
@@ -47,12 +55,20 @@ const words = [
     roman: "konchem mellagaa cheppandi",
     pronunciation: "KON-chem mel-LA-gaa chep-PUN-dee",
     english: "please say it slowly",
+    usage: {
+      audience: "respectful",
+      kind: "relationship",
+    },
     alternatives: [
       {
         label: "With family or friends",
         telugu: "కొంచెం మెల్లగా చెప్పు",
         roman: "konchem mellagaa cheppu",
         pronunciation: "KON-chem mel-LA-gaa CHEP-poo",
+        usage: {
+          audience: "familiar",
+          kind: "relationship",
+        },
       },
     ],
   },
@@ -91,15 +107,20 @@ test("builds accurate primary and register-specific phrase cues", () => {
     roman: "tinnaavaa?",
     pronunciation: "tin-NAA-vaa?",
     telugu: "తిన్నావా?",
-    contextLabel: "With family or friends",
+    audience: "familiar",
+    contextLabel: "Someone close",
+    contextGuidance:
+      "Use this with a sibling, close friend, or someone you genuinely know well. Being the same age is not enough by itself.",
     note: "A warm family check-in.",
     variant: "primary",
   });
   assert.equal(respectful?.english, "have you eaten?");
   assert.equal(respectful?.note, "A warm family check-in.");
-  assert.equal(respectful?.contextLabel, "With elders or someone new");
+  assert.equal(respectful?.audience, "respectful");
+  assert.equal(respectful?.contextLabel, "Elder or someone new");
+  assert.match(respectful?.contextGuidance ?? "", /even if they are your age/);
   assert.equal(respectful?.variant, "alternative");
-  assert.equal(politeSlowly?.contextLabel, "With elders or someone new");
+  assert.equal(politeSlowly?.contextLabel, "Elder or someone new");
   assert.deepEqual(
     getRelatedLivePhraseCues(words, "have-you-eaten__primary").map(
       (cue) => cue.id,
@@ -153,12 +174,17 @@ test("accepts complete English-letter captions and blocks Telugu script", () => 
     learnerPronunciation: "CHAA-loo, ka-DOO-poo nin-DIN-dee.",
     learnerEnglish: "That is enough, I am full.",
     learnerSourceLanguage: "telugu",
+    learnerPronunciationRating: 3,
+    learnerAccuracyRating: 4,
+    learnerFeedback: "Keep the long aa sound steady in chaalu.",
     cueId: "have-you-eaten__primary",
   });
 
   assert.equal(parsed?.mayu.roman, "Inkaa konchem tintaavaa?");
   assert.equal(parsed?.mayu.english, "Will you eat a little more?");
   assert.equal(parsed?.learner?.sourceLanguage, "telugu");
+  assert.equal(parsed?.learner?.assessment.pronunciationScore, 75);
+  assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
   assert.equal(parsed?.replay, false);
 
   assert.equal(
@@ -267,7 +293,7 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
   assert.equal(vad?.startOfSpeechSensitivity, "START_SENSITIVITY_HIGH");
   assert.equal(vad?.endOfSpeechSensitivity, "END_SENSITIVITY_HIGH");
   assert.equal(vad?.prefixPaddingMs, 100);
-  assert.equal(vad?.silenceDurationMs, 600);
+  assert.equal(vad?.silenceDurationMs, 500);
   assert.equal(
     config.realtimeInputConfig?.activityHandling,
     "START_OF_ACTIVITY_INTERRUPTS",
@@ -296,6 +322,11 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     "english",
     "mixed",
   ]);
+  assert.equal(schema?.properties?.learnerPronunciationRating?.minimum, 0);
+  assert.equal(schema?.properties?.learnerPronunciationRating?.maximum, 4);
+  assert.equal(schema?.properties?.learnerAccuracyRating?.minimum, 0);
+  assert.equal(schema?.properties?.learnerAccuracyRating?.maximum, 4);
+  assert.equal(schema?.properties?.learnerFeedback?.maxLength, 180);
   assert.match(String(config.systemInstruction), /present_turn/);
   assert.match(
     String(config.systemInstruction),
@@ -326,8 +357,14 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
     instruction,
     /interface never renders the internal fields/,
   );
+  assert.match(instruction, /learnerPronunciationRating/);
+  assert.match(instruction, /0-4 intelligibility rating/);
+  assert.match(instruction, /Never claim phoneme-level certainty/);
   assert.doesNotMatch(instruction, /Use short English connective words/i);
   assert.doesNotMatch(instruction, /brief English scene-setting sentence/i);
+  assert.match(instruction, /RESPECTFUL RELATIONSHIP LOCK/);
+  assert.match(instruction, /including a new person of the learner's own age/);
+  assert.match(instruction, /Never switch or mix close and respectful/);
 });
 
 test("keeps Live settings locked while leaving the repeated caption tool token-safe", () => {

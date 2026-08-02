@@ -3,6 +3,7 @@ import {
   practicePacks,
   type TeluguWord,
 } from "../course-data.ts";
+import type { LiveListenerRelationship } from "./live-config.ts";
 
 export type LiveScenarioId =
   | "family-check-in"
@@ -16,6 +17,7 @@ export type LiveScenario = {
   title: string;
   description: string;
   openingCue: string;
+  openingCues?: Partial<Record<LiveListenerRelationship, string>>;
   words: TeluguWord[];
 };
 
@@ -45,9 +47,15 @@ export const liveScenarios: LiveScenario[] = [
     eyebrow: "WITH FAMILY",
     pickerLabel: "With family",
     title: "Check in with family",
-    description: "Answer the familiar questions that begin almost every visit.",
+    description: "Answer the warm questions that begin almost every visit.",
     openingCue:
-      "We have just sat down together at a casual family visit. Begin the role-play in Telugu by warmly asking whether I have eaten. Use cueId \"have-you-eaten__primary\" in present_turn, speak only the Telugu turn, then wait for my real answer.",
+      "We have just sat down together at a family visit. Begin in Telugu by warmly asking whether I have eaten, call present_turn first, speak only Telugu, then wait for my real answer.",
+    openingCues: {
+      close:
+        "We have just sat down together at a casual family visit. Address me as someone close. Warmly ask whether I have eaten with the reviewed familiar cueId \"have-you-eaten__primary\" in present_turn, speak only that Telugu turn, then wait for my real answer.",
+      respectful:
+        "We have just sat down together at a family visit. Address me respectfully as an elder or someone new. Warmly ask whether I have eaten with the reviewed respectful cueId \"have-you-eaten__alt_0\" in present_turn, speak only that Telugu turn, then wait for my real answer.",
+    },
     words: findPracticePack("family-check-in").words,
   },
   {
@@ -74,4 +82,19 @@ export const liveScenarios: LiveScenario[] = [
 
 export function getLiveScenario(value: unknown) {
   return liveScenarios.find((scenario) => scenario.id === value);
+}
+
+export function getLiveOpeningCue(
+  scenario: LiveScenario,
+  relationship: LiveListenerRelationship,
+) {
+  const relationshipCue = scenario.openingCues?.[relationship];
+  if (relationshipCue) return relationshipCue;
+
+  const registerReminder =
+    relationship === "close"
+      ? "Keep familiar nuvvu/nee forms for the whole exchange."
+      : "Keep respectful meeru/mee, -aaru, and -andi forms for the whole exchange.";
+
+  return `${scenario.openingCue} ${registerReminder}`;
 }

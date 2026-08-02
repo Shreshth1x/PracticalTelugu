@@ -87,7 +87,7 @@ async function readSourceTree(directory) {
     const entryUrl = new URL(entry.name, directory);
 
     if (entry.isDirectory()) {
-      sources.push(...(await readSourceTree(new URL(`${entry.name}/`, directory))));
+      sources.push(await readSourceTree(new URL(`${entry.name}/`, directory)));
     } else if (/\.(?:js|mjs|ts|tsx)$/.test(entry.name)) {
       sources.push(await readFile(entryUrl, "utf8"));
     }
@@ -155,6 +155,25 @@ test("server-renders every practical route publicly with its intended content", 
       pathname,
     );
   }
+});
+
+test("keeps direct recording access unlisted and private", async () => {
+  const [recorderResponse, homeResponse, recorderPage] = await Promise.all([
+    render("/recordings"),
+    render("/"),
+    readFile(new URL("../app/recordings/page.tsx", import.meta.url), "utf8"),
+  ]);
+  const [recorderHtml, homeHtml] = await Promise.all([
+    recorderResponse.text(),
+    homeResponse.text(),
+  ]);
+
+  assert.equal(recorderResponse.status, 200);
+  assert.match(recorderHtml, /Voice recorder/);
+  assert.match(recorderHtml, /Preparing the recorder/);
+  assert.match(recorderHtml, /name="robots" content="noindex, nofollow"/);
+  assert.doesNotMatch(homeHtml, /href="\/recordings"/);
+  assert.match(recorderPage, /robots:\s*\{[\s\S]*index:\s*false/);
 });
 
 test("focused word and lesson sessions omit global navigation", async () => {
@@ -235,6 +254,50 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   );
 });
 
+test("makes Live register, time cap, and microphone processing explicit before start", async () => {
+  const response = await render("/practice-live");
+  const html = await response.text();
+
+  assert.match(html, /Who are you speaking with\?/);
+  assert.match(html, /Someone close/);
+  assert.match(html, /Elder or someone new/);
+  assert.match(html, /Safest even when someone new is your age/);
+  assert.match(html, /Quick practice/);
+  assert.match(html, />1:00</);
+  assert.match(html, /Full practice/);
+  assert.match(html, />2:00</);
+  assert.match(html, /audio is sent to Google Gemini/);
+  assert.match(html, /PracticalTelugu does not save your audio/);
+});
+
+test("keeps the completed Live session focused on an honest coaching dashboard", async () => {
+  const [pageSource, gradingSource] = await Promise.all([
+    readFile(
+      new URL("../app/practice-live/PracticeLive.tsx", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/practice-live/live-session-grading.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(pageSource, /className="live-results"/);
+  assert.match(pageSource, /Pronunciation/);
+  assert.match(pageSource, /Accuracy/);
+  assert.match(pageSource, /Response time/);
+  assert.match(pageSource, /Your next rep/);
+  assert.match(pageSource, /Review your conversation/);
+  assert.match(pageSource, /not a phoneme-by-phoneme accent grade/);
+  assert.ok(
+    pageSource.indexOf("<SessionResults") <
+      pageSource.indexOf('className="live-review"'),
+    "the score appears before the optional transcript review",
+  );
+  assert.match(gradingSource, /scoreLiveResponseTime/);
+  assert.match(gradingSource, /METRIC_WEIGHTS/);
+});
+
 test("keeps the permanent Gemini key on the server", async () => {
   const clientSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
@@ -247,7 +310,11 @@ test("keeps the permanent Gemini key on the server", async () => {
 
   assert.match(clientSource, /fetch\("\/api\/practice-live\/token"/);
   assert.doesNotMatch(clientSource, /GEMINI_API_KEY|NEXT_PUBLIC_GEMINI/);
-  assert.match(clientSource, /SESSION_LIMIT_SECONDS = 5 \* 60/);
+  assert.doesNotMatch(clientSource, /SESSION_LIMIT_SECONDS = 5 \* 60/);
+  assert.match(clientSource, /deadlineTimerRef/);
+  assert.match(clientSource, /sessionLimitSeconds/);
+  assert.match(clientSource, /durationSeconds/);
+  assert.match(clientSource, /relationship/);
   assert.match(clientSource, /sendRealtimeInput\(\{\s*text:/);
   assert.doesNotMatch(clientSource, /sendClientContent\(/);
   assert.match(clientSource, /project has been denied access/);
@@ -255,6 +322,12 @@ test("keeps the permanent Gemini key on the server", async () => {
   assert.match(routeSource, /process\.env\.GEMINI_API_KEY/);
   assert.doesNotMatch(routeSource, /NEXT_PUBLIC_/);
   assert.match(routeSource, /uses:\s*1/);
+  assert.match(routeSource, /NEW_SESSION_WINDOW_SECONDS = 60/);
+  assert.match(routeSource, /SESSION_DRAIN_HEADROOM_SECONDS = 10/);
+  assert.match(routeSource, /durationSeconds \+ TOKEN_EXPIRY_HEADROOM_SECONDS/);
+  assert.match(routeSource, /SHORT_WINDOW_STARTS = 6/);
+  assert.match(routeSource, /DAILY_STARTS = 20/);
+  assert.match(routeSource, /"Retry-After"/);
 });
 
 test("uses the approved peacock mark across brand surfaces", async () => {
@@ -827,6 +900,57 @@ test("uses complete Telugu phrases while preserving earlier progress keys", asyn
   );
 });
 
+test("keeps familiar listener context attached to primary learning surfaces", async () => {
+  const askName = findLesson("names-introductions")?.words.find(
+    (word) => word.id === "ask-name",
+  );
+
+  assert.ok(askName);
+  assert.equal(askName.usage?.audience, "familiar");
+  assert.equal(askName.usage?.kind, "relationship");
+
+  for (const pathname of ["/words", "/lesson/names-introductions"]) {
+    const response = await render(pathname);
+    const html = await response.text();
+    const familiarPhraseIndex = html.indexOf(">nee peru enti?</span>");
+    const familiarContextIndex = html.lastIndexOf(
+      ">Someone close</span>",
+      familiarPhraseIndex,
+    );
+
+    assert.ok(
+      familiarPhraseIndex >= 0,
+      `${pathname}: familiar name question is rendered`,
+    );
+    assert.ok(
+      familiarContextIndex >= 0 &&
+        familiarPhraseIndex - familiarContextIndex < 600,
+      `${pathname}: Someone close stays attached to the familiar phrase`,
+    );
+  }
+
+  const appSource = await readFile(
+    new URL("../app/PalukuApp.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    appSource,
+    /showUsageContext \?\? resolveTeluguFormUsage\(word\.usage\)\.showContext/,
+    "PhraseStack defaults to the word's semantic usage context",
+  );
+  assert.doesNotMatch(
+    appSource,
+    /showUsageContext=\{false\}/,
+    "primary learning surfaces do not suppress register context",
+  );
+  assert.match(
+    appSource,
+    /english: step\.shownMeaning,[\s\S]{0,220}usage: step\.word\.usage/,
+    "constructed assessment phrases retain their usage metadata",
+  );
+});
+
 test("never presents a copied English pronunciation as Telugu", () => {
   const copiedTelugu =
     /హాయ్|థ్యాంక్స్|ప్లీజ్|సారీ|హ్యాపీ|బస్ స్టాప్|చేంజ్|డాక్టర్/;
@@ -1056,6 +1180,7 @@ test("offers Google and email account creation without gating practice", async (
   assert.match(accountPage, /Create account/);
   assert.match(accountPage, /Sign in/);
   assert.match(accountPage, /The progress on this device will be added/);
+  assert.match(accountPage, /Open family recorder/);
   assert.match(learningProvider, /auth\.signInWithPassword/);
   assert.match(learningProvider, /auth\.signUp/);
   assert.match(learningProvider, /provider: "google"/);

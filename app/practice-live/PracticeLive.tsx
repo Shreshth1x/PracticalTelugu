@@ -1,22 +1,37 @@
 "use client";
 
+import Link from "next/link";
 import {
   useEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type RefObject,
 } from "react";
 import {
   liveScenarios,
   type LiveScenarioId,
 } from "./live-scenarios";
 import {
+  DEFAULT_LIVE_LISTENER_RELATIONSHIP,
+  DEFAULT_LIVE_SESSION_DURATION,
+  isLiveListenerRelationship,
+  isLiveSessionDuration,
+  type LiveListenerRelationship,
+  type LiveSessionDurationSeconds,
+} from "./live-config";
+import {
   useGeminiLive,
   type CompletedLiveSession,
   type LivePhase,
   type LiveTranscriptTurn,
 } from "./useGeminiLive";
+import {
+  isLiveSessionGrade,
+  type LiveScoreMetric,
+  type LiveSessionGrade,
+} from "./live-session-grading";
 
 const LIVE_HISTORY_KEY = "practicaltelugu.live-sessions.v1";
 
@@ -30,7 +45,7 @@ const statusCopy: Record<
   },
   requesting: {
     title: "Getting things ready",
-    detail: "Checking the live session before opening your microphone.",
+    detail: "Allow your microphone, then Mayu will open the live session.",
   },
   connecting: {
     title: "Connecting to Mayu",
@@ -54,7 +69,7 @@ const statusCopy: Record<
   },
   ended: {
     title: "Nice work",
-    detail: "A few useful minutes out loud goes a long way.",
+    detail: "A focused conversation out loud goes a long way.",
   },
   setup: {
     title: "Connect Gemini Live",
@@ -83,9 +98,17 @@ function readHistory() {
         typeof session.durationSeconds === "number" &&
         typeof session.learnerTurns === "number" &&
         typeof session.completedAt === "string" &&
+        (session.relationship === undefined ||
+          isLiveListenerRelationship(session.relationship)) &&
+        (session.sessionLimitSeconds === undefined ||
+          isLiveSessionDuration(session.sessionLimitSeconds)) &&
+        (session.completionReason === undefined ||
+          session.completionReason === "manual" ||
+          session.completionReason === "limit") &&
         (session.cueIds === undefined ||
           (Array.isArray(session.cueIds) &&
-            session.cueIds.every((cueId) => typeof cueId === "string")))
+            session.cueIds.every((cueId) => typeof cueId === "string"))) &&
+        (session.grade === undefined || isLiveSessionGrade(session.grade))
       );
     });
   } catch {
@@ -97,6 +120,244 @@ function formatDuration(totalSeconds: number) {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = Math.max(0, totalSeconds % 60);
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+}
+
+function formatResponseTime(milliseconds: number) {
+  const seconds = milliseconds / 1_000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} sec`;
+}
+
+function scoreLabel(score: number) {
+  if (score >= 90) return "Excellent";
+  if (score >= 80) return "Strong";
+  if (score >= 70) return "Steady";
+  if (score >= 55) return "Building";
+  return "Starting point";
+}
+
+function metricNote(metric: LiveScoreMetric, score: number | null) {
+  if (score === null) {
+    if (metric === "pronunciation") return "Not enough spoken Telugu to estimate.";
+    if (metric === "accuracy") return "No complete reply was available to assess.";
+    return "No clean response timing was captured.";
+  }
+
+  if (metric === "pronunciation") {
+    if (score >= 90) return "Your Telugu was immediately easy to understand.";
+    if (score >= 75) return "Your Telugu was clear, with only a small rough edge.";
+    if (score >= 55) return "The meaning came through; one sound needs another rep.";
+    return "Slow the phrase down and make each word distinct.";
+  }
+
+  if (metric === "accuracy") {
+    if (score >= 90) return "Your replies fit the question and kept the meaning intact.";
+    if (score >= 75) return "Your meaning landed with one small correction to make.";
+    if (score >= 55) return "Mayu could follow you, but the reply needs a cleaner form.";
+    return "Use one short Telugu answer before adding more detail.";
+  }
+
+  if (score >= 90) return "You answered without a long pause.";
+  if (score >= 75) return "Your response rhythm stayed conversational.";
+  if (score >= 55) return "A little phrase recall will shorten the pause.";
+  return "Rehearse one ready-to-use reply before the next practice.";
+}
+
+const unavailableGrade: LiveSessionGrade = {
+  averageResponseMs: null,
+  assessedTurns: 0,
+  overallScore: null,
+  pronunciationScore: null,
+  accuracyScore: null,
+  responseScore: null,
+  strongestMetric: null,
+  summary: "There was not enough spoken Telugu to score this session.",
+  nextStep: "Give Mayu one complete Telugu reply in your next practice.",
+};
+
+function SessionResults({
+  session,
+  previousSession,
+  scenarioTitle,
+  relationshipLabel,
+  resultsRef,
+  onRestart,
+  onChangeSetup,
+}: {
+  session: CompletedLiveSession;
+  previousSession: CompletedLiveSession | null;
+  scenarioTitle: string;
+  relationshipLabel: string;
+  resultsRef: RefObject<HTMLElement | null>;
+  onRestart: () => void;
+  onChangeSetup: () => void;
+}) {
+  const grade = session.grade ?? unavailableGrade;
+  const previousScore = previousSession?.grade?.overallScore ?? null;
+  const scoreDelta =
+    grade.overallScore === null || previousScore === null
+      ? null
+      : grade.overallScore - previousScore;
+  const progressCopy =
+    scoreDelta === null
+      ? "Baseline saved. Your next practice with this same setup will compare here."
+      : scoreDelta > 0
+        ? `Up ${scoreDelta} ${scoreDelta === 1 ? "point" : "points"} from your last matching practice.`
+        : scoreDelta < 0
+          ? `Today: ${grade.overallScore}. Last matching practice: ${previousScore}.`
+          : "You matched your last score with this setup.";
+  const metrics: Array<{
+    id: LiveScoreMetric;
+    label: string;
+    score: number | null;
+    value: string;
+  }> = [
+    {
+      id: "pronunciation",
+      label: "Pronunciation",
+      score: grade.pronunciationScore,
+      value:
+        grade.pronunciationScore === null
+          ? "Not scored"
+          : String(grade.pronunciationScore),
+    },
+    {
+      id: "accuracy",
+      label: "Accuracy",
+      score: grade.accuracyScore,
+      value:
+        grade.accuracyScore === null ? "Not scored" : String(grade.accuracyScore),
+    },
+    {
+      id: "response",
+      label: "Response time",
+      score: grade.responseScore,
+      value:
+        grade.averageResponseMs === null
+          ? "Not timed"
+          : formatResponseTime(grade.averageResponseMs),
+    },
+  ];
+  const scoreStyle = {
+    "--live-score": grade.overallScore ?? 0,
+  } as CSSProperties;
+
+  return (
+    <section
+      ref={resultsRef}
+      className="live-results"
+      aria-labelledby="live-results-title"
+      tabIndex={-1}
+    >
+      <div className="live-results-hero">
+        <div className="live-results-heading">
+          <span>Session complete · {scenarioTitle}</span>
+          <h2 id="live-results-title">
+            {session.completionReason === "limit"
+              ? "You completed the practice."
+              : "You kept the conversation going."}
+          </h2>
+          <p>{grade.summary}</p>
+          <dl className="live-results-facts">
+            <div>
+              <dt>Spoken</dt>
+              <dd>{formatDuration(session.durationSeconds)}</dd>
+            </div>
+            <div>
+              <dt>Replies</dt>
+              <dd>{session.learnerTurns}</dd>
+            </div>
+            <div>
+              <dt>Register</dt>
+              <dd>{relationshipLabel}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div
+          className="live-results-score"
+          data-empty={grade.overallScore === null ? "true" : undefined}
+          style={scoreStyle}
+          role="img"
+          aria-label={
+            grade.overallScore === null
+              ? "Not enough speech for an overall score"
+              : `Overall practice score ${grade.overallScore} out of 100, ${scoreLabel(
+                  grade.overallScore,
+                )}`
+          }
+        >
+          <div>
+            <strong>{grade.overallScore ?? "—"}</strong>
+            <span>{grade.overallScore === null ? "not scored" : "/ 100"}</span>
+            {grade.overallScore === null ? null : (
+              <small>{scoreLabel(grade.overallScore)}</small>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="live-results-progress" aria-label="Practice progress">
+        <span>Progress</span>
+        <strong>{progressCopy}</strong>
+      </div>
+
+      <section className="live-results-next" aria-labelledby="live-next-step-title">
+        <span id="live-next-step-title">Your next rep</span>
+        <p>{grade.nextStep}</p>
+      </section>
+
+      <section
+        className="live-results-breakdown"
+        aria-labelledby="live-breakdown-title"
+      >
+        <div className="live-results-section-heading">
+          <h3 id="live-breakdown-title">How this practice went</h3>
+          <p>Simple coaching estimates from this conversation.</p>
+        </div>
+        <div className="live-results-metrics">
+          {metrics.map((metric) => (
+            <article key={metric.id} data-empty={metric.score === null ? "true" : undefined}>
+              <div className="live-results-metric-heading">
+                <span>{metric.label}</span>
+                <strong>
+                  {metric.value}
+                  {metric.id !== "response" && metric.score !== null ? (
+                    <small>/100</small>
+                  ) : metric.id === "response" && metric.score !== null ? (
+                    <small>{metric.score}/100</small>
+                  ) : null}
+                </strong>
+              </div>
+              <span className="live-results-meter" aria-hidden="true">
+                <i
+                  style={
+                    { "--metric-score": `${metric.score ?? 0}%` } as CSSProperties
+                  }
+                />
+              </span>
+              <p>{metricNote(metric.id, metric.score)}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <p className="live-results-method">
+        Pronunciation is an AI estimate of how understandable the Telugu sounded,
+        not a phoneme-by-phoneme accent grade. Response time is measured from when
+        Mayu finishes to when you begin.
+      </p>
+
+      <div className="live-results-actions">
+        <button type="button" className="live-restart" onClick={onRestart}>
+          Practice same setup
+        </button>
+        <button type="button" className="live-change-setup" onClick={onChangeSetup}>
+          Change setup
+        </button>
+        <Link href="/">Back to Today</Link>
+      </div>
+    </section>
+  );
 }
 
 function MicrophoneIcon({ off = false }: { off?: boolean }) {
@@ -215,6 +476,105 @@ function CurrentTurnCard({
   );
 }
 
+function ConversationTranscript({
+  turns,
+  transcriptRef,
+  canRepeatTurn,
+  showRepeatActions = true,
+  onRepeatTurn,
+}: {
+  turns: LiveTranscriptTurn[];
+  transcriptRef: RefObject<HTMLOListElement | null>;
+  canRepeatTurn: boolean;
+  showRepeatActions?: boolean;
+  onRepeatTurn: (turnId: string, options?: { slow?: boolean }) => void;
+}) {
+  return (
+    <section
+      className="live-conversation"
+      aria-labelledby="live-conversation-title"
+    >
+      <div className="live-conversation-heading">
+        <div>
+          <h2 id="live-conversation-title">Conversation transcript</h2>
+          <p>Spoken Telugu in English letters, with English underneath.</p>
+        </div>
+        <span>
+          {turns.length
+            ? `${turns.length} recent ${turns.length === 1 ? "turn" : "turns"}`
+            : "Waiting for the first turn"}
+        </span>
+      </div>
+
+      {turns.length ? (
+        <ol
+          ref={transcriptRef}
+          className="live-transcript"
+          aria-label="Live transcript"
+        >
+          {turns.map((turn) => (
+            <li
+              key={turn.id}
+              data-speaker={turn.speaker}
+              data-state={turn.final ? "final" : "interim"}
+            >
+              <div className="live-transcript-speaker">
+                <span>{turn.speaker === "mayu" ? "Mayu" : "You"}</span>
+                <small>
+                  {turn.final
+                    ? turn.speaker === "you" && turn.sourceLanguage !== "telugu"
+                      ? "Telugu version"
+                      : ""
+                    : turn.speaker === "you"
+                      ? "Translating…"
+                      : "Preparing…"}
+                </small>
+              </div>
+              {turn.final ? (
+                <div className="live-transcript-copy">
+                  <div className="live-transcript-spoken">
+                    <p className="live-transcript-roman" lang="te-Latn">
+                      {turn.roman}
+                    </p>
+                    {turn.pronunciation ? (
+                      <small className="live-transcript-pronunciation">
+                        ({turn.pronunciation})
+                      </small>
+                    ) : null}
+                  </div>
+                  <p className="live-transcript-english" lang="en">
+                    {turn.english}
+                  </p>
+                </div>
+              ) : (
+                <div className="live-transcript-pending">
+                  <span aria-hidden="true" />
+                  <p>Turning your reply into readable Telugu…</p>
+                </div>
+              )}
+              {showRepeatActions && turn.final && turn.speaker === "mayu" ? (
+                <button
+                  type="button"
+                  className="live-transcript-review"
+                  onClick={() => onRepeatTurn(turn.id, { slow: true })}
+                  disabled={!canRepeatTurn}
+                >
+                  Hear slowly
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="live-transcript-empty">
+          Your full conversation will stay here as you practice. Telugu appears
+          in English letters, never Telugu script.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function Orb({
   phase,
   micLevel,
@@ -228,7 +588,7 @@ function Orb({
   onStart: () => void;
   onPrepare: () => void;
 }) {
-  const canStart = ["idle", "ended", "setup", "error"].includes(phase);
+  const canStart = ["idle", "setup", "error"].includes(phase);
   const level = phase === "speaking" ? assistantLevel : micLevel;
   const style = {
     "--live-level": level.toFixed(3),
@@ -236,11 +596,10 @@ function Orb({
   const contents = (
     <>
       <span className="live-orb-aura" />
-      <span className="live-orb-shell">
-        <span className="live-orb-color live-orb-color-blue" />
-        <span className="live-orb-color live-orb-color-green" />
-        <span className="live-orb-color live-orb-color-saffron" />
-        <span className="live-orb-gloss" />
+        <span className="live-orb-shell">
+          <span className="live-orb-color live-orb-color-blue" />
+          <span className="live-orb-color live-orb-color-green" />
+          <span className="live-orb-gloss" />
         <span className="live-orb-depth" />
       </span>
       <span className="live-orb-shadow" />
@@ -258,7 +617,7 @@ function Orb({
         onPointerEnter={onPrepare}
         onFocus={onPrepare}
         onTouchStart={onPrepare}
-        aria-label={phase === "ended" ? "Practice again" : "Start live practice"}
+        aria-label="Start live practice"
       >
         {contents}
       </button>
@@ -281,9 +640,15 @@ function Orb({
 export default function PracticeLive() {
   const [scenarioId, setScenarioId] =
     useState<LiveScenarioId>("family-check-in");
+  const [relationship, setRelationship] =
+    useState<LiveListenerRelationship>(DEFAULT_LIVE_LISTENER_RELATIONSHIP);
+  const [sessionDuration, setSessionDuration] =
+    useState<LiveSessionDurationSeconds>(DEFAULT_LIVE_SESSION_DURATION);
+  const [isPracticeSettingsOpen, setIsPracticeSettingsOpen] = useState(false);
   const [history, setHistory] = useState<CompletedLiveSession[]>([]);
   const transcriptRef = useRef<HTMLOListElement | null>(null);
-  const live = useGeminiLive(scenarioId);
+  const resultsRef = useRef<HTMLElement | null>(null);
+  const live = useGeminiLive(scenarioId, relationship, sessionDuration);
   const scenario =
     liveScenarios.find((candidate) => candidate.id === scenarioId) ??
     liveScenarios[0];
@@ -309,6 +674,21 @@ export default function PracticeLive() {
       minutes: Math.max(history.length ? 1 : 0, Math.round(seconds / 60)),
     };
   }, [history]);
+  const previousComparableSession = useMemo(() => {
+    const completedSession = live.completedSession;
+    if (!completedSession) return null;
+
+    return (
+      history.find(
+        (session) =>
+          session.id !== completedSession.id &&
+          session.scenarioId === completedSession.scenarioId &&
+          session.relationship === completedSession.relationship &&
+          session.grade?.overallScore !== null &&
+          session.grade?.overallScore !== undefined,
+      ) ?? null
+    );
+  }, [history, live.completedSession]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => setHistory(readHistory()));
@@ -341,11 +721,53 @@ export default function PracticeLive() {
     element.scrollTop = element.scrollHeight;
   }, [live.transcript]);
 
+  useEffect(() => {
+    if (live.phase !== "ended" || !live.completedSession) return;
+
+    const frame = window.requestAnimationFrame(() => resultsRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [live.completedSession, live.phase]);
+
   const chooseScenario = (nextScenarioId: LiveScenarioId) => {
     if (isBusy) return;
     live.reset();
     setScenarioId(nextScenarioId);
   };
+
+  const chooseRelationship = (nextRelationship: LiveListenerRelationship) => {
+    if (isBusy || nextRelationship === relationship) return;
+    live.reset();
+    setRelationship(nextRelationship);
+  };
+
+  const chooseDuration = (nextDuration: LiveSessionDurationSeconds) => {
+    if (isBusy || nextDuration === sessionDuration) return;
+    live.reset();
+    setSessionDuration(nextDuration);
+  };
+
+  const startPractice = () => {
+    setIsPracticeSettingsOpen(false);
+    live.start();
+  };
+
+  const changePracticeSetup = () => {
+    live.reset();
+    setIsPracticeSettingsOpen(true);
+  };
+
+  const currentStatus = live.isLastExchange
+    ? {
+        title: "Last exchange",
+        detail: "Finish this short turn before the practice wraps up.",
+      }
+    : statusCopy[live.phase];
+  const relationshipLabel =
+    relationship === "close" ? "Someone close" : "Elder or someone new";
+  const durationMinutes = sessionDuration / 60;
+  const startActionLabel = ["setup", "error"].includes(live.phase)
+    ? "Try again"
+    : `Start ${durationMinutes}-minute practice`;
 
   return (
     <main
@@ -358,61 +780,202 @@ export default function PracticeLive() {
         </span>
         <h1>Practice Telugu out loud.</h1>
         <p>
-          Have a real Telugu conversation with Mayu. Follow every turn written
-          in English letters, with the English meaning directly underneath.
+          Speak with Mayu in real time. Telugu stays in English letters, with
+          the meaning directly underneath.
         </p>
       </header>
-
-      <div
-        className="live-scenario-picker"
-        aria-label="Choose a live situation"
-      >
-        {liveScenarios.map((candidate) => (
-          <button
-            type="button"
-            key={candidate.id}
-            className={candidate.id === scenarioId ? "is-selected" : ""}
-            onClick={() => chooseScenario(candidate.id)}
-            aria-pressed={candidate.id === scenarioId}
-            disabled={isBusy}
-          >
-            {candidate.pickerLabel}
-          </button>
-        ))}
-      </div>
 
       <section
         className={`live-stage${hasSessionLayout ? " is-session-active" : ""}`}
         data-phase={live.phase}
+        data-response-ms={live.latestTurnLatencyMs ?? undefined}
       >
         <div className="live-scene-copy">
           <span>{scenario.eyebrow}</span>
           <strong>{scenario.title}</strong>
           <p>{scenario.description}</p>
+          {isBusy ? (
+            <small className="live-session-lock">
+              {relationshipLabel}
+              {` · ${formatDuration(sessionDuration)} practice`}
+            </small>
+          ) : null}
         </div>
+
+        {!hasSessionLayout ? (
+          <section className="live-practice-details" aria-label="Practice setup">
+            <button
+              type="button"
+              className="live-practice-details-summary"
+              aria-expanded={isPracticeSettingsOpen}
+              aria-controls="live-practice-settings"
+              onClick={() => setIsPracticeSettingsOpen((current) => !current)}
+            >
+              <span>
+                <small>Practice setup</small>
+                <strong>
+                  {relationshipLabel} · {durationMinutes} min
+                </strong>
+              </span>
+              <span className="live-practice-details-action">
+                {isPracticeSettingsOpen ? "Done" : "Change"}
+              </span>
+            </button>
+
+            <div
+              id="live-practice-settings"
+              className="live-practice-details-panel"
+              hidden={!isPracticeSettingsOpen}
+            >
+              <div className="live-practice-situation">
+                <span id="live-situation-label">Situation</span>
+                <div
+                  className="live-scenario-picker"
+                  role="group"
+                  aria-labelledby="live-situation-label"
+                >
+                  {liveScenarios.map((candidate) => (
+                    <button
+                      type="button"
+                      key={candidate.id}
+                      className={candidate.id === scenarioId ? "is-selected" : ""}
+                      onClick={() => chooseScenario(candidate.id)}
+                      aria-pressed={candidate.id === scenarioId}
+                      disabled={isBusy}
+                    >
+                      {candidate.pickerLabel}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <section
+                className="live-session-settings"
+                aria-label="Live practice settings"
+              >
+                <fieldset disabled={isBusy}>
+                  <legend>Who are you speaking with?</legend>
+                  <div className="live-setting-options">
+                    <label
+                      className={relationship === "close" ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-relationship"
+                        value="close"
+                        checked={relationship === "close"}
+                        onChange={() => chooseRelationship("close")}
+                      />
+                      <span>
+                        <strong>Someone close</strong>
+                        <small>Close friends or family you speak to familiarly</small>
+                      </span>
+                    </label>
+                    <label
+                      className={relationship === "respectful" ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-relationship"
+                        value="respectful"
+                        checked={relationship === "respectful"}
+                        onChange={() => chooseRelationship("respectful")}
+                      />
+                      <span>
+                        <strong>Elder or someone new</strong>
+                        <small>Safest even when someone new is your age</small>
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset disabled={isBusy}>
+                  <legend>How long?</legend>
+                  <div className="live-setting-options">
+                    <label
+                      className={sessionDuration === 60 ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-duration"
+                        value="60"
+                        checked={sessionDuration === 60}
+                        onChange={() => chooseDuration(60)}
+                      />
+                      <span>
+                        <strong>Quick practice</strong>
+                        <small>1:00</small>
+                      </span>
+                    </label>
+                    <label
+                      className={sessionDuration === 120 ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-duration"
+                        value="120"
+                        checked={sessionDuration === 120}
+                        onChange={() => chooseDuration(120)}
+                      />
+                      <span>
+                        <strong>Full practice</strong>
+                        <small>2:00</small>
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+              </section>
+            </div>
+          </section>
+        ) : null}
 
         <div className="live-session-core">
           <Orb
             phase={live.phase}
             micLevel={live.micLevel}
             assistantLevel={live.assistantLevel}
-            onStart={live.start}
+            onStart={startPractice}
             onPrepare={live.prepare}
           />
 
-          <div className="live-status">
-            <div>
-              <span className="live-status-dot" aria-hidden="true" />
-              <strong>{statusCopy[live.phase].title}</strong>
-              {isBusy ? (
-                <time dateTime={`PT${live.elapsedSeconds}S`}>
-                  {formatDuration(live.elapsedSeconds)}
-                </time>
-              ) : null}
+          {hasSessionLayout ? (
+            <div className="live-status">
+              <div>
+                <span className="live-status-dot" aria-hidden="true" />
+                <strong>{currentStatus.title}</strong>
+                {isBusy ? (
+                  <time dateTime={`PT${live.remainingSeconds}S`}>
+                    {formatDuration(live.remainingSeconds)} left
+                  </time>
+                ) : null}
+              </div>
+              <p>{live.errorMessage || currentStatus.detail}</p>
             </div>
-            <p>{live.errorMessage || statusCopy[live.phase].detail}</p>
-          </div>
+          ) : null}
         </div>
+
+        {!hasSessionLayout ? (
+          <div className="live-preflight-actions">
+            <button
+              type="button"
+              className="live-start-action"
+              onClick={startPractice}
+              onPointerEnter={live.prepare}
+              onFocus={live.prepare}
+              onTouchStart={live.prepare}
+            >
+              {startActionLabel}
+              <span aria-hidden="true">→</span>
+            </button>
+            <p className="live-preflight-note">
+              {live.errorMessage || "Mayu speaks first, then listens for your reply."}
+            </p>
+            <p className="live-privacy-note">
+              Your microphone audio is sent to Google Gemini for the live session.
+              PracticalTelugu does not save your audio.
+            </p>
+          </div>
+        ) : null}
 
         <p
           className="sr-only"
@@ -420,8 +983,7 @@ export default function PracticeLive() {
           aria-live="polite"
           aria-atomic="true"
         >
-          {statusCopy[live.phase].title}.{" "}
-          {live.errorMessage || statusCopy[live.phase].detail}
+          {currentStatus.title}. {live.errorMessage || currentStatus.detail}
         </p>
 
         {live.phase === "setup" ? (
@@ -469,10 +1031,10 @@ export default function PracticeLive() {
                 type="button"
                 className="live-control"
                 onClick={live.toggleMute}
-                aria-pressed={live.phase === "muted"}
+                aria-pressed={live.isMuted}
               >
-                <MicrophoneIcon off={live.phase === "muted"} />
-                {live.phase === "muted" ? "Turn mic on" : "Mute"}
+                <MicrophoneIcon off={live.isMuted} />
+                {live.isMuted ? "Turn mic on" : "Mute"}
               </button>
             ) : null}
             <button
@@ -481,7 +1043,7 @@ export default function PracticeLive() {
               onClick={
                 live.phase === "requesting" || live.phase === "connecting"
                   ? live.reset
-                  : live.end
+                  : () => live.end()
               }
             >
               <StopIcon />
@@ -492,7 +1054,7 @@ export default function PracticeLive() {
           </div>
         ) : null}
 
-        {isBusy || live.phase === "ended" ? (
+        {isBusy ? (
           <>
             <p className="sr-only" aria-live="polite" aria-atomic="true">
               {live.activeTurn
@@ -509,124 +1071,43 @@ export default function PracticeLive() {
               canRepeatTurn={live.canRepeatTurn}
               onRepeatTurn={live.repeatTurn}
             />
-
-            <section
-              className="live-conversation"
-              aria-labelledby="live-conversation-title"
-            >
-              <div className="live-conversation-heading">
-                <div>
-                  <h2 id="live-conversation-title">Conversation transcript</h2>
-                  <p>Spoken Telugu in English letters, with English underneath.</p>
-                </div>
-                <span>
-                  {live.transcript.length
-                    ? `${live.transcript.length} recent ${
-                        live.transcript.length === 1 ? "turn" : "turns"
-                      }`
-                    : "Waiting for the first turn"}
-                </span>
-              </div>
-
-              {live.transcript.length ? (
-                <ol
-                  ref={transcriptRef}
-                  className="live-transcript"
-                  aria-label="Live transcript"
-                >
-                  {live.transcript.map((turn) => {
-                    return (
-                      <li
-                        key={turn.id}
-                        data-speaker={turn.speaker}
-                        data-state={turn.final ? "final" : "interim"}
-                      >
-                        <div className="live-transcript-speaker">
-                          <span>
-                            {turn.speaker === "mayu" ? "Mayu" : "You"}
-                          </span>
-                          <small>
-                            {turn.final
-                              ? turn.speaker === "you" &&
-                                turn.sourceLanguage !== "telugu"
-                                ? "Telugu version"
-                                : ""
-                              : turn.speaker === "you"
-                                ? "Translating…"
-                                : "Preparing…"}
-                          </small>
-                        </div>
-                        {turn.final ? (
-                          <div className="live-transcript-copy">
-                            <div className="live-transcript-spoken">
-                              <p className="live-transcript-roman" lang="te-Latn">
-                                {turn.roman}
-                              </p>
-                              {turn.pronunciation ? (
-                                <small className="live-transcript-pronunciation">
-                                  ({turn.pronunciation})
-                                </small>
-                              ) : null}
-                            </div>
-                            <p className="live-transcript-english" lang="en">
-                              {turn.english}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="live-transcript-pending">
-                            <span aria-hidden="true" />
-                            <p>Turning your reply into readable Telugu…</p>
-                          </div>
-                        )}
-                        {turn.final && turn.speaker === "mayu" ? (
-                          <button
-                            type="button"
-                            className="live-transcript-review"
-                            onClick={() => live.repeatTurn(turn.id, { slow: true })}
-                            disabled={!live.canRepeatTurn}
-                          >
-                            Hear slowly
-                          </button>
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ol>
-              ) : (
-                <p className="live-transcript-empty">
-                  Your full conversation will stay here as you practice. Telugu
-                  appears in English letters, never Telugu script.
-                </p>
-              )}
-            </section>
+            <ConversationTranscript
+              turns={live.transcript}
+              transcriptRef={transcriptRef}
+              canRepeatTurn={live.canRepeatTurn}
+              onRepeatTurn={live.repeatTurn}
+            />
           </>
         ) : null}
 
-        {live.phase === "ended" ? (
-          <div className="live-recap">
-            <div className="live-recap-heading">
-              <span>SESSION COMPLETE</span>
-              <h2>You kept the conversation going.</h2>
-              <p>
-                {formatDuration(live.elapsedSeconds)} out loud
-                {live.completedSession?.learnerTurns
-                  ? `, with ${live.completedSession.learnerTurns} spoken ${
-                      live.completedSession.learnerTurns === 1
-                        ? "reply"
-                        : "replies"
-                    }`
-                  : ""}
-                .
-              </p>
-              <small>
-                Your complete conversation and every English meaning are saved
-                in the transcript above until you leave this page.
-              </small>
-            </div>
-            <button type="button" className="live-restart" onClick={live.start}>
-              Start another conversation
-            </button>
-          </div>
+        {live.phase === "ended" && live.completedSession ? (
+          <>
+            <SessionResults
+              session={live.completedSession}
+              previousSession={previousComparableSession}
+              scenarioTitle={scenario.title}
+              relationshipLabel={relationshipLabel}
+              resultsRef={resultsRef}
+              onRestart={startPractice}
+              onChangeSetup={changePracticeSetup}
+            />
+
+            <details className="live-review">
+              <summary>
+                <span>Review your conversation</span>
+                <small>
+                  {live.transcript.length} {live.transcript.length === 1 ? "turn" : "turns"}
+                </small>
+              </summary>
+              <ConversationTranscript
+                turns={live.transcript}
+                transcriptRef={transcriptRef}
+                canRepeatTurn={false}
+                showRepeatActions={false}
+                onRepeatTurn={live.repeatTurn}
+              />
+            </details>
+          </>
         ) : null}
       </section>
 

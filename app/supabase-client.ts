@@ -10,6 +10,7 @@ const SUPABASE_PUBLISHABLE_KEY =
   "sb_publishable_6dJtra2hWy4JzkO7ZCQXWw_GbVr6E_h";
 
 let browserClient: SupabaseClient | null = null;
+let recorderClient: SupabaseClient | null = null;
 
 export function getSupabaseBrowserClient() {
   if (!browserClient) {
@@ -23,4 +24,19 @@ export function getSupabaseBrowserClient() {
   }
 
   return browserClient;
+}
+
+export function getSupabaseRecorderClient() {
+  if (!recorderClient) {
+    recorderClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: false,
+        storageKey: "practicaltelugu-recorder-auth-v1",
+      },
+    });
+  }
+
+  return recorderClient;
 }

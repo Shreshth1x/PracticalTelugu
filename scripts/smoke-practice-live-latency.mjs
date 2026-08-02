@@ -3,212 +3,373 @@ import { performance } from "node:perf_hooks";
 import { GoogleGenAI } from "@google/genai";
 
 import {
+  DEFAULT_LIVE_LISTENER_RELATIONSHIP,
+  DEFAULT_LIVE_SESSION_DURATION,
+  LIVE_LISTENER_RELATIONSHIPS,
   LIVE_MODEL,
+  LIVE_SESSION_DURATIONS,
   PRESENT_TURN_TOOL_NAME,
   buildLiveConnectConfig,
   buildLiveTokenConstraintConfig,
+  isLiveListenerRelationship,
+  isLiveSessionDuration,
 } from "../app/practice-live/live-config.ts";
 import { findLivePhraseCue } from "../app/practice-live/live-follow-along.ts";
-import { getLiveScenario } from "../app/practice-live/live-scenarios.ts";
-import { parseLiveTurnToolCall } from "../app/practice-live/live-transcript.ts";
+import {
+  getLiveOpeningCue,
+  getLiveScenario,
+} from "../app/practice-live/live-scenarios.ts";
+import {
+  hasForbiddenAudibleEnglish,
+  hasKnownLearnerMeaningMismatch,
+  hasKnownMayuMeaningMismatch,
+  hasKnownMayuRelationshipMismatch,
+  matchesReviewedLiveCue,
+  parseLiveTurnToolCall,
+} from "../app/practice-live/live-transcript.ts";
 
 const apiKey = process.env.GEMINI_API_KEY?.trim();
 if (!apiKey) {
   throw new Error("GEMINI_API_KEY is required for the Practice Live smoke test.");
 }
 
-const scenario = getLiveScenario(process.argv[2] ?? "family-check-in");
+const args = process.argv.slice(2);
+let positionalScenario;
+for (let index = 0; index < args.length; index += 1) {
+  const value = args[index];
+  if (value === "--relationship" || value === "--duration") {
+    index += 1;
+    continue;
+  }
+  if (!value.startsWith("--")) {
+    positionalScenario = value;
+    break;
+  }
+}
+const scenario = getLiveScenario(positionalScenario ?? "family-check-in");
 if (!scenario) {
   throw new Error("Choose family-check-in, at-the-table, or when-stuck.");
 }
-const verifyConversation = process.argv.includes("--conversation");
 
-const startedAt = performance.now();
-let promptSentAt = 0;
-let firstToolCallAt = 0;
-let firstAudioAt = 0;
-let selectedCueId = "";
-let firstCaption = null;
-let followupSentAt = 0;
-let secondToolCallAt = 0;
-let secondAudioAt = 0;
-let secondCaption = null;
-let lastToolCall = null;
-let expectedClose = false;
-let session;
+function option(name) {
+  const exactIndex = args.indexOf(`--${name}`);
+  if (exactIndex >= 0) return args[exactIndex + 1];
 
-let resolveReady;
-let rejectReady;
-const ready = new Promise((resolve, reject) => {
-  resolveReady = resolve;
-  rejectReady = reject;
-});
+  const prefix = `--${name}=`;
+  return args.find((value) => value.startsWith(prefix))?.slice(prefix.length);
+}
 
-function resolveWhenReady() {
-  if (verifyConversation) {
-    if (secondToolCallAt && secondAudioAt) resolveReady();
-    return;
+const requestedRelationship =
+  option("relationship") ?? DEFAULT_LIVE_LISTENER_RELATIONSHIP;
+if (!isLiveListenerRelationship(requestedRelationship)) {
+  throw new Error("--relationship must be close or respectful.");
+}
+
+const requestedDuration = Number(
+  option("duration") ?? DEFAULT_LIVE_SESSION_DURATION,
+);
+if (!isLiveSessionDuration(requestedDuration)) {
+  throw new Error("--duration must be 60 or 120.");
+}
+
+const verifyConversation = args.includes("--conversation");
+const runMatrix = args.includes("--matrix");
+const NEW_SESSION_WINDOW_SECONDS = 60;
+const TOKEN_EXPIRY_HEADROOM_SECONDS = 70;
+
+async function runSmoke(relationship, durationSeconds) {
+  const startedAt = performance.now();
+  let promptSentAt = 0;
+  let firstToolCallAt = 0;
+  let firstAudioAt = 0;
+  let selectedCueId = "";
+  let firstCaption = null;
+  let followupSentAt = 0;
+  let secondToolCallAt = 0;
+  let secondAudioAt = 0;
+  let secondCaption = null;
+  let lastToolCall = null;
+  let expectedClose = false;
+  let session;
+
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  function resolveWhenReady() {
+    if (verifyConversation) {
+      if (secondToolCallAt && secondAudioAt) resolveReady();
+      return;
+    }
+
+    if (firstToolCallAt && firstAudioAt) resolveReady();
   }
 
-  if (firstToolCallAt && firstAudioAt) resolveReady();
-}
+  const timeout = setTimeout(() => {
+    rejectReady(
+      new Error(
+        `Gemini did not publish a valid caption and return audio in time.${
+          lastToolCall ? ` Last tool call: ${JSON.stringify(lastToolCall)}` : ""
+        }`,
+      ),
+    );
+  }, verifyConversation ? 30_000 : 20_000);
 
-const timeout = setTimeout(() => {
-  rejectReady(
-    new Error(
-      `Gemini did not publish a valid caption and return audio in time.${
-        lastToolCall ? ` Last tool call: ${JSON.stringify(lastToolCall)}` : ""
-      }`,
-    ),
-  );
-}, verifyConversation ? 30_000 : 20_000);
-
-try {
-  const serverAi = new GoogleGenAI({
-    apiKey,
-    httpOptions: { apiVersion: "v1alpha" },
-  });
-  const config = buildLiveConnectConfig(scenario);
-  const tokenStartedAt = performance.now();
-  const token = await serverAi.authTokens.create({
-    config: {
-      uses: 1,
-      expireTime: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      newSessionExpireTime: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
-      liveConnectConstraints: {
-        model: LIVE_MODEL,
-        config: buildLiveTokenConstraintConfig(config),
+  try {
+    const serverAi = new GoogleGenAI({
+      apiKey,
+      httpOptions: { apiVersion: "v1alpha" },
+    });
+    const options = { relationship, durationSeconds };
+    const config = buildLiveConnectConfig(scenario, options);
+    const tokenStartedAt = performance.now();
+    const tokenIssuedAt = Date.now();
+    const tokenExpiresAt = new Date(
+      tokenIssuedAt +
+        (durationSeconds + TOKEN_EXPIRY_HEADROOM_SECONDS) * 1_000,
+    ).toISOString();
+    const newSessionExpiresAt = new Date(
+      tokenIssuedAt + NEW_SESSION_WINDOW_SECONDS * 1_000,
+    ).toISOString();
+    const token = await serverAi.authTokens.create({
+      config: {
+        uses: 1,
+        expireTime: tokenExpiresAt,
+        newSessionExpireTime: newSessionExpiresAt,
+        liveConnectConstraints: {
+          model: LIVE_MODEL,
+          config: buildLiveTokenConstraintConfig(config),
+        },
+        lockAdditionalFields: [],
       },
-      lockAdditionalFields: [],
-    },
-  });
-  const tokenCreatedAt = performance.now();
-  if (!token.name) throw new Error("Gemini returned an empty ephemeral token.");
+    });
+    const tokenCreatedAt = performance.now();
+    if (!token.name) throw new Error("Gemini returned an empty ephemeral token.");
 
-  const ai = new GoogleGenAI({
-    apiKey: token.name,
-    httpOptions: { apiVersion: "v1alpha" },
-  });
+    const ai = new GoogleGenAI({
+      apiKey: token.name,
+      httpOptions: { apiVersion: "v1alpha" },
+    });
 
-  session = await ai.live.connect({
-    model: LIVE_MODEL,
-    config,
-    callbacks: {
-      onmessage: (message) => {
-        const functionCalls = message.toolCall?.functionCalls ?? [];
-        if (functionCalls.length) {
-          const functionResponses = functionCalls.map((call) => {
-            lastToolCall = { name: call.name, args: call.args };
-            const parsed =
-              call.name === PRESENT_TURN_TOOL_NAME
-                ? parseLiveTurnToolCall(call.args)
+    session = await ai.live.connect({
+      model: LIVE_MODEL,
+      config,
+      callbacks: {
+        onmessage: (message) => {
+          const functionCalls = message.toolCall?.functionCalls ?? [];
+          if (functionCalls.length) {
+            const functionResponses = functionCalls.map((call) => {
+              lastToolCall = { name: call.name, args: call.args };
+              const parsed =
+                call.name === PRESENT_TURN_TOOL_NAME
+                  ? parseLiveTurnToolCall(call.args)
+                  : null;
+              const cueId = parsed?.mayu.cueId ?? "";
+              const cue = cueId
+                ? findLivePhraseCue(scenario.words, cueId)
                 : null;
-            const cueId = parsed?.mayu.cueId ?? "";
-            const cue = cueId
-              ? findLivePhraseCue(scenario.words, cueId)
-              : null;
+              const requiredAudience =
+                relationship === "close" ? "familiar" : "respectful";
+              const validCueClaim =
+                !cueId ||
+                (cue &&
+                  matchesReviewedLiveCue(parsed.mayu, cue) &&
+                  (cue.audience === "anyone" ||
+                    cue.audience === requiredAudience));
+              const hasForbiddenEnglish = Boolean(
+                parsed && hasForbiddenAudibleEnglish(parsed.mayu),
+              );
+              const hasKnownLearnerMismatch = Boolean(
+                parsed?.learner &&
+                  hasKnownLearnerMeaningMismatch(parsed.learner),
+              );
+              const hasKnownMayuMismatch = Boolean(
+                parsed && hasKnownMayuMeaningMismatch(parsed.mayu),
+              );
+              const hasKnownRelationshipMismatch = Boolean(
+                parsed &&
+                  hasKnownMayuRelationshipMismatch(
+                    parsed.mayu,
+                    relationship,
+                  ),
+              );
+              const accepted = Boolean(
+                parsed &&
+                  !hasForbiddenEnglish &&
+                  !hasKnownLearnerMismatch &&
+                  !hasKnownMayuMismatch &&
+                  !hasKnownRelationshipMismatch &&
+                  validCueClaim,
+              );
+              const rejection = !parsed
+                ? "Provide the internal Telugu cross-check plus complete Telugu written in English letters, pronunciation, and English fields. If any learner field is included, include every caption field, the two coaching ratings when applicable, one short coaching tip, and an explicit telugu, english, or mixed source language. Keep Telugu script out of learner-facing fields."
+                : hasForbiddenEnglish
+                  ? "Remove every English interjection or copied-English word from the audible Telugu turn. Use a natural Telugu acknowledgment instead, then call present_turn again."
+                  : hasKnownLearnerMismatch
+                    ? "For a learner meaning that says hungry, use ఆకలి / aakali, such as naaku inkaa aakaligaa undi. Never use pasi or pasigaa for hunger. Correct every learner field and call present_turn again."
+                  : hasKnownMayuMismatch
+                    ? "For the hungry family follow-up, use avunaa, not avunnaa, and ask inkaa emainaa tintaavaa? (close) or inkaa emainaa tintaaraa? (respectful). Correct every Mayu field and call present_turn again."
+                  : hasKnownRelationshipMismatch
+                    ? "The hunger follow-up uses the wrong listener relationship. Use tintaavaa for someone close or tintaaraa for an elder or someone new, matching the locked session."
+                : !cue
+                  ? "That cueId is not reviewed for this situation. Omit cueId for a natural conversational turn."
+                  : "That cueId requires the exact reviewed phrase in the active relationship register. Correct every caption field or omit cueId.";
 
-            if (cue) selectedCueId = cue.id;
-            if (parsed && !firstCaption) {
-              firstCaption = parsed.mayu;
-              firstToolCallAt = performance.now();
-            } else if (parsed && followupSentAt && !secondCaption) {
-              secondCaption = parsed;
-              secondToolCallAt = performance.now();
-            }
+              if (accepted && cue) selectedCueId = cue.id;
+              if (accepted && !firstCaption) {
+                firstCaption = parsed.mayu;
+                firstToolCallAt = performance.now();
+              } else if (accepted && followupSentAt && !secondCaption) {
+                secondCaption = parsed;
+                secondToolCallAt = performance.now();
+              }
 
-            return {
-              id: call.id,
-              name: call.name,
-              response: parsed
-                ? {
-                    output: {
-                      accepted: true,
-                      captionReady: true,
-                      ...(cue ? { cueId: cue.id } : {}),
+              return {
+                id: call.id,
+                name: call.name,
+                response: accepted
+                  ? {
+                      output: {
+                        accepted: true,
+                        captionReady: true,
+                        ...(cue ? { cueId: cue.id } : {}),
+                      },
+                    }
+                  : {
+                      error: rejection,
                     },
-                  }
-                : { error: "Invalid English-letter caption." },
-            };
-          });
+              };
+            });
 
-          session?.sendToolResponse({ functionResponses });
-          resolveWhenReady();
-        }
-
-        const audio = (message.serverContent?.modelTurn?.parts ?? []).find(
-          (part) => Boolean(part.inlineData?.data),
-        );
-        if (audio && promptSentAt) {
-          if (followupSentAt) {
-            secondAudioAt ||= performance.now();
-          } else {
-            firstAudioAt ||= performance.now();
+            session?.sendToolResponse({ functionResponses });
+            resolveWhenReady();
           }
-          resolveWhenReady();
-        }
 
-        if (
-          verifyConversation &&
-          message.serverContent?.turnComplete &&
-          firstCaption &&
-          firstAudioAt &&
-          !followupSentAt
-        ) {
-          followupSentAt = performance.now();
-          session?.sendRealtimeInput({
-            text:
-              "I ate, but I am still a little hungry. Treat this as my learner reply and continue our family conversation naturally in Telugu.",
-          });
-        }
-      },
-      onerror: (error) => {
-        rejectReady(
-          error instanceof Error
-            ? error
-            : new Error("Gemini Live reported a connection error."),
-        );
-      },
-      onclose: (event) => {
-        if (!expectedClose) {
-          rejectReady(
-            new Error(
-              `Gemini closed before returning audio (${event.code}: ${event.reason || "no reason"}).`,
-            ),
+          const audio = (message.serverContent?.modelTurn?.parts ?? []).find(
+            (part) => Boolean(part.inlineData?.data),
           );
-        }
+          if (audio && promptSentAt) {
+            if (followupSentAt) {
+              secondAudioAt ||= performance.now();
+            } else {
+              firstAudioAt ||= performance.now();
+            }
+            resolveWhenReady();
+          }
+
+          if (
+            verifyConversation &&
+            message.serverContent?.turnComplete &&
+            firstCaption &&
+            firstAudioAt &&
+            !followupSentAt
+          ) {
+            followupSentAt = performance.now();
+            session?.sendRealtimeInput({
+              text:
+                "I ate, but I am still a little hungry. Treat this as my learner reply and continue naturally in Telugu without changing the locked relationship register.",
+            });
+          }
+        },
+        onerror: (error) => {
+          rejectReady(
+            error instanceof Error
+              ? error
+              : new Error("Gemini Live reported a connection error."),
+          );
+        },
+        onclose: (event) => {
+          if (!expectedClose) {
+            rejectReady(
+              new Error(
+                `Gemini closed before returning audio (${event.code}: ${
+                  event.reason || "no reason"
+                }).`,
+              ),
+            );
+          }
+        },
       },
-    },
-  });
+    });
 
-  const connectedAt = performance.now();
-  promptSentAt = performance.now();
-  session.sendRealtimeInput({ text: scenario.openingCue });
+    const connectedAt = performance.now();
+    promptSentAt = performance.now();
+    session.sendRealtimeInput({
+      text: getLiveOpeningCue(scenario, relationship),
+    });
 
-  await ready;
-  const result = {
-    scenario: scenario.id,
-    model: LIVE_MODEL,
-    selectedCueId,
-    caption: firstCaption,
-    tokenMs: Math.round(tokenCreatedAt - tokenStartedAt),
-    connectMs: Math.round(connectedAt - startedAt),
-    captionCardMs: firstToolCallAt
-      ? Math.round(firstToolCallAt - promptSentAt)
-      : null,
-    firstAudioMs: Math.round(firstAudioAt - promptSentAt),
-    ...(verifyConversation
-      ? {
-          secondTurn: secondCaption,
-          secondCaptionMs: Math.round(secondToolCallAt - followupSentAt),
-          secondAudioMs: Math.round(secondAudioAt - followupSentAt),
-        }
-      : {}),
-  };
+    await ready;
 
-  console.log(JSON.stringify(result, null, 2));
-} finally {
-  clearTimeout(timeout);
-  expectedClose = true;
-  session?.close();
+    if (scenario.id === "family-check-in") {
+      const expectedCueId =
+        relationship === "close"
+          ? "have-you-eaten__primary"
+          : "have-you-eaten__alt_0";
+      if (selectedCueId !== expectedCueId) {
+        throw new Error(
+          `Expected ${expectedCueId} for ${relationship}, received ${
+            selectedCueId || "no reviewed cue"
+          }.`,
+        );
+      }
+    }
+
+    return {
+      scenario: scenario.id,
+      relationship,
+      durationSeconds,
+      model: LIVE_MODEL,
+      selectedCueId,
+      caption: firstCaption,
+      tokenTtlSeconds: Math.round(
+        (Date.parse(tokenExpiresAt) - tokenIssuedAt) / 1_000,
+      ),
+      newSessionTtlSeconds: Math.round(
+        (Date.parse(newSessionExpiresAt) - tokenIssuedAt) / 1_000,
+      ),
+      tokenMs: Math.round(tokenCreatedAt - tokenStartedAt),
+      connectMs: Math.round(connectedAt - startedAt),
+      captionCardMs: firstToolCallAt
+        ? Math.round(firstToolCallAt - promptSentAt)
+        : null,
+      firstAudioMs: Math.round(firstAudioAt - promptSentAt),
+      ...(verifyConversation
+        ? {
+            secondTurn: secondCaption,
+            secondCaptionMs: Math.round(secondToolCallAt - followupSentAt),
+            secondAudioMs: Math.round(secondAudioAt - followupSentAt),
+          }
+        : {}),
+    };
+  } finally {
+    clearTimeout(timeout);
+    expectedClose = true;
+    session?.close();
+  }
 }
+
+const combinations = runMatrix
+  ? LIVE_LISTENER_RELATIONSHIPS.flatMap((relationship) =>
+      LIVE_SESSION_DURATIONS.map((durationSeconds) => ({
+        relationship,
+        durationSeconds,
+      })),
+    )
+  : [
+      {
+        relationship: requestedRelationship,
+        durationSeconds: requestedDuration,
+      },
+    ];
+
+const results = [];
+for (const combination of combinations) {
+  results.push(
+    await runSmoke(combination.relationship, combination.durationSeconds),
+  );
+}
+
+console.log(JSON.stringify(runMatrix ? results : results[0], null, 2));

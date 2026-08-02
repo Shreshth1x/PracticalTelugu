@@ -13,6 +13,8 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "smoke:live": "doppler run --project practicaltelugu --config dev -- node scripts/smoke-practice-live-latency.mjs",
+    "recordings:export": "node scripts/export-phrase-recordings.mjs",
+    "recordings:process": "node scripts/process-phrase-recordings.mjs",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

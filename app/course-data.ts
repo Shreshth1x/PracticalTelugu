@@ -1,8 +1,124 @@
+import { resolvePhraseAudioSrc } from "./phrase-audio.ts";
+
 export type SituationGroup =
   | "quick-start"
   | "family"
   | "out-and-about"
   | "backup";
+
+export type TeluguAudience = "anyone" | "familiar" | "respectful";
+
+export type TeluguUsageKind =
+  | "relationship"
+  | "courtesy"
+  | "style"
+  | "referent-honor";
+
+export type TeluguFormUsage = {
+  audience: TeluguAudience;
+  kind: TeluguUsageKind;
+  label?: string;
+  guidance?: string;
+};
+
+export const teluguRelationshipGuidance =
+  "Use the familiar form only with someone you know well. For an elder or anyone new, use the respectful form, even if they are your age.";
+
+export const teluguAudienceGuidance: Record<
+  TeluguAudience,
+  { label: string; guidance: string }
+> = {
+  anyone: {
+    label: "Works with anyone",
+    guidance: "This form does not depend on who is listening.",
+  },
+  familiar: {
+    label: "Someone close",
+    guidance:
+      "Use this with a sibling, close friend, or someone you genuinely know well. Being the same age is not enough by itself.",
+  },
+  respectful: {
+    label: "Elder or someone new",
+    guidance:
+      "This is the safe choice for an elder or anyone new or unknown, even if they are your age.",
+  },
+};
+
+export type ResolvedTeluguFormUsage = {
+  audience: TeluguAudience;
+  kind: TeluguUsageKind | "default";
+  label: string;
+  guidance: string;
+  showContext: boolean;
+};
+
+export function resolveTeluguFormUsage(
+  usage?: TeluguFormUsage,
+): ResolvedTeluguFormUsage {
+  if (!usage) {
+    return {
+      audience: "anyone",
+      kind: "default",
+      ...teluguAudienceGuidance.anyone,
+      showContext: false,
+    };
+  }
+
+  const audienceGuidance = teluguAudienceGuidance[usage.audience];
+
+  if (usage.kind === "courtesy") {
+    return {
+      audience: usage.audience,
+      kind: usage.kind,
+      label: usage.label ?? "Polite with a stranger",
+      guidance:
+        usage.guidance ??
+        "Respectful wording is the safe choice with a stranger, service worker, or anyone you do not know well.",
+      showContext: true,
+    };
+  }
+
+  if (usage.kind === "referent-honor") {
+    return {
+      audience: usage.audience,
+      kind: usage.kind,
+      label: usage.label ?? "Honors the person mentioned",
+      guidance:
+        usage.guidance ??
+        "The respectful ending honors the person being discussed, not necessarily the person listening.",
+      showContext: true,
+    };
+  }
+
+  return {
+    audience: usage.audience,
+    kind: usage.kind,
+    label: usage.label ?? audienceGuidance.label,
+    guidance: usage.guidance ?? audienceGuidance.guidance,
+    showContext:
+      usage.kind === "relationship" || Boolean(usage.label || usage.guidance),
+  };
+}
+
+const familiarListenerUsage: TeluguFormUsage = {
+  audience: "familiar",
+  kind: "relationship",
+};
+
+const respectfulListenerUsage: TeluguFormUsage = {
+  audience: "respectful",
+  kind: "relationship",
+};
+
+const politeStrangerUsage: TeluguFormUsage = {
+  audience: "respectful",
+  kind: "courtesy",
+};
+
+const styleVariantUsage: TeluguFormUsage = {
+  audience: "anyone",
+  kind: "style",
+};
 
 export type TeluguAlternative = {
   label: string;
@@ -10,6 +126,7 @@ export type TeluguAlternative = {
   roman: string;
   pronunciation: string;
   audioSrc?: string;
+  usage?: TeluguFormUsage;
 };
 
 export type TeluguWord = {
@@ -22,6 +139,7 @@ export type TeluguWord = {
   note?: string;
   audioSrc?: string;
   alternatives?: TeluguAlternative[];
+  usage?: TeluguFormUsage;
 };
 
 export type Lesson = {
@@ -186,12 +304,15 @@ function addLearnerPronunciation(word: TeluguWordSource): TeluguWord {
   return {
     ...rest,
     pronunciation: resolveLearnerPronunciation(word.telugu, pronunciation),
+    audioSrc: rest.audioSrc ?? resolvePhraseAudioSrc(word.telugu),
     alternatives: alternatives?.map((alternative) => ({
       ...alternative,
       pronunciation: resolveLearnerPronunciation(
         alternative.telugu,
         alternative.pronunciation,
       ),
+      audioSrc:
+        alternative.audioSrc ?? resolvePhraseAudioSrc(alternative.telugu),
     })),
   };
 }
@@ -219,6 +340,12 @@ const practicalLessonSources: LessonSource[] = [
             label: "Extra respectful",
             telugu: "నమస్కారం అండి",
             roman: "namaskaaram andi",
+            usage: {
+              audience: "respectful",
+              kind: "courtesy",
+              guidance:
+                "Adding andi gives the greeting extra warmth and respect, especially with an elder.",
+            },
           },
         ],
       },
@@ -228,12 +355,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "ఎలా ఉన్నావు?",
         roman: "elaa unnaavu?",
         english: "how are you?",
-        note: "Use this with someone close to you or around your age.",
+        note: "Use this with a sibling, close friend, or someone you genuinely know well. For an elder or anyone new, use the respectful form, even if they are your age.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "ఎలా ఉన్నారు?",
             roman: "elaa unnaaru?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -291,6 +420,7 @@ const practicalLessonSources: LessonSource[] = [
             label: "Full form",
             telugu: "పరవాలేదు",
             roman: "paravaaledu",
+            usage: styleVariantUsage,
           },
         ],
       },
@@ -301,11 +431,19 @@ const practicalLessonSources: LessonSource[] = [
         roman: "kshaminchandi",
         english: "sorry",
         note: "A genuine Telugu apology that also carries the sense of “please forgive me.”",
+        usage: politeStrangerUsage,
         alternatives: [
           {
             label: "Pardon me / forgive me",
             telugu: "మన్నించండి",
             roman: "manninchandi",
+            usage: {
+              audience: "respectful",
+              kind: "style",
+              label: "Pardon me / forgive me",
+              guidance:
+                "This is another respectful apology; the difference is meaning, not a different listener relationship.",
+            },
           },
         ],
       },
@@ -365,12 +503,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "నీ పేరు ఏంటి?",
         roman: "nee peru enti?",
         english: "what is your name?",
-        note: "Use this with someone close to your age. Switch to “mee” for an elder.",
+        note: "Use nee with a sibling, close friend, or someone you genuinely know well. Use mee for an elder or anyone new or unknown, even if they are your age.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "మీ పేరు ఏంటి?",
             roman: "mee peru enti?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -393,6 +533,13 @@ const practicalLessonSources: LessonSource[] = [
             label: "Formal Telugu",
             telugu: "మిమ్మల్ని కలిసినందుకు సంతోషం",
             roman: "mimmalni kalisinanduku santosham",
+            usage: {
+              audience: "respectful",
+              kind: "style",
+              label: "Formal, respectful Telugu",
+              guidance:
+                "Mimmalni is respectful or plural. This full sentence is more formal than the everyday reaction chaalaa santosham.",
+            },
           },
         ],
       },
@@ -408,6 +555,7 @@ const practicalLessonSources: LessonSource[] = [
             label: "With elders or someone new",
             telugu: "మీరు ఎక్కడి నుంచి?",
             roman: "meeru ekkadi nunchi?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -429,11 +577,13 @@ const practicalLessonSources: LessonSource[] = [
         roman: "tinnaavaa?",
         english: "have you eaten?",
         note: "A warm check-in with siblings, cousins, and close friends.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "తిన్నారా?",
             roman: "tinnaaraa?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -443,12 +593,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "బాగున్నావా?",
         roman: "baagunnaavaa?",
         english: "are you doing well?",
-        note: "A very natural family check-in. Use the respectful ending with elders.",
+        note: "A natural check-in for a sibling, close cousin, or friend you know well. Use the respectful ending for an elder or anyone new.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "బాగున్నారా?",
             roman: "baagunnaaraa?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -458,12 +610,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "ఎక్కడున్నావు?",
         roman: "ekkadunnaavu?",
         english: "where are you?",
-        note: "The words run together naturally in everyday speech.",
+        note: "The words run together naturally in everyday speech. This ending is for someone you know well; use the respectful form with an elder or anyone new.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "ఎక్కడున్నారు?",
             roman: "ekkadunnaaru?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -473,6 +627,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "అమ్మ ఇంట్లో ఉన్నారా?",
         roman: "amma intlo unnaaraa?",
         english: "is mom at home?",
+        note: "The -aaru ending honors Mom, the person you are asking about. It does not necessarily mark respect toward the listener.",
+        usage: {
+          audience: "anyone",
+          kind: "referent-honor",
+          label: "Honors Mom",
+          guidance:
+            "Here -aaru honors Mom, the person being discussed; it does not tell you how respectfully you are addressing the listener.",
+        },
       },
     ],
   },
@@ -491,12 +653,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "నీళ్లు ఇస్తారా?",
         roman: "neellu istaaraa?",
         english: "could I have some water?",
-        note: "Literally, “Would you give me water?” It is a natural polite request.",
+        note: "Literally, “Would you give me water?” This respectful form is a natural choice with an elder or anyone new.",
+        usage: respectfulListenerUsage,
         alternatives: [
           {
             label: "With family or friends",
             telugu: "నీళ్లు ఇస్తావా?",
             roman: "neellu istaavaa?",
+            usage: familiarListenerUsage,
           },
         ],
       },
@@ -548,11 +712,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "కొంచెం మెల్లగా చెప్పండి",
         roman: "konchem mellagaa cheppandi",
         english: "please say it slowly",
+        note: "The respectful cheppandi is safe with an elder or anyone new. Use cheppu only with someone you know well.",
+        usage: respectfulListenerUsage,
         alternatives: [
           {
             label: "With family or friends",
             telugu: "కొంచెం మెల్లగా చెప్పు",
             roman: "konchem mellagaa cheppu",
+            usage: familiarListenerUsage,
           },
         ],
       },
@@ -562,11 +729,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "మళ్లీ చెప్పండి",
         roman: "malli cheppandi",
         english: "please say it again",
+        note: "The respectful cheppandi is safe with an elder or anyone new. Use cheppu only with someone you know well.",
+        usage: respectfulListenerUsage,
         alternatives: [
           {
             label: "With family or friends",
             telugu: "మళ్లీ చెప్పు",
             roman: "malli cheppu",
+            usage: familiarListenerUsage,
           },
         ],
       },
@@ -601,6 +771,12 @@ const practicalLessonSources: LessonSource[] = [
             label: "Extra respectful",
             telugu: "నమస్కారం అండి",
             roman: "namaskaaram andi",
+            usage: {
+              audience: "respectful",
+              kind: "courtesy",
+              guidance:
+                "Adding andi gives the greeting extra warmth and respect, especially with an elder.",
+            },
           },
         ],
       },
@@ -617,11 +793,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "నీ పేరు ఏంటి?",
         roman: "nee peru enti?",
         english: "what is your name?",
+        note: "Use nee with a sibling, close friend, or someone you genuinely know well. Use mee for an elder or anyone new or unknown, even if they are your age.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "మీ పేరు ఏంటి?",
             roman: "mee peru enti?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -631,11 +810,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "మళ్లీ చెప్పండి",
         roman: "malli cheppandi",
         english: "please say it again",
+        note: "The respectful cheppandi is safe with an elder or anyone new. Use cheppu only with someone you know well.",
+        usage: respectfulListenerUsage,
         alternatives: [
           {
             label: "With family or friends",
             telugu: "మళ్లీ చెప్పు",
             roman: "malli cheppu",
+            usage: familiarListenerUsage,
           },
         ],
       },
@@ -679,12 +861,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "బాగున్నావా?",
         roman: "baagunnaavaa?",
         english: "are you doing well?",
-        note: "A very natural family check-in. Use the respectful ending with elders.",
+        note: "A natural check-in for a sibling, close cousin, or friend you know well. Use the respectful ending for an elder or anyone new.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "బాగున్నారా?",
             roman: "baagunnaaraa?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -711,6 +895,7 @@ const practicalLessonSources: LessonSource[] = [
             label: "Full form",
             telugu: "రేపు వస్తాను",
             roman: "repu vastaanu",
+            usage: styleVariantUsage,
           },
         ],
       },
@@ -720,11 +905,14 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "ఎప్పుడు ఇంట్లో ఉంటావు?",
         roman: "eppudu intlo untaavu?",
         english: "when will you be home?",
+        note: "Use this familiar ending with someone you know well. Use the respectful form with an elder or anyone new.",
+        usage: familiarListenerUsage,
         alternatives: [
           {
             label: "With elders or someone new",
             telugu: "ఎప్పుడు ఇంట్లో ఉంటారు?",
             roman: "eppudu intlo untaaru?",
+            usage: respectfulListenerUsage,
           },
         ],
       },
@@ -740,6 +928,7 @@ const practicalLessonSources: LessonSource[] = [
             label: "Full form",
             telugu: "ఇప్పుడే బయల్దేరుతున్నాను",
             roman: "ippude bayalderutunnaanu",
+            usage: styleVariantUsage,
           },
         ],
       },
@@ -812,6 +1001,7 @@ const practicalLessonSources: LessonSource[] = [
             label: "More formal",
             telugu: "బస్సు నిలయం ఎక్కడ?",
             roman: "bussu nilayam ekkada?",
+            usage: styleVariantUsage,
           },
         ],
       },
@@ -822,6 +1012,7 @@ const practicalLessonSources: LessonSource[] = [
         roman: "ikkada aapandi",
         english: "stop here, please",
         note: "The respectful “-andi” ending already makes this polite.",
+        usage: politeStrangerUsage,
       },
       {
         id: "go-straight",
@@ -829,6 +1020,8 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "నేరుగా వెళ్లండి",
         roman: "nerugaa vellandi",
         english: "go straight",
+        note: "The -andi ending makes this a respectful direction, suitable with a driver or anyone you do not know well.",
+        usage: politeStrangerUsage,
       },
       {
         id: "way-there",
@@ -869,12 +1062,20 @@ const practicalLessonSources: LessonSource[] = [
         telugu: "కొంచెం తగ్గించండి",
         roman: "konchem tagginchandi",
         english: "please lower it a little",
-        note: "At a market, you may add “anna” or “akka” when addressing the seller warmly.",
+        note: "This respectful request is a safe choice with a seller. You may hear anna or akka used as warm, respectful address; follow the other person’s preference when unsure.",
+        usage: politeStrangerUsage,
         alternatives: [
           {
             label: "Softer at a shop",
             telugu: "కొంచెం తగ్గిస్తారా?",
             roman: "konchem taggistaraa?",
+            usage: {
+              audience: "respectful",
+              kind: "style",
+              label: "Softer at a shop",
+              guidance:
+                "This question form keeps the same respectful audience and makes the request sound softer.",
+            },
           },
         ],
       },

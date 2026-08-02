@@ -1,4 +1,8 @@
-import type { TeluguWord } from "../course-data";
+import {
+  resolveTeluguFormUsage,
+  type TeluguAudience,
+  type TeluguWord,
+} from "../course-data.ts";
 
 export type LivePhraseCue = {
   id: string;
@@ -8,14 +12,12 @@ export type LivePhraseCue = {
   roman: string;
   pronunciation: string;
   telugu: string;
+  audience: TeluguAudience;
   contextLabel: string;
+  contextGuidance: string;
   note?: string;
   variant: "primary" | "alternative";
 };
-
-const DEFAULT_CONTEXT_LABEL = "Everyday Telugu";
-const FAMILIAR_CONTEXT_LABEL = "With family or friends";
-const RESPECTFUL_CONTEXT_LABEL = "With elders or someone new";
 
 const ENGLISH_STOP_WORDS = new Set([
   "a",
@@ -58,34 +60,9 @@ function normalizeExact(value: string) {
     .trim();
 }
 
-function normalizeContextLabel(label: string) {
-  return normalizeExact(label);
-}
-
-function primaryContextLabel(word: TeluguWord) {
-  const labels = (word.alternatives ?? []).map((alternative) =>
-    normalizeContextLabel(alternative.label),
-  );
-
-  if (!labels.length) return DEFAULT_CONTEXT_LABEL;
-
-  const alternativesAreRespectful = labels.every((label) =>
-    /\b(elder|elders|respectful|formal|someone new|people you do not know)\b/.test(
-      label,
-    ),
-  );
-  if (alternativesAreRespectful) return FAMILIAR_CONTEXT_LABEL;
-
-  const alternativesAreFamiliar = labels.every((label) =>
-    /\b(family|friend|friends|familiar|casual|close|younger)\b/.test(label),
-  );
-  if (alternativesAreFamiliar) return RESPECTFUL_CONTEXT_LABEL;
-
-  return DEFAULT_CONTEXT_LABEL;
-}
-
 export function getLivePhraseCues(words: TeluguWord[]): LivePhraseCue[] {
   return words.flatMap((word) => {
+    const primaryUsage = resolveTeluguFormUsage(word.usage);
     const primary: LivePhraseCue = {
       id: `${word.id}__primary`,
       wordId: word.id,
@@ -94,24 +71,32 @@ export function getLivePhraseCues(words: TeluguWord[]): LivePhraseCue[] {
       roman: word.roman,
       pronunciation: word.pronunciation,
       telugu: word.telugu,
-      contextLabel: primaryContextLabel(word),
+      audience: primaryUsage.audience,
+      contextLabel: primaryUsage.label,
+      contextGuidance: primaryUsage.guidance,
       note: word.note,
       variant: "primary",
     };
 
     const alternatives = (word.alternatives ?? []).map(
-      (alternative, index): LivePhraseCue => ({
-        id: `${word.id}__alt_${index}`,
-        wordId: word.id,
-        progressKey: word.progressKey,
-        english: word.english,
-        roman: alternative.roman,
-        pronunciation: alternative.pronunciation,
-        telugu: alternative.telugu,
-        contextLabel: alternative.label,
-        note: word.note,
-        variant: "alternative",
-      }),
+      (alternative, index): LivePhraseCue => {
+        const usage = resolveTeluguFormUsage(alternative.usage);
+
+        return {
+          id: `${word.id}__alt_${index}`,
+          wordId: word.id,
+          progressKey: word.progressKey,
+          english: word.english,
+          roman: alternative.roman,
+          pronunciation: alternative.pronunciation,
+          telugu: alternative.telugu,
+          audience: usage.audience,
+          contextLabel: usage.showContext ? usage.label : alternative.label,
+          contextGuidance: usage.guidance,
+          note: word.note,
+          variant: "alternative",
+        };
+      },
     );
 
     return [primary, ...alternatives];
