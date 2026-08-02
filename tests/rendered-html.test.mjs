@@ -124,6 +124,7 @@ async function render(pathname = "/") {
 const routeCases = [
   ["/", /Learn Telugu you’ll actually use/],
   ["/learn", /What do you need to say\?/],
+  ["/practice-live", /Practice Telugu out loud\./],
   ["/words", /Find what you need to say\./],
   ["/words/daily", /id="daily-word-title"/],
   ["/settings", />Settings\.<\/h1>/],
@@ -163,6 +164,97 @@ test("focused word and lesson sessions omit global navigation", async () => {
     assert.doesNotMatch(html, /aria-label="Primary navigation"/, pathname);
     assert.match(html, /role="progressbar"/, pathname);
   }
+});
+
+test("puts Practice Live in the public navigation and marks its route", async () => {
+  const response = await render("/practice-live");
+  const html = await response.text();
+  const navStart = html.indexOf('aria-label="Primary navigation"');
+  const navEnd = html.indexOf("</nav>", navStart);
+  const navigation = html.slice(navStart, navEnd);
+
+  assert.ok(navStart >= 0, "primary navigation is present");
+  assert.match(navigation, /href="\/practice-live"/);
+  assert.match(navigation, />Practice Live<\/a>/);
+  assert.match(
+    navigation,
+    /top-nav-link top-nav-link-active[^>]*aria-current="page"[^>]*>Practice Live/,
+  );
+});
+
+test("keeps live practice grounded in useful non-greeting situations", async () => {
+  const source = await readFile(
+    new URL("../app/practice-live/live-scenarios.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /id: "family-check-in"/);
+  assert.match(source, /id: "at-the-table"/);
+  assert.match(source, /id: "when-stuck"/);
+  assert.match(source, /findPracticePack\("family-check-in"\)/);
+  assert.match(source, /findPracticePack\("at-the-table"\)/);
+  assert.match(source, /findPracticeLesson\("when-stuck"\)/);
+  assert.doesNotMatch(source, /findPracticeWord\([^)]*"(?:hello|thank-you)"/);
+});
+
+test("keeps Practice Live Telugu in English letters with English directly underneath", async () => {
+  const [response, source] = await Promise.all([
+    render("/practice-live"),
+    readFile(
+      new URL("../app/practice-live/PracticeLive.tsx", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  const html = await response.text();
+  const teluguScript = /[\u0c00-\u0c7f]/u;
+
+  assert.doesNotMatch(html, teluguScript);
+  assert.doesNotMatch(source, /\.telugu\b/);
+  assert.doesNotMatch(source, /lang="te"/);
+  assert.doesNotMatch(source, /turn\.text/);
+  assert.doesNotMatch(source, /live-follow-telugu/);
+
+  const currentTurnStart = source.indexOf('className="live-follow-spoken"');
+  const currentTurnEnd = source.indexOf("</div>", source.indexOf('className="live-follow-english"'));
+  const currentTurn = source.slice(currentTurnStart, currentTurnEnd);
+  assert.ok(currentTurnStart >= 0, "current spoken turn is present");
+  assert.ok(
+    currentTurn.indexOf('className="live-follow-roman"') <
+      currentTurn.indexOf('className="live-follow-english"'),
+    "English follows Telugu written in English letters in the current turn",
+  );
+
+  const transcriptStart = source.indexOf('className="live-transcript-copy"');
+  const transcriptEnd = source.indexOf(") : (", transcriptStart);
+  const transcript = source.slice(transcriptStart, transcriptEnd);
+  assert.ok(transcriptStart >= 0, "paired transcript copy is present");
+  assert.ok(
+    transcript.indexOf("live-transcript-roman") <
+      transcript.indexOf("live-transcript-english"),
+    "English follows Telugu written in English letters in every transcript turn",
+  );
+});
+
+test("keeps the permanent Gemini key on the server", async () => {
+  const clientSource = await readFile(
+    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+    "utf8",
+  );
+  const routeSource = await readFile(
+    new URL("../app/api/practice-live/token/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(clientSource, /fetch\("\/api\/practice-live\/token"/);
+  assert.doesNotMatch(clientSource, /GEMINI_API_KEY|NEXT_PUBLIC_GEMINI/);
+  assert.match(clientSource, /SESSION_LIMIT_SECONDS = 5 \* 60/);
+  assert.match(clientSource, /sendRealtimeInput\(\{\s*text:/);
+  assert.doesNotMatch(clientSource, /sendClientContent\(/);
+  assert.match(clientSource, /project has been denied access/);
+  assert.match(clientSource, /onclose:\s*\(event\)/);
+  assert.match(routeSource, /process\.env\.GEMINI_API_KEY/);
+  assert.doesNotMatch(routeSource, /NEXT_PUBLIC_/);
+  assert.match(routeSource, /uses:\s*1/);
 });
 
 test("uses the approved peacock mark across brand surfaces", async () => {
@@ -1182,6 +1274,7 @@ test("route modules select the intended screen without manual history routing", 
   const routeFiles = [
     ["../app/page.tsx", "today"],
     ["../app/learn/page.tsx", "learn"],
+    ["../app/practice-live/page.tsx", "practice-live"],
     ["../app/words/page.tsx", "words"],
     ["../app/words/daily/page.tsx", "daily"],
     ["../app/settings/page.tsx", "settings"],

@@ -31,12 +31,14 @@ import {
   type SavedState,
 } from "./learning-state";
 import { useLearning } from "./LearningProvider";
+import PracticeLive from "./practice-live/PracticeLive";
 import { Wordmark } from "./Wordmark";
 
 export type AppScreen =
   | "today"
   | "learn"
   | "words"
+  | "practice-live"
   | "daily"
   | "settings"
   | "lesson";
@@ -484,11 +486,15 @@ function AudioButton({
 }
 
 const navItems: {
-  screen: Extract<AppScreen, "today" | "learn" | "words">;
+  screen: Extract<
+    AppScreen,
+    "today" | "practice-live" | "learn" | "words"
+  >;
   href: string;
   label: string;
 }[] = [
   { screen: "today", href: "/", label: "Today" },
+  { screen: "practice-live", href: "/practice-live", label: "Practice Live" },
   { screen: "learn", href: "/learn", label: "Situations" },
   { screen: "words", href: "/words", label: "Phrasebook" },
 ];
@@ -504,11 +510,13 @@ function AppShell({
   const returnPath =
     screen === "learn"
       ? "/learn"
-      : screen === "words"
-        ? "/words"
-        : screen === "settings"
-          ? "/settings"
-          : "/";
+      : screen === "practice-live"
+        ? "/practice-live"
+        : screen === "words"
+          ? "/words"
+          : screen === "settings"
+            ? "/settings"
+            : "/";
 
   return (
     <div className="app-frame">
@@ -2292,6 +2300,12 @@ export default function PalukuApp({
         setSavedWords={setSavedWords}
         notify={setToast}
       />
+    );
+  } else if (screen === "practice-live") {
+    content = (
+      <AppShell screen="practice-live">
+        <PracticeLive />
+      </AppShell>
     );
   } else if (screen === "settings") {
     content = (
