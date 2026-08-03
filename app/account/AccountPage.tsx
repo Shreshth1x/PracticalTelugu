@@ -2,9 +2,17 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from "react";
 import { hasLearningData, safeAppPath } from "../learning-state";
 import { useLearning } from "../LearningProvider";
+import { verifyFamilyRecorderOwner } from "../recordings/recorder-access";
+import { getSupabaseBrowserClient } from "../supabase-client";
 import { Wordmark } from "../Wordmark";
 import { GoogleIdentityButton } from "./GoogleIdentityButton";
 
@@ -61,6 +69,10 @@ export function AccountPage() {
   const [busy, setBusy] = useState<"email" | "google" | "reset" | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [recorderAccess, setRecorderAccess] = useState<{
+    userId: string;
+    status: "allowed" | "denied";
+  } | null>(null);
   const {
     state,
     preferences,
@@ -78,6 +90,32 @@ export function AccountPage() {
     signOut,
     retrySync,
   } = useLearning();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!authReady || !user || user.is_anonymous) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const checkedUserId = user.id;
+    void verifyFamilyRecorderOwner(getSupabaseBrowserClient()).then(
+      (access) => {
+        if (!cancelled) {
+          setRecorderAccess({
+            userId: checkedUserId,
+            status: access === "allowed" ? "allowed" : "denied",
+          });
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, user]);
 
   const hasDeviceProgress = useMemo(
     () =>
@@ -243,9 +281,12 @@ export function AccountPage() {
                   Try again
                 </button>
               ) : null}
-              <Link href="/recordings" className="secondary-button">
-                Open family recorder
-              </Link>
+              {recorderAccess?.userId === user.id &&
+              recorderAccess.status === "allowed" ? (
+                <Link href="/recordings" className="secondary-button">
+                  Open family recorder
+                </Link>
+              ) : null}
               <Link href={returnTo} className="primary-button">
                 Back to practice
               </Link>

@@ -12,6 +12,7 @@ import {
   latestRecordingByTarget,
   recordingTargets,
 } from "../app/recordings/recording-catalog.ts";
+import { verifyFamilyRecorderOwner } from "../app/recordings/recorder-access.ts";
 
 function rawCourseForms() {
   return practicalLessons.flatMap((lesson) =>
@@ -188,7 +189,7 @@ test("selects the latest ready take for each phrase", () => {
   assert.equal(latest.has("phrase-two"), false);
 });
 
-test("opens recording without login while keeping each browser's audio private", async () => {
+test("keeps the family recorder behind the database-backed owner allowlist", async () => {
   const originalMigration = await readFile(
     new URL(
       "../supabase/migrations/20260802184513_phrase_recordings.sql",
@@ -203,6 +204,20 @@ test("opens recording without login while keeping each browser's audio private",
     ),
     "utf8",
   );
+  const adminOnlyMigration = await readFile(
+    new URL(
+      "../supabase/migrations/20260803023213_admin_only_phrase_recorder.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const claimAclMigration = await readFile(
+    new URL(
+      "../supabase/migrations/20260803025043_revoke_anonymous_recorder_claim.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
   const recorder = await readFile(
     new URL("../app/recordings/RecorderStudio.tsx", import.meta.url),
     "utf8",
@@ -213,6 +228,14 @@ test("opens recording without login while keeping each browser's audio private",
   );
   const learningProvider = await readFile(
     new URL("../app/LearningProvider.tsx", import.meta.url),
+    "utf8",
+  );
+  const accountPage = await readFile(
+    new URL("../app/account/AccountPage.tsx", import.meta.url),
+    "utf8",
+  );
+  const recorderAccess = await readFile(
+    new URL("../app/recordings/recorder-access.ts", import.meta.url),
     "utf8",
   );
   const supabaseConfig = await readFile(
@@ -236,24 +259,136 @@ test("opens recording without login while keeping each browser's audio private",
   assert.match(publicSessionMigration, /auth\.uid\(\)\) = user_id/);
   assert.match(publicSessionMigration, /file_size_limit = 2097152/);
   assert.doesNotMatch(publicSessionMigration, /recorder_members\.active/);
-  assert.match(supabaseConfig, /enable_anonymous_sign_ins = true/);
-  assert.match(supabaseClient, /getSupabaseRecorderClient/);
-  assert.match(supabaseClient, /practicaltelugu-recorder-auth-v1/);
+
+  assert.match(
+    adminOnlyMigration,
+    /extensions\.digest\(lower\(coalesce\(users\.email, ''\)\), 'sha256'\)/,
+  );
+  assert.match(
+    adminOnlyMigration,
+    /update public\.recorder_members\s+set active = false/,
+  );
+  assert.match(adminOnlyMigration, /if admin_match_count = 1 then/);
+  assert.match(
+    adminOnlyMigration,
+    /values \(admin_user_id, 'owner', true\)/,
+  );
+  assert.match(
+    adminOnlyMigration,
+    /count\(distinct recordings\.user_id\)/,
+  );
+  assert.match(
+    adminOnlyMigration,
+    /if legacy_recording_owner_count = 1 then\s+update public\.phrase_recordings\s+set user_id = admin_user_id/,
+  );
+  assert.doesNotMatch(
+    adminOnlyMigration,
+    /update public\.phrase_recordings\s+set storage_path/i,
+  );
+  assert.match(
+    adminOnlyMigration,
+    /registered_owner_count <> 1 or registered_owner_id <> requester_user_id/,
+  );
+  assert.match(
+    claimAclMigration,
+    /revoke all on function public\.claim_phrase_recorder_access\(\)\s+from public, anon/i,
+  );
+  assert.match(
+    claimAclMigration,
+    /grant execute on function public\.claim_phrase_recorder_access\(\)\s+to authenticated/i,
+  );
+  assert.ok(
+    (adminOnlyMigration.match(/members\.role = 'owner'/g) ?? []).length >= 8,
+    "every phrase-recording and storage policy requires the active owner role",
+  );
+
+  const rowInsertPolicy = adminOnlyMigration.match(
+    /create policy "Active owner can add phrase recordings"[\s\S]*?\n  \);/,
+  )?.[0];
+  assert.ok(rowInsertPolicy, "owner-only row insert policy exists");
+  assert.match(rowInsertPolicy, /^\s*user_id = \(select auth\.uid\(\)\)/m);
+  assert.match(
+    rowInsertPolicy,
+    /split_part\(storage_path, '\/', 1\) = \(select auth\.uid\(\)\)::text/,
+  );
+  assert.match(rowInsertPolicy, /members\.active/);
+
+  const objectInsertPolicy = adminOnlyMigration.match(
+    /create policy "Active owner can upload phrase audio"[\s\S]*?\n  \);/,
+  )?.[0];
+  assert.ok(objectInsertPolicy, "owner-only object insert policy exists");
+  assert.match(objectInsertPolicy, /bucket_id = 'phrase-recordings'/);
+  assert.match(
+    objectInsertPolicy,
+    /\(storage\.foldername\(name\)\)\[1\] = \(select auth\.uid\(\)\)::text/,
+  );
+  assert.match(objectInsertPolicy, /members\.active/);
+
+  assert.doesNotMatch(supabaseClient, /getSupabaseRecorderClient/);
+  assert.doesNotMatch(supabaseClient, /practicaltelugu-recorder-auth-v1/);
+  assert.match(supabaseConfig, /enable_anonymous_sign_ins = false/);
   assert.match(learningProvider, /user\?\.is_anonymous \? null/);
-  assert.match(recorder, /auth\.signInAnonymously\(\)/);
+  assert.match(recorder, /getSupabaseBrowserClient/);
+  assert.match(recorder, /verifyFamilyRecorderOwner\(supabase\)/);
+  assert.match(recorder, /recorderAccess !== "allowed"/);
+  assert.match(recorder, /auth\.onAuthStateChange/);
+  assert.match(recorder, /authorizedUserIdRef\.current = ""/);
+  assert.match(recorder, /releaseMedia\(\)/);
+  assert.match(recorder, /setRecorderUserId\(""\)/);
+  assert.match(recorder, /setAuthRevision\(\(current\) => current \+ 1\)/);
+  assert.doesNotMatch(recorder, /auth\.signInAnonymously\(\)/);
+  assert.doesNotMatch(recorder, /getSupabaseRecorderClient/);
+  assert.match(recorderAccess, /rpc\("claim_phrase_recorder_access"\)/);
+  assert.match(
+    accountPage,
+    /verifyFamilyRecorderOwner\(getSupabaseBrowserClient\(\)\)/,
+  );
+  assert.match(
+    accountPage,
+    /recorderAccess\?\.userId === user\.id &&\s+recorderAccess\.status === "allowed"[\s\S]{0,180}Open family recorder/,
+  );
   assert.match(recorder, /SPEAKER_OPTIONS = \["Grandma", "Grandpa"\] as const/);
   assert.match(recorder, /role="radiogroup"/);
   assert.doesNotMatch(recorder, /speakerInputRef|Grandma, Grandpa, or their name/);
-  assert.doesNotMatch(
-    recorder,
-    /useLearning|mode=signin|Sign in before recording|recorder_members|claim_phrase_recorder_access|speaker agreed|consentConfirmed/,
-  );
+  assert.doesNotMatch(recorder, /recorder_members|consentConfirmed/);
   assert.match(recorder, /navigator\.mediaDevices\?\.getUserMedia/);
   assert.match(recorder, /MediaRecorder\.isTypeSupported/);
   assert.match(recorder, /\.upload\(storagePath, previewBlob/);
   assert.match(recorder, /\.remove\(\[storagePath\]\)/);
   assert.match(recorder, /\.createSignedUrl\(currentSaved\.storage_path/);
   assert.doesNotMatch(recorder, /getPublicUrl/);
+});
+
+test("maps the owner-claim RPC to explicit recorder access states", async () => {
+  const rpcCalls = [];
+  const clientReturning = (result) => ({
+    rpc: async (name) => {
+      rpcCalls.push(name);
+      return result;
+    },
+  });
+
+  assert.equal(
+    await verifyFamilyRecorderOwner(
+      clientReturning({ data: "owner", error: null }),
+    ),
+    "allowed",
+  );
+  assert.equal(
+    await verifyFamilyRecorderOwner(clientReturning({ data: null, error: null })),
+    "denied",
+  );
+  assert.equal(
+    await verifyFamilyRecorderOwner(
+      clientReturning({ data: null, error: { message: "rpc failed" } }),
+    ),
+    "error",
+  );
+  assert.deepEqual(rpcCalls, [
+    "claim_phrase_recorder_access",
+    "claim_phrase_recorder_access",
+    "claim_phrase_recorder_access",
+  ]);
 });
 
 test("exports recordings through the linked CLI without revealing an admin key", async () => {
@@ -268,6 +403,12 @@ test("exports recordings through the linked CLI without revealing an admin key",
 
   assert.match(exporter, /"db",\s*"query",\s*"--linked"/);
   assert.match(exporter, /"storage",\s*"cp"/);
+  assert.match(
+    exporter,
+    /inner join public\.recorder_members as members on members\.user_id = recordings\.user_id/,
+  );
+  assert.match(exporter, /members\.role = 'owner'/);
+  assert.match(exporter, /members\.active/);
   assert.doesNotMatch(exporter, /api-keys|service_role|serviceRoleKey/);
   assert.match(processor, /silenceremove=/);
   assert.match(processor, /loudnorm=I=-19:TP=-1\.5/);

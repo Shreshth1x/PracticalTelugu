@@ -23,13 +23,13 @@ Completed live-session totals are stored on the current device; microphone
 audio is sent directly from the browser to Google Gemini only while the learner
 has an active session. Practice Live does not save that conversation audio.
 
-The separate `/recordings` route is a direct-access family tool for deliberately
-capturing phrase clips. It silently creates a per-browser anonymous recording
-session, so a speaker never has to make an account or see a sign-in screen.
-Accepted takes and their consent metadata are stored in an owner-scoped private
-Supabase Storage bucket and RLS-protected table; they are not published into
-learner-facing `audioSrc` fields automatically. The same browser keeps its
-recording progress through the persisted anonymous session.
+The separate `/recordings` route is an owner-only family tool for deliberately
+capturing phrase clips. Access is claimed against the private administrator
+allowlist and enforced by Supabase row-level security for both recording rows
+and private Storage objects. Ordinary and anonymous accounts cannot open the
+recorder, upload takes, or replace existing recordings. Accepted takes and
+their consent metadata are not published into learner-facing `audioSrc` fields
+automatically; the export pipeline also limits its inputs to the active owner.
 
 Google sign-in is ready for public use. Email/password confirmation and
 password-reset messages use Supabase Auth; configure a custom SMTP provider

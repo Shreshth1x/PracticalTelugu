@@ -19,7 +19,7 @@ const queryResult = JSON.parse(
       "--linked",
       "--output-format",
       "json",
-      "select id, recording_key, phrase_telugu, phrase_roman, phrase_english, speaker_name, storage_path, mime_type, byte_size, duration_ms, status, created_at from public.phrase_recordings where status = 'ready' order by created_at;",
+      "select recordings.id, recordings.recording_key, recordings.phrase_telugu, recordings.phrase_roman, recordings.phrase_english, recordings.speaker_name, recordings.storage_path, recordings.mime_type, recordings.byte_size, recordings.duration_ms, recordings.status, recordings.created_at from public.phrase_recordings as recordings inner join public.recorder_members as members on members.user_id = recordings.user_id where recordings.status = 'ready' and members.role = 'owner' and members.active order by recordings.created_at;",
     ],
     {
       cwd: workspace,

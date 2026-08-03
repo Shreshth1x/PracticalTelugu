@@ -10,7 +10,7 @@ import {
   type CSSProperties,
 } from "react";
 import { Wordmark } from "../Wordmark";
-import { getSupabaseRecorderClient } from "../supabase-client";
+import { getSupabaseBrowserClient } from "../supabase-client";
 import {
   buildRecordingStoragePath,
   latestRecordingByTarget,
@@ -18,6 +18,7 @@ import {
   recordingTargets,
   type PhraseRecordingRow,
 } from "./recording-catalog";
+import { verifyFamilyRecorderOwner } from "./recorder-access";
 
 const RECORDING_BUCKET = "phrase-recordings";
 const SPEAKER_STORAGE_KEY = "practicaltelugu.recorder-speaker.v1";
@@ -34,7 +35,12 @@ type RecorderPhase =
   | "saving"
   | "saved";
 
-type RecorderAccessState = "loading" | "authorized" | "error";
+type RecorderAccessState =
+  | "loading"
+  | "authorized"
+  | "signin"
+  | "denied"
+  | "error";
 type SpeakerName = (typeof SPEAKER_OPTIONS)[number];
 
 type BrowserWindow = Window &
@@ -159,6 +165,7 @@ async function withRecorderTimeout<T>(operation: PromiseLike<T>) {
 export function RecorderStudio() {
   const [accessState, setAccessState] =
     useState<RecorderAccessState>("loading");
+  const [authRevision, setAuthRevision] = useState(0);
   const [recorderUserId, setRecorderUserId] = useState("");
   const [rows, setRows] = useState<PhraseRecordingRow[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -189,6 +196,7 @@ export function RecorderStudio() {
   const previewUrlRef = useRef("");
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const savedAudioRef = useRef<HTMLAudioElement | null>(null);
+  const authorizedUserIdRef = useRef("");
 
   const currentTarget = recordingTargets[currentIndex];
   const latestByTarget = useMemo(() => latestRecordingByTarget(rows), [rows]);
@@ -261,7 +269,7 @@ export function RecorderStudio() {
 
   useEffect(() => {
     let cancelled = false;
-    const supabase = getSupabaseRecorderClient();
+    const supabase = getSupabaseBrowserClient();
     const requestController = new AbortController();
     const requestTimer = window.setTimeout(
       () => requestController.abort(),
@@ -278,19 +286,34 @@ export function RecorderStudio() {
         );
         if (currentSession.error) throw currentSession.error;
 
-        let session = currentSession.data.session;
-        if (!session) {
-          const anonymousSession = await withRecorderTimeout(
-            supabase.auth.signInAnonymously(),
-          );
-          if (anonymousSession.error || !anonymousSession.data.session) {
-            throw anonymousSession.error ?? new Error("No recording session.");
+        const session = currentSession.data.session;
+        if (!session || session.user.is_anonymous) {
+          authorizedUserIdRef.current = "";
+          if (!cancelled) setAccessState("signin");
+          return;
+        }
+
+        const recorderAccess = await withRecorderTimeout(
+          verifyFamilyRecorderOwner(supabase),
+        );
+        if (recorderAccess !== "allowed") {
+          authorizedUserIdRef.current = "";
+          if (!cancelled) {
+            setAccessState(
+              recorderAccess === "denied" ? "denied" : "error",
+            );
+            if (recorderAccess === "error") {
+              setError(
+                "Recorder access could not be verified. Reload and try again.",
+              );
+            }
           }
-          session = anonymousSession.data.session;
+          return;
         }
 
         if (cancelled) return;
         const userId = session.user.id;
+        authorizedUserIdRef.current = userId;
         setRecorderUserId(userId);
 
         const recordings = await supabase
@@ -323,6 +346,7 @@ export function RecorderStudio() {
         setAccessState("authorized");
       } catch {
         if (cancelled) return;
+        authorizedUserIdRef.current = "";
         setAccessState("error");
         setError(
           requestController.signal.aborted
@@ -340,7 +364,43 @@ export function RecorderStudio() {
       window.clearTimeout(requestTimer);
       requestController.abort();
     };
-  }, []);
+  }, [authRevision]);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "INITIAL_SESSION" || event === "TOKEN_REFRESHED") return;
+
+      const nextUserId = session?.user.id ?? "";
+      if (
+        event === "SIGNED_IN" &&
+        nextUserId &&
+        nextUserId === authorizedUserIdRef.current
+      ) {
+        return;
+      }
+
+      authorizedUserIdRef.current = "";
+      attemptRef.current += 1;
+      clearAdvanceTimer();
+      clearPreview();
+      savedAudioRef.current?.pause();
+      savedAudioRef.current = null;
+      releaseMedia();
+      setRecorderUserId("");
+      setRows([]);
+      setShowLibrary(false);
+      setSavedPlaying(false);
+      setElapsedMs(0);
+      setPhase("idle");
+      setNotice("");
+      setError("");
+      setAccessState("loading");
+      setAuthRevision((current) => current + 1);
+    });
+
+    return () => data.subscription.unsubscribe();
+  }, [clearAdvanceTimer, clearPreview, releaseMedia]);
 
   useEffect(() => {
     const previewAudio = previewAudioRef.current;
@@ -544,7 +604,7 @@ export function RecorderStudio() {
       return;
     }
 
-    const { data, error: signedUrlError } = await getSupabaseRecorderClient()
+    const { data, error: signedUrlError } = await getSupabaseBrowserClient()
       .storage.from(RECORDING_BUCKET)
       .createSignedUrl(currentSaved.storage_path, 600);
     if (signedUrlError || !data?.signedUrl) {
@@ -578,7 +638,7 @@ export function RecorderStudio() {
     setPhase("saving");
     setError("");
     setNotice("");
-    const supabase = getSupabaseRecorderClient();
+    const supabase = getSupabaseBrowserClient();
     const recordedAt = new Date();
     let storagePath = "";
 
@@ -724,6 +784,27 @@ export function RecorderStudio() {
 
       {accessState === "loading" ? (
         <LoadingState label="Preparing the recorder…" />
+      ) : accessState === "signin" ? (
+        <section className="recorder-access-state recorder-access-card">
+          <span className="recorder-kicker">Private recorder</span>
+          <h1>Sign in with the authorized account.</h1>
+          <p>This family recorder is available only to its owner.</p>
+          <Link
+            href="/account?mode=signin&returnTo=%2Frecordings"
+            className="primary-button"
+          >
+            Sign in
+          </Link>
+        </section>
+      ) : accessState === "denied" ? (
+        <section className="recorder-access-state recorder-access-card">
+          <span className="recorder-kicker">Private recorder</span>
+          <h1>This account does not have access.</h1>
+          <p>The family recorder is restricted to the site owner.</p>
+          <Link href="/" className="primary-button">
+            Back to practice
+          </Link>
+        </section>
       ) : accessState === "error" ? (
         <section className="recorder-access-state recorder-access-card">
           <span className="recorder-kicker">Recorder unavailable</span>
