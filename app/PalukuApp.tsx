@@ -711,12 +711,14 @@ function TodayView({
             <PhraseStack word={nextWord} size="card" />
             <AudioButton word={nextWord} notify={notify} />
           </div>
-          <span className="mayu-intro">Meet Mayu</span>
-          <MayuImage
-            variant="guide"
-            alt=""
-            className="home-mayu"
-          />
+          <div className="home-mayu-stage">
+            <span className="mayu-intro">Meet Mayu</span>
+            <MayuImage
+              variant="guide"
+              alt=""
+              className="home-mayu"
+            />
+          </div>
         </section>
 
         <section className="home-roadmap" aria-labelledby="home-roadmap-title">

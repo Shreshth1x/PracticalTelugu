@@ -405,9 +405,16 @@ test("keeps the home hero focused on one compact action cluster", async () => {
   );
   const guideStart = html.indexOf('class="home-guide"', actionsEnd);
   const guideEnd = html.indexOf("</section>", guideStart);
-  const mayuIntro = html.indexOf("Meet Mayu", guideStart);
+  const mayuStage = html.indexOf('class="home-mayu-stage"', guideStart);
+  const mayuStageEnd = html.indexOf("</div>", mayuStage);
+  const mayuIntro = html.indexOf("Meet Mayu", mayuStage);
+  const mayuImage = html.indexOf('class="mayu-image home-mayu"', mayuStage);
+  assert.ok(mayuStage > guideStart, "Mayu has a shared positioning stage");
+  assert.ok(mayuStage < guideEnd, "Mayu's stage stays inside the hello guide");
   assert.ok(mayuIntro > guideStart, "Mayu is introduced inside the hello guide");
-  assert.ok(mayuIntro < guideEnd, "Mayu introduction stays with the mascot");
+  assert.ok(mayuIntro < mayuStageEnd, "Mayu introduction is anchored to the mascot");
+  assert.ok(mayuImage > mayuIntro, "Mayu follows her introduction in the shared stage");
+  assert.ok(mayuImage < mayuStageEnd, "Mayu stays inside the shared stage");
 });
 
 test("shows the entire practical path in one compact roadmap", async () => {
@@ -1427,6 +1434,19 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(app, /event\.key === "ArrowRight"/);
   assert.match(app, /type MayuVariant = "guide" \| "success"/);
   assert.match(app, /mayu-\$\{variant\}-v2\.webp/);
+  assert.match(
+    css,
+    /\.home-mayu-stage\s*\{[^}]*position:\s*absolute;[^}]*right:\s*-25px;[^}]*bottom:\s*-82px;[^}]*width:\s*430px;[^}]*height:\s*430px;/,
+  );
+  assert.match(
+    css,
+    /\.mayu-intro\s*\{[^}]*top:\s*21%;[^}]*left:\s*9%;/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 760px\)[\s\S]*?\.home-mayu-stage\s*\{[^}]*width:\s*365px;[^}]*height:\s*365px;[^}]*transform:\s*translateX\(50%\);[^}]*\}[\s\S]*?\.mayu-intro\s*\{[^}]*right:\s*18%;[^}]*left:\s*auto;/,
+  );
+  assert.doesNotMatch(css, /\.mayu-intro\s*\{[^}]*right:\s*278px;/);
   assert.match(css, /\.home-mayu img\s*\{[^}]*animation:\s*mayu-sway/);
   assert.match(css, /@keyframes mayu-sway/);
   assert.doesNotMatch(

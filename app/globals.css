@@ -859,11 +859,19 @@ svg {
   object-fit: contain;
 }
 
+.home-mayu-stage {
+  position: absolute;
+  right: -25px;
+  bottom: -82px;
+  width: 430px;
+  height: 430px;
+}
+
 .mayu-intro {
   position: absolute;
   z-index: 3;
-  top: 42px;
-  right: 278px;
+  top: 21%;
+  left: 9%;
   padding: 9px 13px 8px;
   border-radius: 15px;
   background: rgba(255, 253, 249, 0.96);
@@ -890,11 +898,8 @@ svg {
 }
 
 .home-mayu {
-  position: absolute;
-  right: -25px;
-  bottom: -82px;
-  width: 430px;
-  height: 430px;
+  width: 100%;
+  height: 100%;
 }
 
 .home-mayu img {
@@ -3042,7 +3047,7 @@ svg {
     padding: 34px 30px 0;
   }
 
-  .home-mayu {
+  .home-mayu-stage {
     right: 50%;
     bottom: -105px;
     width: 365px;
@@ -3051,9 +3056,8 @@ svg {
   }
 
   .mayu-intro {
-    top: 222px;
-    right: 50%;
-    transform: translateX(132px) rotate(-1.5deg);
+    right: 18%;
+    left: auto;
   }
 
   .mayu-intro::after {
@@ -3377,12 +3381,6 @@ svg {
   .wordmark-mark img {
     width: 40px;
     height: 40px;
-  }
-
-  .mayu-intro {
-    top: 276px;
-    right: 22px;
-    transform: rotate(-1.5deg);
   }
 
   .roadmap-heading h2 {
