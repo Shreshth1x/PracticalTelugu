@@ -645,7 +645,6 @@ export function RecorderStudio() {
     const nextRows = [savedRow, ...rows];
     const nextLatest = latestRecordingByTarget(nextRows);
     setRows(nextRows);
-    setSpeakerName(speaker);
     try {
       window.localStorage.setItem(SPEAKER_STORAGE_KEY, speaker);
     } catch {

@@ -73,9 +73,28 @@ variable with `NEXT_PUBLIC_`: the permanent key is read only by the server-side
 token route. The browser receives a one-use, short-lived credential for each
 conversation instead.
 
-Practice Live currently uses Gemini's prebuilt Aoede voice. A family voice can
-be connected later through a consented voice provider without changing the
-conversation screen, but no cloned voice is enabled by default.
+Practice Live uses Gemini's prebuilt Aoede voice by default. A private clone is
+enabled only when `FISH_API_KEY`, the selected `FISH_GRANDMA_VOICE_ID` or
+`FISH_GRANDPA_VOICE_ID`, and `FISH_ALLOWED_EMAIL_SHA256` are present on the
+server, and the learner is signed into a matching Supabase account. Generate
+the allowlist value from the lowercase account email with
+`printf %s 'owner@example.com' | shasum -a 256`; separate multiple hashes with
+commas. Public or unauthorized sessions stay on Gemini and do not send response
+text to Fish Audio.
+
+The learner chooses Grandma or Grandpa independently from the Telugu
+relationship register. The permanent Fish credential and voice IDs never enter
+the browser. An authorized session receives only a short-lived capability bound
+to its client address, selected voice, and session expiry; the voice route
+returns bounded 24 kHz PCM audio. If Fish rejects a turn or is unavailable, the
+live session releases the buffered Gemini audio as a clearly labeled fallback
+rather than dropping the response.
+
+The Fish model defaults to `s2.1-pro-free` for development. Set
+`FISH_TTS_MODEL` to a paid production model when the free development model is
+retired or when the deployment needs production guarantees. Keep the cloned
+voice private with the provider and retain explicit speaker consent for cloned,
+interactive use.
 
 Before starting, the learner chooses the listener relationship and a fixed
 one- or two-minute session. Respectful Telugu is the safe default for an elder

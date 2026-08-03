@@ -2,10 +2,17 @@ import { GoogleGenAI } from "@google/genai";
 import {
   buildLiveConnectConfig,
   buildLiveTokenConstraintConfig,
+  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
   LIVE_MODEL,
 } from "../../../practice-live/live-config.ts";
+import {
+  createFishVoiceAccessToken,
+  getPracticeLiveClientIp,
+  hasFishVoice,
+} from "../fish-config.ts";
+import { canUsePrivateFishVoice } from "../fish-authorization.ts";
 import {
   getLiveOpeningCue,
   getLiveScenario,
@@ -74,16 +81,6 @@ function json(
       ...extraHeaders,
     },
   });
-}
-
-function forwardedIp(request: Request) {
-  const candidate =
-    request.headers.get("cf-connecting-ip") ??
-    request.headers.get("x-forwarded-for")?.split(",")[0] ??
-    request.headers.get("x-real-ip") ??
-    "unknown";
-
-  return candidate.trim().slice(0, 128) || "unknown";
 }
 
 function consumeStart(ip: string, now: number) {
@@ -205,10 +202,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const { scenarioId, relationship, durationSeconds } = payload as Record<
-    string,
-    unknown
-  >;
+  const { scenarioId, familyVoice, relationship, durationSeconds } =
+    payload as Record<string, unknown>;
 
   const scenario = getLiveScenario(scenarioId);
   if (!scenario) {
@@ -226,6 +221,16 @@ export async function POST(request: Request) {
       {
         code: "invalid_relationship",
         message: "Choose who you are speaking with and try again.",
+      },
+      400,
+    );
+  }
+
+  if (!isLiveFamilyVoice(familyVoice)) {
+    return json(
+      {
+        code: "invalid_family_voice",
+        message: "Choose Grandma or Grandpa's voice and try again.",
       },
       400,
     );
@@ -254,7 +259,8 @@ export async function POST(request: Request) {
   }
 
   const now = Date.now();
-  const retryAfter = consumeStart(forwardedIp(request), now);
+  const clientIp = getPracticeLiveClientIp(request);
+  const retryAfter = consumeStart(clientIp, now);
   if (retryAfter) {
     return json(
       {
@@ -271,6 +277,9 @@ export async function POST(request: Request) {
   const options = { relationship, durationSeconds };
   const config = buildLiveConnectConfig(scenario, options);
   const tokenConstraintConfig = buildLiveTokenConstraintConfig(config);
+  const privateVoiceAuthorization = hasFishVoice(familyVoice)
+    ? canUsePrivateFishVoice(request)
+    : Promise.resolve(false);
 
   try {
     const tokenExpiresAt = new Date(
@@ -284,27 +293,43 @@ export async function POST(request: Request) {
       apiKey,
       httpOptions: { apiVersion: "v1alpha" },
     });
-    const authToken = await ai.authTokens.create({
-      config: {
-        uses: 1,
-        expireTime: tokenExpiresAt,
-        newSessionExpireTime: newSessionExpiresAt,
-        liveConnectConstraints: {
-          model: LIVE_MODEL,
-          config: tokenConstraintConfig,
+    const [authToken, canUseFishVoice] = await Promise.all([
+      ai.authTokens.create({
+        config: {
+          uses: 1,
+          expireTime: tokenExpiresAt,
+          newSessionExpireTime: newSessionExpiresAt,
+          liveConnectConstraints: {
+            model: LIVE_MODEL,
+            config: tokenConstraintConfig,
+          },
+          lockAdditionalFields: [],
         },
-        lockAdditionalFields: [],
-      },
-    });
+      }),
+      privateVoiceAuthorization,
+    ]);
 
     if (!authToken.name) {
       throw new Error("Gemini returned an empty ephemeral token.");
     }
 
+    const voiceMode = canUseFishVoice ? "fish" : "gemini";
+    const voiceAccessToken =
+      voiceMode === "fish"
+        ? await createFishVoiceAccessToken(
+            familyVoice,
+            clientIp,
+            Date.parse(tokenExpiresAt),
+          )
+        : undefined;
+
     return json({
       token: authToken.name,
       model: LIVE_MODEL,
       config,
+      voiceMode,
+      familyVoice,
+      ...(voiceAccessToken ? { voiceAccessToken } : {}),
       openingCue: getLiveOpeningCue(scenario, relationship),
       relationship,
       sessionLimitSeconds: durationSeconds,

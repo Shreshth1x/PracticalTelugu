@@ -11,11 +11,14 @@ import {
   type LivePhraseCue,
 } from "./live-follow-along";
 import {
+  DEFAULT_LIVE_FAMILY_VOICE,
   DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   DEFAULT_LIVE_SESSION_DURATION,
+  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
   PRESENT_TURN_TOOL_NAME,
+  type LiveFamilyVoice,
   type LiveListenerRelationship,
   type LiveSessionDurationSeconds,
 } from "./live-config";
@@ -26,6 +29,11 @@ import {
   learnerCaptionRequired,
   type LearnerTurnEvent,
 } from "./live-learner-turn";
+import {
+  createFishSpeechController,
+  FISH_SPEECH_CLIENT_TIMEOUT_MS,
+  type FishSpeechController,
+} from "./live-fish-speech";
 import { liveScenarios, type LiveScenarioId } from "./live-scenarios";
 import {
   gradeLiveSession,
@@ -43,6 +51,7 @@ import {
   removePendingLiveTurns,
   type LiveTranscriptTurn,
 } from "./live-transcript";
+import { getSupabaseBrowserClient } from "../supabase-client";
 
 export type { LiveTranscriptTurn } from "./live-transcript";
 
@@ -58,9 +67,14 @@ export type LivePhase =
   | "setup"
   | "error";
 
+export type LiveVoiceMode = "gemini" | "fish";
+
 export type CompletedLiveSession = {
   id: string;
   scenarioId: LiveScenarioId;
+  familyVoice?: LiveFamilyVoice;
+  voiceMode?: LiveVoiceMode;
+  usedVoiceFallback?: boolean;
   relationship: LiveListenerRelationship;
   sessionLimitSeconds: LiveSessionDurationSeconds;
   completionReason: "manual" | "limit";
@@ -75,6 +89,9 @@ type TokenResponse = {
   token?: string;
   model?: string;
   config?: LiveConnectConfig;
+  voiceMode?: LiveVoiceMode;
+  voiceAccessToken?: string;
+  familyVoice?: LiveFamilyVoice;
   openingCue?: string;
   relationship?: LiveListenerRelationship;
   sessionLimitSeconds?: LiveSessionDurationSeconds;
@@ -93,6 +110,7 @@ const OUTPUT_SAMPLE_RATE = 24_000;
 const PCM_WORKLET_NAME = "practicaltelugu-live-pcm";
 const PCM_WORKLET_URL = "/live-pcm-worklet.js";
 const LAST_EXCHANGE_SECONDS = 15;
+const ACCOUNT_SESSION_TIMEOUT_MS = 1_500;
 
 type CompletionReason = CompletedLiveSession["completionReason"];
 
@@ -101,6 +119,24 @@ let genAILibraryPromise: Promise<typeof import("@google/genai")> | null = null;
 function loadGenAILibrary() {
   genAILibraryPromise ??= import("@google/genai");
   return genAILibraryPromise;
+}
+
+async function loadAccountAccessToken() {
+  let timeoutId: number | null = null;
+
+  try {
+    return await Promise.race([
+      getSupabaseBrowserClient()
+        .auth.getSession()
+        .then(({ data }) => data.session?.access_token ?? "")
+        .catch(() => ""),
+      new Promise<string>((resolve) => {
+        timeoutId = window.setTimeout(() => resolve(""), ACCOUNT_SESSION_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) window.clearTimeout(timeoutId);
+  }
 }
 
 function getAudioContextConstructor() {
@@ -175,6 +211,18 @@ function base64ToFloat32(value: string) {
   return output;
 }
 
+function pcmBytesToFloat32(bytes: Uint8Array) {
+  const byteLength = bytes.byteLength - (bytes.byteLength % 2);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, byteLength);
+  const output = new Float32Array(byteLength / 2);
+
+  for (let index = 0; index < output.length; index += 1) {
+    output[index] = view.getInt16(index * 2, true) / 0x8000;
+  }
+
+  return output;
+}
+
 function rmsLevel(samples: Float32Array) {
   if (!samples.length) return 0;
 
@@ -227,6 +275,7 @@ export function useGeminiLive(
   relationship: LiveListenerRelationship =
     DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   durationSeconds: LiveSessionDurationSeconds = DEFAULT_LIVE_SESSION_DURATION,
+  familyVoice: LiveFamilyVoice = DEFAULT_LIVE_FAMILY_VOICE,
 ) {
   const scenario =
     liveScenarios.find((candidate) => candidate.id === scenarioId) ??
@@ -244,6 +293,9 @@ export function useGeminiLive(
   const [activeTurn, setActiveTurn] = useState<LiveTranscriptTurn | null>(null);
   const [completedSession, setCompletedSession] =
     useState<CompletedLiveSession | null>(null);
+  const [activeVoiceMode, setActiveVoiceMode] =
+    useState<LiveVoiceMode | null>(null);
+  const [usedVoiceFallback, setUsedVoiceFallback] = useState(false);
   const [latestTurnLatencyMs, setLatestTurnLatencyMs] = useState<number | null>(
     null,
   );
@@ -272,12 +324,19 @@ export function useGeminiLive(
     () => undefined,
   );
   const tokenRequestRef = useRef<AbortController | null>(null);
+  const voiceModeRef = useRef<LiveVoiceMode>("gemini");
+  const voiceAccessTokenRef = useRef<string | null>(null);
+  const usedVoiceFallbackRef = useRef(false);
+  const fishSpeechControllerRef = useRef<
+    FishSpeechController<Float32Array, string> | null
+  >(null);
   const connectionAttemptRef = useRef(0);
   const ignoreConnectionEventsRef = useRef(false);
   const mutedRef = useRef(false);
   const closingRequestedRef = useRef(false);
   const goAwayReceivedRef = useRef(false);
   const activeRelationshipRef = useRef<LiveListenerRelationship>(relationship);
+  const activeFamilyVoiceRef = useRef<LiveFamilyVoice>(familyVoice);
   const activeSessionLimitRef = useRef<LiveSessionDurationSeconds>(
     durationSeconds,
   );
@@ -331,6 +390,9 @@ export function useGeminiLive(
   }, []);
 
   const stopPlayback = useCallback(() => {
+    fishSpeechControllerRef.current?.cancel();
+    fishSpeechControllerRef.current = null;
+
     for (const source of activeSourcesRef.current) {
       try {
         source.stop();
@@ -348,6 +410,7 @@ export function useGeminiLive(
     connectionAttemptRef.current += 1;
     tokenRequestRef.current?.abort();
     tokenRequestRef.current = null;
+    voiceAccessTokenRef.current = null;
 
     stopPlayback();
 
@@ -486,12 +549,10 @@ export function useGeminiLive(
     setActiveTurn(turn);
   }, []);
 
-  const playAudio = useCallback(
-    (encodedAudio: string) => {
+  const playSamples = useCallback(
+    (samples: Float32Array) => {
       const context = outputContextRef.current;
       if (!context || context.state === "closed") return;
-
-      const samples = base64ToFloat32(encodedAudio);
       if (!samples.length) return;
 
       if (learnerTurnFinishedAtRef.current !== null) {
@@ -505,7 +566,7 @@ export function useGeminiLive(
       }
 
       const buffer = context.createBuffer(1, samples.length, OUTPUT_SAMPLE_RATE);
-      buffer.copyToChannel(samples, 0);
+      buffer.copyToChannel(new Float32Array(samples), 0);
 
       const source = context.createBufferSource();
       source.buffer = buffer;
@@ -543,6 +604,74 @@ export function useGeminiLive(
       source.start(startAt);
     },
     [openLearnerReplyWindow, updatePhase],
+  );
+
+  const playAudio = useCallback(
+    (encodedAudio: string) => {
+      playSamples(base64ToFloat32(encodedAudio));
+    },
+    [playSamples],
+  );
+
+  const requestFishSpeech = useCallback(
+    (text: string) => {
+      if (voiceModeRef.current !== "fish") return;
+
+      const controller =
+        fishSpeechControllerRef.current ??
+        createFishSpeechController<Float32Array, string>(
+          {
+            scheduleTimeout: (callback, delayMs) =>
+              window.setTimeout(callback, delayMs),
+            cancelTimeout: (handle) => window.clearTimeout(handle as number),
+            createAbortController: () => new AbortController(),
+          },
+          FISH_SPEECH_CLIENT_TIMEOUT_MS,
+        );
+      fishSpeechControllerRef.current = controller;
+
+      controller.start({
+        request: async (signal) => {
+          const response = await fetch("/api/practice-live/voice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              familyVoice: activeFamilyVoiceRef.current,
+              voiceAccessToken: voiceAccessTokenRef.current,
+            }),
+            cache: "no-store",
+            credentials: "same-origin",
+            signal,
+          });
+          if (!response.ok) throw new Error("Fish Audio rejected the turn.");
+
+          const samples = pcmBytesToFloat32(
+            new Uint8Array(await response.arrayBuffer()),
+          );
+          if (!samples.length) throw new Error("Fish Audio returned empty audio.");
+          return samples;
+        },
+        playFish: playSamples,
+        playFallback: playAudio,
+        onFallback: () => {
+          usedVoiceFallbackRef.current = true;
+          if (mountedRef.current) setUsedVoiceFallback(true);
+        },
+        onFallbackReleased: () => {
+          if (
+            !activeSourcesRef.current.size &&
+            mayuTurnCompleteRef.current
+          ) {
+            openLearnerReplyWindow();
+            if (isSessionPhase(phaseRef.current)) {
+              updatePhase(mutedRef.current ? "muted" : "listening");
+            }
+          }
+        },
+      });
+    },
+    [openLearnerReplyWindow, playAudio, playSamples, updatePhase],
   );
 
   const handleServerMessage = useCallback(
@@ -800,6 +929,7 @@ export function useGeminiLive(
 
           activateTurn(mayuTurn);
           if (cue) activateCue(cue);
+          requestFishSpeech(parsed.mayu.teluguInternal);
 
           return {
             id: call.id,
@@ -855,20 +985,30 @@ export function useGeminiLive(
       if (hasModelOutput) applyLearnerTurnEvent({ type: "model-output" });
 
       for (const part of audioParts) {
-        if (part.inlineData?.data) playAudio(part.inlineData.data);
+        const encodedAudio = part.inlineData?.data;
+        if (!encodedAudio) continue;
+
+        const fishSpeechController =
+          voiceModeRef.current === "fish"
+            ? fishSpeechControllerRef.current
+            : null;
+        if (!fishSpeechController?.bufferFallback(encodedAudio)) {
+          playAudio(encodedAudio);
+        }
       }
 
       if (content.turnComplete || content.waitingForInput) {
         mayuTurnCompleteRef.current = true;
         applyLearnerTurnEvent({ type: "model-turn-complete" });
-        if (!activeSourcesRef.current.size) openLearnerReplyWindow();
-      }
-
-      if (
-        (content.turnComplete || content.waitingForInput) &&
-        !activeSourcesRef.current.size
-      ) {
-        updatePhase(mutedRef.current ? "muted" : "listening");
+        const fishSpeechPending =
+          fishSpeechControllerRef.current?.isPending() === true;
+        if (
+          !activeSourcesRef.current.size &&
+          !fishSpeechPending
+        ) {
+          openLearnerReplyWindow();
+          updatePhase(mutedRef.current ? "muted" : "listening");
+        }
       }
     },
     [
@@ -879,6 +1019,7 @@ export function useGeminiLive(
       markLearnerResponseStarted,
       openLearnerReplyWindow,
       playAudio,
+      requestFishSpeech,
       scenario.words,
       stopPlayback,
       updatePhase,
@@ -962,9 +1103,14 @@ export function useGeminiLive(
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
     usedCueIdsRef.current = [];
+    voiceModeRef.current = "gemini";
+    voiceAccessTokenRef.current = null;
+    usedVoiceFallbackRef.current = false;
     setTranscript([]);
     setActiveTurn(null);
     setCompletedSession(null);
+    setActiveVoiceMode(null);
+    setUsedVoiceFallback(false);
     setErrorMessage("");
     setElapsedSeconds(0);
     setRemainingSeconds(durationSeconds);
@@ -1017,6 +1163,7 @@ export function useGeminiLive(
 
       updatePhase("requesting");
       const genAIPromise = loadGenAILibrary();
+      const accountAccessTokenPromise = loadAccountAccessToken();
       const inputContext = inputContextRef.current;
       inputWorkletReadyRef.current =
         inputContext.audioWorklet && typeof AudioWorkletNode !== "undefined"
@@ -1054,13 +1201,25 @@ export function useGeminiLive(
       }
       streamRef.current = stream;
 
+      const accountAccessToken = await accountAccessTokenPromise;
+      if (attemptId !== connectionAttemptRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       const requestController = new AbortController();
       tokenRequestRef.current = requestController;
       const tokenPromise = fetch("/api/practice-live/token", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(accountAccessToken
+            ? { Authorization: `Bearer ${accountAccessToken}` }
+            : {}),
+        },
         body: JSON.stringify({
           scenarioId,
+          familyVoice,
           relationship,
           durationSeconds,
         }),
@@ -1098,6 +1257,12 @@ export function useGeminiLive(
         !tokenPayload.token ||
         !tokenPayload.model ||
         !tokenPayload.config ||
+        (tokenPayload.voiceMode !== "gemini" &&
+          tokenPayload.voiceMode !== "fish") ||
+        (tokenPayload.voiceMode === "fish" &&
+          (typeof tokenPayload.voiceAccessToken !== "string" ||
+            !tokenPayload.voiceAccessToken)) ||
+        !isLiveFamilyVoice(tokenPayload.familyVoice) ||
         !isLiveListenerRelationship(tokenPayload.relationship) ||
         !isLiveSessionDuration(tokenPayload.sessionLimitSeconds) ||
         !Number.isFinite(parsedTokenExpiry) ||
@@ -1106,6 +1271,13 @@ export function useGeminiLive(
         throw new Error("The live session was not configured correctly.");
       }
       activeRelationshipRef.current = tokenPayload.relationship;
+      activeFamilyVoiceRef.current = tokenPayload.familyVoice;
+      voiceModeRef.current = tokenPayload.voiceMode;
+      voiceAccessTokenRef.current =
+        tokenPayload.voiceMode === "fish"
+          ? tokenPayload.voiceAccessToken ?? null
+          : null;
+      setActiveVoiceMode(tokenPayload.voiceMode);
       activeSessionLimitRef.current = tokenPayload.sessionLimitSeconds;
       tokenExpiresAtRef.current = parsedTokenExpiry;
       setRemainingSeconds(tokenPayload.sessionLimitSeconds);
@@ -1253,6 +1425,7 @@ export function useGeminiLive(
     failSession,
     handleServerMessage,
     durationSeconds,
+    familyVoice,
     relationship,
     releaseHardware,
     scenarioId,
@@ -1341,6 +1514,9 @@ export function useGeminiLive(
           ? crypto.randomUUID()
           : `live-${Date.now()}`,
       scenarioId,
+      familyVoice: activeFamilyVoiceRef.current,
+      voiceMode: voiceModeRef.current,
+      usedVoiceFallback: usedVoiceFallbackRef.current,
       relationship: activeRelationshipRef.current,
       sessionLimitSeconds: activeSessionLimitRef.current,
       completionReason,
@@ -1374,12 +1550,17 @@ export function useGeminiLive(
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
     usedCueIdsRef.current = [];
+    voiceModeRef.current = "gemini";
+    voiceAccessTokenRef.current = null;
+    usedVoiceFallbackRef.current = false;
     setElapsedSeconds(0);
     setRemainingSeconds(durationSeconds);
     setLatestTurnLatencyMs(null);
     setTranscript([]);
     setActiveTurn(null);
     setCompletedSession(null);
+    setActiveVoiceMode(null);
+    setUsedVoiceFallback(false);
     setErrorMessage("");
     updatePhase("idle");
   }, [clearTimer, durationSeconds, releaseHardware, updatePhase]);
@@ -1439,6 +1620,8 @@ export function useGeminiLive(
     transcript,
     activeTurn,
     completedSession,
+    activeVoiceMode,
+    usedVoiceFallback,
     canRepeatTurn:
       !isMuted &&
       (phase === "listening" ||

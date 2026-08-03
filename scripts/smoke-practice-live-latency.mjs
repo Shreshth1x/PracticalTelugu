@@ -270,7 +270,7 @@ async function runSmoke(relationship, durationSeconds) {
             followupSentAt = performance.now();
             session?.sendRealtimeInput({
               text:
-                "I ate, but I am still a little hungry. Treat this as my learner reply and continue naturally in Telugu without changing the locked relationship register.",
+                "Smoke-test learner input: this reply was sent as text and was entirely in English: 'I ate, but I am still a little hungry.' In present_turn, set learnerSourceLanguage to english, omit learnerPronunciationRating because no Telugu audio was heard, keep learnerAccuracyRating at 2 or below, and use these exact learner captions: learnerTeluguInternal 'తిన్నాను, కానీ నాకు ఇంకా ఆకలిగా ఉంది.', learnerRoman 'tinnaanu, kaanee naaku inkaa aakaligaa undi.', learnerPronunciation 'tin-NAA-noo, kaa-NEE naa-koo IN-kaa aa-kuh-lee-GAA oon-DEE.', and learnerEnglish 'I ate, but I am still a little hungry.' Continue naturally in Telugu without changing the locked relationship register.",
             });
           }
         },

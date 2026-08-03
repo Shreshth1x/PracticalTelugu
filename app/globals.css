@@ -3572,6 +3572,10 @@ svg {
   margin: 24px 0 0;
 }
 
+.live-family-voice-setting {
+  grid-column: 1 / -1;
+}
+
 .live-session-settings fieldset {
   min-width: 0;
   margin: 0;
@@ -5432,7 +5436,7 @@ svg {
 
 .live-results-facts {
   display: grid;
-  grid-template-columns: 0.7fr 0.7fr 1.6fr;
+  grid-template-columns: 0.7fr 0.7fr 1.25fr 1.35fr;
   gap: 14px;
   margin: 22px 0 0;
   padding-top: 16px;
@@ -5949,10 +5953,6 @@ svg {
 
   .live-results-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .live-results-facts > div:last-child {
-    grid-column: 1 / -1;
   }
 
   .live-results-progress {

@@ -14,10 +14,15 @@ import {
   type LiveScenarioId,
 } from "./live-scenarios";
 import {
+  DEFAULT_LIVE_FAMILY_VOICE,
   DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   DEFAULT_LIVE_SESSION_DURATION,
+  getLiveFamilyVoiceLabel,
+  getLiveSessionVoiceLabel,
+  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
+  type LiveFamilyVoice,
   type LiveListenerRelationship,
   type LiveSessionDurationSeconds,
 } from "./live-config";
@@ -98,6 +103,13 @@ function readHistory() {
         typeof session.durationSeconds === "number" &&
         typeof session.learnerTurns === "number" &&
         typeof session.completedAt === "string" &&
+        (session.familyVoice === undefined ||
+          isLiveFamilyVoice(session.familyVoice)) &&
+        (session.voiceMode === undefined ||
+          session.voiceMode === "gemini" ||
+          session.voiceMode === "fish") &&
+        (session.usedVoiceFallback === undefined ||
+          typeof session.usedVoiceFallback === "boolean") &&
         (session.relationship === undefined ||
           isLiveListenerRelationship(session.relationship)) &&
         (session.sessionLimitSeconds === undefined ||
@@ -178,6 +190,7 @@ function SessionResults({
   session,
   previousSession,
   scenarioTitle,
+  familyVoiceLabel,
   relationshipLabel,
   resultsRef,
   onRestart,
@@ -186,6 +199,7 @@ function SessionResults({
   session: CompletedLiveSession;
   previousSession: CompletedLiveSession | null;
   scenarioTitle: string;
+  familyVoiceLabel: string;
   relationshipLabel: string;
   resultsRef: RefObject<HTMLElement | null>;
   onRestart: () => void;
@@ -269,6 +283,10 @@ function SessionResults({
             <div>
               <dt>Register</dt>
               <dd>{relationshipLabel}</dd>
+            </div>
+            <div>
+              <dt>Voice</dt>
+              <dd>{familyVoiceLabel}</dd>
             </div>
           </dl>
         </div>
@@ -642,13 +660,21 @@ export default function PracticeLive() {
     useState<LiveScenarioId>("family-check-in");
   const [relationship, setRelationship] =
     useState<LiveListenerRelationship>(DEFAULT_LIVE_LISTENER_RELATIONSHIP);
+  const [familyVoice, setFamilyVoice] = useState<LiveFamilyVoice>(
+    DEFAULT_LIVE_FAMILY_VOICE,
+  );
   const [sessionDuration, setSessionDuration] =
     useState<LiveSessionDurationSeconds>(DEFAULT_LIVE_SESSION_DURATION);
   const [isPracticeSettingsOpen, setIsPracticeSettingsOpen] = useState(false);
   const [history, setHistory] = useState<CompletedLiveSession[]>([]);
   const transcriptRef = useRef<HTMLOListElement | null>(null);
   const resultsRef = useRef<HTMLElement | null>(null);
-  const live = useGeminiLive(scenarioId, relationship, sessionDuration);
+  const live = useGeminiLive(
+    scenarioId,
+    relationship,
+    sessionDuration,
+    familyVoice,
+  );
   const scenario =
     liveScenarios.find((candidate) => candidate.id === scenarioId) ??
     liveScenarios[0];
@@ -683,6 +709,9 @@ export default function PracticeLive() {
         (session) =>
           session.id !== completedSession.id &&
           session.scenarioId === completedSession.scenarioId &&
+          session.familyVoice === completedSession.familyVoice &&
+          (session.voiceMode ?? "gemini") ===
+            (completedSession.voiceMode ?? "gemini") &&
           session.relationship === completedSession.relationship &&
           session.grade?.overallScore !== null &&
           session.grade?.overallScore !== undefined,
@@ -740,6 +769,12 @@ export default function PracticeLive() {
     setRelationship(nextRelationship);
   };
 
+  const chooseFamilyVoice = (nextFamilyVoice: LiveFamilyVoice) => {
+    if (isBusy || nextFamilyVoice === familyVoice) return;
+    live.reset();
+    setFamilyVoice(nextFamilyVoice);
+  };
+
   const chooseDuration = (nextDuration: LiveSessionDurationSeconds) => {
     if (isBusy || nextDuration === sessionDuration) return;
     live.reset();
@@ -764,6 +799,22 @@ export default function PracticeLive() {
     : statusCopy[live.phase];
   const relationshipLabel =
     relationship === "close" ? "Someone close" : "Elder or someone new";
+  const familyVoiceLabel = getLiveFamilyVoiceLabel(familyVoice);
+  const activeVoiceLabel = live.activeVoiceMode
+    ? getLiveSessionVoiceLabel({
+        familyVoice,
+        voiceMode: live.activeVoiceMode,
+        usedVoiceFallback: live.usedVoiceFallback,
+      })
+    : familyVoiceLabel;
+  const completedSessionVoiceLabel = live.completedSession
+    ? getLiveSessionVoiceLabel({
+        familyVoice:
+          live.completedSession.familyVoice ?? DEFAULT_LIVE_FAMILY_VOICE,
+        voiceMode: live.completedSession.voiceMode,
+        usedVoiceFallback: live.completedSession.usedVoiceFallback,
+      })
+    : familyVoiceLabel;
   const durationMinutes = sessionDuration / 60;
   const startActionLabel = ["setup", "error"].includes(live.phase)
     ? "Try again"
@@ -780,8 +831,9 @@ export default function PracticeLive() {
         </span>
         <h1>Practice Telugu out loud.</h1>
         <p>
-          Speak with Mayu in real time. Telugu stays in English letters, with
-          the meaning directly underneath.
+          Choose a private family voice when your account is authorized, or use
+          Mayu&apos;s backup voice. Telugu stays in English letters, with the meaning
+          directly underneath.
         </p>
       </header>
 
@@ -796,7 +848,8 @@ export default function PracticeLive() {
           <p>{scenario.description}</p>
           {isBusy ? (
             <small className="live-session-lock">
-              {relationshipLabel}
+              {activeVoiceLabel}
+              {` · ${relationshipLabel}`}
               {` · ${formatDuration(sessionDuration)} practice`}
             </small>
           ) : null}
@@ -814,7 +867,7 @@ export default function PracticeLive() {
               <span>
                 <small>Practice setup</small>
                 <strong>
-                  {relationshipLabel} · {durationMinutes} min
+                  {familyVoiceLabel} · {relationshipLabel} · {durationMinutes} min
                 </strong>
               </span>
               <span className="live-practice-details-action">
@@ -853,6 +906,42 @@ export default function PracticeLive() {
                 className="live-session-settings"
                 aria-label="Live practice settings"
               >
+                <fieldset className="live-family-voice-setting" disabled={isBusy}>
+                  <legend>Practice voice</legend>
+                  <div className="live-setting-options">
+                    <label
+                      className={familyVoice === "grandma" ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-family-voice"
+                        value="grandma"
+                        checked={familyVoice === "grandma"}
+                        onChange={() => chooseFamilyVoice("grandma")}
+                      />
+                      <span>
+                        <strong>Grandma</strong>
+                        <small>Private clone for authorized accounts</small>
+                      </span>
+                    </label>
+                    <label
+                      className={familyVoice === "grandpa" ? "is-selected" : ""}
+                    >
+                      <input
+                        type="radio"
+                        name="live-family-voice"
+                        value="grandpa"
+                        checked={familyVoice === "grandpa"}
+                        onChange={() => chooseFamilyVoice("grandpa")}
+                      />
+                      <span>
+                        <strong>Grandpa</strong>
+                        <small>Private clone for authorized accounts</small>
+                      </span>
+                    </label>
+                  </div>
+                </fieldset>
+
                 <fieldset disabled={isBusy}>
                   <legend>Who are you speaking with?</legend>
                   <div className="live-setting-options">
@@ -971,7 +1060,9 @@ export default function PracticeLive() {
               {live.errorMessage || "Mayu speaks first, then listens for your reply."}
             </p>
             <p className="live-privacy-note">
-              Your microphone audio is sent to Google Gemini for the live session.
+              Your microphone audio is sent to Google Gemini. When your account
+              can use a private family voice, Mayu&apos;s Telugu response text is sent
+              to Fish Audio; otherwise Gemini&apos;s backup voice is used.
               PracticalTelugu does not save your audio.
             </p>
           </div>
@@ -1086,6 +1177,7 @@ export default function PracticeLive() {
               session={live.completedSession}
               previousSession={previousComparableSession}
               scenarioTitle={scenario.title}
+              familyVoiceLabel={completedSessionVoiceLabel}
               relationshipLabel={relationshipLabel}
               resultsRef={resultsRef}
               onRestart={startPractice}

@@ -19,18 +19,46 @@ export const LIVE_LISTENER_RELATIONSHIPS = ["close", "respectful"] as const;
 export type LiveListenerRelationship =
   (typeof LIVE_LISTENER_RELATIONSHIPS)[number];
 
+export const LIVE_FAMILY_VOICES = ["grandma", "grandpa"] as const;
+export type LiveFamilyVoice = (typeof LIVE_FAMILY_VOICES)[number];
+export type LiveVoiceMode = "gemini" | "fish";
+
 export const LIVE_SESSION_DURATIONS = [60, 120] as const;
 export type LiveSessionDurationSeconds =
   (typeof LIVE_SESSION_DURATIONS)[number];
 
 export const DEFAULT_LIVE_LISTENER_RELATIONSHIP: LiveListenerRelationship =
   "respectful";
+export const DEFAULT_LIVE_FAMILY_VOICE: LiveFamilyVoice = "grandma";
 export const DEFAULT_LIVE_SESSION_DURATION: LiveSessionDurationSeconds = 60;
 
 export function isLiveListenerRelationship(
   value: unknown,
 ): value is LiveListenerRelationship {
   return LIVE_LISTENER_RELATIONSHIPS.some((candidate) => candidate === value);
+}
+
+export function isLiveFamilyVoice(value: unknown): value is LiveFamilyVoice {
+  return LIVE_FAMILY_VOICES.some((candidate) => candidate === value);
+}
+
+export function getLiveFamilyVoiceLabel(familyVoice: LiveFamilyVoice) {
+  return familyVoice === "grandma" ? "Grandma's voice" : "Grandpa's voice";
+}
+
+export function getLiveSessionVoiceLabel({
+  familyVoice,
+  voiceMode,
+  usedVoiceFallback = false,
+}: {
+  familyVoice: LiveFamilyVoice;
+  voiceMode?: LiveVoiceMode | null;
+  usedVoiceFallback?: boolean;
+}) {
+  if (voiceMode !== "fish") return "Mayu's backup voice";
+
+  const selectedVoice = getLiveFamilyVoiceLabel(familyVoice);
+  return usedVoiceFallback ? `${selectedVoice} · backup used` : selectedVoice;
 }
 
 export function isLiveSessionDuration(

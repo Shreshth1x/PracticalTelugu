@@ -254,10 +254,15 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   );
 });
 
-test("makes Live register, time cap, and microphone processing explicit before start", async () => {
+test("makes Live voice, register, time cap, and data handling explicit before start", async () => {
   const response = await render("/practice-live");
   const html = await response.text();
 
+  assert.match(html, /Practice voice/);
+  assert.equal(
+    html.match(/Private clone for authorized accounts/g)?.length,
+    2,
+  );
   assert.match(html, /Who are you speaking with\?/);
   assert.match(html, /Someone close/);
   assert.match(html, /Elder or someone new/);
@@ -267,6 +272,8 @@ test("makes Live register, time cap, and microphone processing explicit before s
   assert.match(html, /Full practice/);
   assert.match(html, />2:00</);
   assert.match(html, /audio is sent to Google Gemini/);
+  assert.match(html, /account can use a private family voice/);
+  assert.match(html, /otherwise Gemini&#x27;s backup voice is used/);
   assert.match(html, /PracticalTelugu does not save your audio/);
 });
 
@@ -289,6 +296,7 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
   assert.match(pageSource, /Your next rep/);
   assert.match(pageSource, /Review your conversation/);
   assert.match(pageSource, /not a phoneme-by-phoneme accent grade/);
+  assert.match(pageSource, /getLiveSessionVoiceLabel/);
   assert.ok(
     pageSource.indexOf("<SessionResults") <
       pageSource.indexOf('className="live-review"'),
@@ -298,15 +306,21 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
   assert.match(gradingSource, /METRIC_WEIGHTS/);
 });
 
-test("keeps the permanent Gemini key on the server", async () => {
-  const clientSource = await readFile(
-    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
-    "utf8",
-  );
-  const routeSource = await readFile(
-    new URL("../app/api/practice-live/token/route.ts", import.meta.url),
-    "utf8",
-  );
+test("keeps permanent Gemini and Fish credentials on the server", async () => {
+  const [clientSource, routeSource, fishConfigSource] = await Promise.all([
+    readFile(
+      new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/api/practice-live/token/route.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/api/practice-live/fish-config.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
 
   assert.match(clientSource, /fetch\("\/api\/practice-live\/token"/);
   assert.doesNotMatch(clientSource, /GEMINI_API_KEY|NEXT_PUBLIC_GEMINI/);
@@ -315,6 +329,15 @@ test("keeps the permanent Gemini key on the server", async () => {
   assert.match(clientSource, /sessionLimitSeconds/);
   assert.match(clientSource, /durationSeconds/);
   assert.match(clientSource, /relationship/);
+  assert.match(clientSource, /familyVoice/);
+  assert.match(clientSource, /voiceAccessToken/);
+  assert.match(clientSource, /createFishSpeechController/);
+  assert.match(clientSource, /Authorization/);
+  assert.match(clientSource, /setUsedVoiceFallback\(true\)/);
+  assert.doesNotMatch(
+    clientSource,
+    /FISH_API_KEY|FISH_GRANDMA_VOICE_ID|FISH_GRANDPA_VOICE_ID/,
+  );
   assert.match(clientSource, /sendRealtimeInput\(\{\s*text:/);
   assert.doesNotMatch(clientSource, /sendClientContent\(/);
   assert.match(clientSource, /project has been denied access/);
@@ -328,6 +351,10 @@ test("keeps the permanent Gemini key on the server", async () => {
   assert.match(routeSource, /SHORT_WINDOW_STARTS = 6/);
   assert.match(routeSource, /DAILY_STARTS = 20/);
   assert.match(routeSource, /"Retry-After"/);
+  assert.match(fishConfigSource, /process\.env\.FISH_API_KEY/);
+  assert.match(fishConfigSource, /process\.env\.FISH_GRANDMA_VOICE_ID/);
+  assert.match(fishConfigSource, /process\.env\.FISH_GRANDPA_VOICE_ID/);
+  assert.doesNotMatch(fishConfigSource, /NEXT_PUBLIC_/);
 });
 
 test("uses the approved peacock mark and Mayu favicon", async () => {
