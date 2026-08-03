@@ -1198,12 +1198,43 @@ test("never exposes a Supabase service credential in browser source", async () =
 });
 
 test("offers Google and email account creation without gating practice", async () => {
-  const [accountPage, learningProvider] = await Promise.all([
-    readFile(new URL("../app/account/AccountPage.tsx", import.meta.url), "utf8"),
+  const [
+    accountPage,
+    googleButton,
+    googleIdentity,
+    googleIdTokenAuth,
+    learningProvider,
+  ] = await Promise.all([
+    readFile(
+      new URL("../app/account/AccountPage.tsx", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/account/GoogleIdentityButton.tsx", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/account/google-identity-nonce.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/google-id-token-auth.ts", import.meta.url),
+      "utf8",
+    ),
     readFile(new URL("../app/LearningProvider.tsx", import.meta.url), "utf8"),
   ]);
 
-  assert.match(accountPage, /Continue with Google/);
+  assert.match(accountPage, /GoogleIdentityButton/);
+  assert.match(googleButton, /accounts\.google\.com\/gsi\/client/);
+  assert.match(googleButton, /NEXT_PUBLIC_GOOGLE_CLIENT_ID/);
+  assert.match(googleButton, /interactionLocked/);
+  assert.match(googleButton, /text: "continue_with"/);
+  assert.match(googleIdentity, /ux_mode: "popup"/);
+  assert.match(googleIdentity, /nonce: hashedNonce/);
+  assert.match(
+    googleIdentity,
+    /await onCredential\(response\.credential, rawNonce\)/,
+  );
   assert.match(accountPage, /type="email"/);
   assert.match(accountPage, /type=\{showPassword \? "text" : "password"\}/);
   assert.match(accountPage, /Create account/);
@@ -1212,7 +1243,12 @@ test("offers Google and email account creation without gating practice", async (
   assert.match(accountPage, /Open family recorder/);
   assert.match(learningProvider, /auth\.signInWithPassword/);
   assert.match(learningProvider, /auth\.signUp/);
-  assert.match(learningProvider, /provider: "google"/);
+  assert.match(learningProvider, /signInWithGoogleIdToken/);
+  assert.match(googleIdTokenAuth, /auth\.signInWithIdToken/);
+  assert.match(googleIdTokenAuth, /provider: "google"/);
+  assert.match(googleIdTokenAuth, /token: idToken/);
+  assert.match(googleIdTokenAuth, /nonce: rawNonce/);
+  assert.doesNotMatch(learningProvider, /auth\.signInWithOAuth/);
   assert.doesNotMatch(accountPage, /router\.(?:push|replace)\(["']\/account/);
 });
 

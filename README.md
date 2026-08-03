@@ -36,6 +36,16 @@ password-reset messages use Supabase Auth; configure a custom SMTP provider
 before relying on those email flows for users outside the Supabase project
 team.
 
+Google sign-in uses Google's official Identity Services popup button and sends
+the returned ID token directly to Supabase. This keeps the learner on the
+PracticalTelugu domain instead of routing the account chooser through the raw
+Supabase project hostname. The checked-in fallback is the public OAuth web
+client ID for this deployment; set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` to override
+it for another Google Cloud project. The same client ID must be enabled in the
+Supabase Google provider, with nonce verification left on, and each deployed
+site origin must be listed under the OAuth client's Authorized JavaScript
+origins in Google Cloud.
+
 ## Run locally
 
 Requires Node.js `>=22.13.0`.

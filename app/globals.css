@@ -2102,58 +2102,49 @@ svg {
   font-weight: 900;
 }
 
-.google-button {
-  display: flex;
+.google-identity {
+  position: relative;
+  display: grid;
   width: 100%;
   min-height: 52px;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  justify-items: center;
   margin-top: 30px;
-  border: 1px solid var(--line-strong);
-  border-radius: 14px;
-  background: var(--surface);
-  color: var(--ink-strong);
-  cursor: pointer;
-  box-shadow: var(--shadow-control);
-  font-weight: 800;
-  transition:
-    background-color 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease,
-    transform 150ms ease;
 }
 
-.google-button:hover:not(:disabled) {
-  border-color: #aebcb4;
-  background: white;
-  box-shadow:
-    0 2px 4px rgba(18, 61, 52, 0.08),
-    0 9px 20px rgba(18, 61, 52, 0.07);
-  transform: translateY(-1px);
+.google-identity-button {
+  display: flex;
+  width: min(400px, 100%);
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
 }
 
-.google-button:active:not(:disabled) {
-  transform: scale(0.98);
+.google-identity-button iframe {
+  max-width: 100%;
 }
 
-.google-button:disabled {
-  cursor: wait;
+.google-identity-disabled .google-identity-button {
+  pointer-events: none;
   opacity: 0.62;
 }
 
-.google-mark {
-  display: inline-grid;
-  width: 24px;
-  height: 24px;
+.google-identity-status {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  width: min(400px, 100%);
+  min-height: 44px;
   place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: white;
-  color: #4285f4;
-  font-family: Arial, sans-serif;
-  font-size: 14px;
+  margin: auto;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted-light);
+  font-size: 13px;
   font-weight: 700;
+  text-align: center;
 }
 
 .account-divider {

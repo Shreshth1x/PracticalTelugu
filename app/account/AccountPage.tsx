@@ -2,14 +2,11 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import {
-  useMemo,
-  useState,
-  type FormEvent,
-} from "react";
+import { useCallback, useMemo, useState, type FormEvent } from "react";
 import { hasLearningData, safeAppPath } from "../learning-state";
 import { useLearning } from "../LearningProvider";
 import { Wordmark } from "../Wordmark";
+import { GoogleIdentityButton } from "./GoogleIdentityButton";
 
 type AccountMode = "signin" | "signup" | "reset-password";
 
@@ -155,14 +152,32 @@ export function AccountPage() {
     router.push(returnTo);
   };
 
-  const startGoogle = async () => {
-    setError("");
-    setMessage("");
-    setBusy("google");
-    const result = await signInWithGoogle(returnTo);
-    setBusy(null);
-    if (result.error) setError(authErrorMessage(result.error, "google"));
-  };
+  const finishGoogleSignIn = useCallback(
+    async (credential: string, rawNonce: string) => {
+      setError("");
+      setMessage("");
+      setBusy("google");
+      try {
+        const result = await signInWithGoogle(credential, rawNonce);
+        if (result.error) {
+          setError(authErrorMessage(result.error, "google"));
+          return;
+        }
+        router.push(returnTo);
+      } catch {
+        setError(
+          "Google sign-in couldn’t finish. Try again or use email instead.",
+        );
+      } finally {
+        setBusy(null);
+      }
+    },
+    [returnTo, router, signInWithGoogle],
+  );
+
+  const handleGoogleError = useCallback((nextError: string) => {
+    setError(nextError);
+  }, []);
 
   const requestReset = async () => {
     setError("");
@@ -266,18 +281,12 @@ export function AccountPage() {
 
             {!isResetMode ? (
               <>
-                <button
-                  className="google-button"
-                  onClick={startGoogle}
+                <GoogleIdentityButton
                   disabled={busy !== null}
-                >
-                  <span className="google-mark" aria-hidden="true">
-                    G
-                  </span>
-                  {busy === "google"
-                    ? "Opening Google…"
-                    : "Continue with Google"}
-                </button>
+                  signingIn={busy === "google"}
+                  onCredential={finishGoogleSignIn}
+                  onError={handleGoogleError}
+                />
                 <div className="account-divider" aria-hidden="true">
                   <span />
                   <small>or</small>

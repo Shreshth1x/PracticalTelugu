@@ -162,9 +162,10 @@ test("requires a signed, unexpired capability bound to the IP and family voice",
       ip,
       Date.now() + 60_000,
     );
-    const tamperedToken = `${validToken.slice(0, -1)}${
-      validToken.endsWith("A") ? "B" : "A"
-    }`;
+    const [payloadSegment, signatureSegment] = validToken.split(".");
+    const tamperedToken = `${payloadSegment}.${
+      signatureSegment.startsWith("A") ? "B" : "A"
+    }${signatureSegment.slice(1)}`;
     const tampered = await createFishVoice(
       voiceRequest(
         {

@@ -28,13 +28,13 @@ import {
   parseLearningSnapshot,
   parsePreferences,
   parseSavedWords,
-  safeAppPath,
   snapshotAdditionsSince,
   type LearningSnapshot,
   type Preferences,
   type SavedState,
   userStorageKeys,
 } from "./learning-state";
+import { signInWithGoogleIdToken } from "./google-id-token-auth";
 import { getSupabaseBrowserClient } from "./supabase-client";
 
 export type SyncStatus =
@@ -69,7 +69,7 @@ type LearningContextValue = {
   syncMessage: string;
   signInWithPassword: (email: string, password: string) => Promise<AuthResult>;
   signUp: (email: string, password: string) => Promise<AuthResult>;
-  signInWithGoogle: (returnTo: string) => Promise<AuthResult>;
+  signInWithGoogle: (idToken: string, rawNonce: string) => Promise<AuthResult>;
   sendPasswordReset: (email: string) => Promise<AuthResult>;
   updatePassword: (password: string) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
@@ -688,15 +688,12 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signInWithGoogle = useCallback(
-    async (returnTo: string): Promise<AuthResult> => {
-      const callbackUrl = new URL("/account", window.location.origin);
-      callbackUrl.searchParams.set("returnTo", safeAppPath(returnTo));
-      const { error } = await getSupabaseBrowserClient().auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: callbackUrl.toString() },
-      });
-      return { error: error?.message ?? null };
-    },
+    (idToken: string, rawNonce: string): Promise<AuthResult> =>
+      signInWithGoogleIdToken(
+        getSupabaseBrowserClient(),
+        idToken,
+        rawNonce,
+      ),
     [],
   );
 
