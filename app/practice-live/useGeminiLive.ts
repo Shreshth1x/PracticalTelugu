@@ -34,6 +34,11 @@ import {
   FISH_SPEECH_CLIENT_TIMEOUT_MS,
   type FishSpeechController,
 } from "./live-fish-speech";
+import {
+  createLiveOutputCaptureGuard,
+  shouldForwardLiveMicrophoneFrame,
+  type LiveOutputCaptureGuard,
+} from "./live-output-capture-guard";
 import { liveScenarios, type LiveScenarioId } from "./live-scenarios";
 import {
   gradeLiveSession,
@@ -310,6 +315,7 @@ export function useGeminiLive(
   const inputWorkletReadyRef = useRef<Promise<boolean> | null>(null);
   const silentGainRef = useRef<GainNode | null>(null);
   const activeSourcesRef = useRef(new Set<AudioBufferSourceNode>());
+  const outputCaptureGuardRef = useRef<LiveOutputCaptureGuard | null>(null);
   const nextPlaybackTimeRef = useRef(0);
   const levelUpdatedAtRef = useRef(0);
   const assistantLevelUpdatedAtRef = useRef(0);
@@ -361,6 +367,16 @@ export function useGeminiLive(
     setPhase(nextPhase);
   }, []);
 
+  const getOutputCaptureGuard = useCallback(() => {
+    outputCaptureGuardRef.current ??= createLiveOutputCaptureGuard({
+      scheduleTimeout: (callback, delayMs) =>
+        window.setTimeout(callback, delayMs),
+      cancelTimeout: (handle) => window.clearTimeout(handle as number),
+    });
+
+    return outputCaptureGuardRef.current;
+  }, []);
+
   const shouldCompleteNormally = useCallback(() => {
     const now = Date.now();
     return (
@@ -393,7 +409,9 @@ export function useGeminiLive(
     fishSpeechControllerRef.current?.cancel();
     fishSpeechControllerRef.current = null;
 
+    const hadActiveOutput = activeSourcesRef.current.size > 0;
     for (const source of activeSourcesRef.current) {
+      source.onended = null;
       try {
         source.stop();
       } catch {
@@ -403,8 +421,17 @@ export function useGeminiLive(
 
     activeSourcesRef.current.clear();
     nextPlaybackTimeRef.current = 0;
+    const outputCaptureGuard = getOutputCaptureGuard();
+    if (hadActiveOutput) {
+      outputCaptureGuard.beginOutput();
+      outputCaptureGuard.releaseAfterTail();
+      setMicLevel(0);
+    } else if (outputCaptureGuard.isInputBlocked()) {
+      outputCaptureGuard.discardReleaseCallback();
+    }
     setAssistantLevel(0);
-  }, []);
+    return hadActiveOutput || outputCaptureGuard.isInputBlocked();
+  }, [getOutputCaptureGuard]);
 
   const releaseHardware = useCallback(() => {
     connectionAttemptRef.current += 1;
@@ -413,6 +440,7 @@ export function useGeminiLive(
     voiceAccessTokenRef.current = null;
 
     stopPlayback();
+    getOutputCaptureGuard().cancel();
 
     const session = sessionRef.current;
     sessionRef.current = null;
@@ -451,7 +479,7 @@ export function useGeminiLive(
 
     setMicLevel(0);
     setAssistantLevel(0);
-  }, [stopPlayback]);
+  }, [getOutputCaptureGuard, stopPlayback]);
 
   const failSession = useCallback(
     (message: string) => {
@@ -549,11 +577,34 @@ export function useGeminiLive(
     setActiveTurn(turn);
   }, []);
 
+  const settleAssistantPlayback = useCallback(() => {
+    if (activeSourcesRef.current.size) return;
+
+    setAssistantLevel(0);
+    getOutputCaptureGuard().releaseAfterTail(() => {
+      if (!mountedRef.current || activeSourcesRef.current.size) return;
+
+      if (!mayuTurnCompleteRef.current) {
+        if (phaseRef.current === "speaking") updatePhase("thinking");
+        return;
+      }
+
+      mayuAudioEndedAtRef.current = performance.now();
+      openLearnerReplyWindow();
+      if (isSessionPhase(phaseRef.current)) {
+        updatePhase(mutedRef.current ? "muted" : "listening");
+      }
+    });
+  }, [getOutputCaptureGuard, openLearnerReplyWindow, updatePhase]);
+
   const playSamples = useCallback(
     (samples: Float32Array) => {
       const context = outputContextRef.current;
       if (!context || context.state === "closed") return;
       if (!samples.length) return;
+
+      getOutputCaptureGuard().beginOutput();
+      setMicLevel(0);
 
       if (learnerTurnFinishedAtRef.current !== null) {
         setLatestTurnLatencyMs(
@@ -589,21 +640,14 @@ export function useGeminiLive(
         activeSourcesRef.current.delete(source);
         if (!activeSourcesRef.current.size) {
           nextPlaybackTimeRef.current = 0;
-          mayuAudioEndedAtRef.current = performance.now();
-          if (mayuTurnCompleteRef.current) openLearnerReplyWindow();
-          if (mountedRef.current) {
-            setAssistantLevel(0);
-            if (isSessionPhase(phaseRef.current)) {
-              updatePhase(mutedRef.current ? "muted" : "listening");
-            }
-          }
+          settleAssistantPlayback();
         }
       };
 
       void context.resume();
       source.start(startAt);
     },
-    [openLearnerReplyWindow, updatePhase],
+    [getOutputCaptureGuard, settleAssistantPlayback, updatePhase],
   );
 
   const playAudio = useCallback(
@@ -663,15 +707,12 @@ export function useGeminiLive(
             !activeSourcesRef.current.size &&
             mayuTurnCompleteRef.current
           ) {
-            openLearnerReplyWindow();
-            if (isSessionPhase(phaseRef.current)) {
-              updatePhase(mutedRef.current ? "muted" : "listening");
-            }
+            settleAssistantPlayback();
           }
         },
       });
     },
-    [openLearnerReplyWindow, playAudio, playSamples, updatePhase],
+    [playAudio, playSamples, settleAssistantPlayback],
   );
 
   const handleServerMessage = useCallback(
@@ -703,7 +744,12 @@ export function useGeminiLive(
       if (activityEvent?.type === "activity-start") {
         markLearnerResponseStarted();
         applyLearnerTurnEvent(activityEvent);
-        if (!mutedRef.current) updatePhase("listening");
+        if (
+          !mutedRef.current &&
+          !getOutputCaptureGuard().isInputBlocked()
+        ) {
+          updatePhase("listening");
+        }
       }
       if (activityEvent?.type === "activity-end") {
         applyLearnerTurnEvent(activityEvent);
@@ -956,15 +1002,33 @@ export function useGeminiLive(
       const hasModelOutput = Boolean(audioParts.length);
 
       if (content.interrupted) {
-        stopPlayback();
-        updatePhase(mutedRef.current ? "muted" : "listening");
+        markLearnerResponseStarted();
+        const captureReleasePending = stopPlayback();
+        if (captureReleasePending) {
+          updatePhase(mutedRef.current ? "muted" : "thinking");
+          getOutputCaptureGuard().releaseAfterTail(() => {
+            if (
+              mountedRef.current &&
+              isSessionPhase(phaseRef.current)
+            ) {
+              updatePhase(mutedRef.current ? "muted" : "listening");
+            }
+          });
+        } else {
+          updatePhase(mutedRef.current ? "muted" : "listening");
+        }
       }
 
       const interimInput = content.interimInputTranscription?.text;
       if (interimInput) {
         markLearnerResponseStarted();
         applyLearnerTurnEvent({ type: "interim-transcription" });
-        if (!mutedRef.current) updatePhase("listening");
+        if (
+          !mutedRef.current &&
+          !getOutputCaptureGuard().isInputBlocked()
+        ) {
+          updatePhase("listening");
+        }
       }
 
       const finalInput = content.inputTranscription;
@@ -978,7 +1042,12 @@ export function useGeminiLive(
           updatePhase("thinking");
         } else {
           applyLearnerTurnEvent({ type: "interim-transcription" });
-          if (!mutedRef.current) updatePhase("listening");
+          if (
+            !mutedRef.current &&
+            !getOutputCaptureGuard().isInputBlocked()
+          ) {
+            updatePhase("listening");
+          }
         }
       }
 
@@ -1006,8 +1075,7 @@ export function useGeminiLive(
           !activeSourcesRef.current.size &&
           !fishSpeechPending
         ) {
-          openLearnerReplyWindow();
-          updatePhase(mutedRef.current ? "muted" : "listening");
+          settleAssistantPlayback();
         }
       }
     },
@@ -1016,11 +1084,12 @@ export function useGeminiLive(
       activateTurn,
       applyLearnerTurnEvent,
       commitTranscript,
+      getOutputCaptureGuard,
       markLearnerResponseStarted,
-      openLearnerReplyWindow,
       playAudio,
       requestFishSpeech,
       scenario.words,
+      settleAssistantPlayback,
       stopPlayback,
       updatePhase,
     ],
@@ -1033,10 +1102,19 @@ export function useGeminiLive(
 
       const source = inputContext.createMediaStreamSource(stream);
       const silentGain = inputContext.createGain();
+      const outputCaptureGuard = getOutputCaptureGuard();
       silentGain.gain.value = 0;
 
       const sendPcm = (pcm: Int16Array, level: number) => {
-        if (mutedRef.current || sessionRef.current !== session) return;
+        if (
+          !shouldForwardLiveMicrophoneFrame({
+            isMuted: mutedRef.current,
+            sessionMatches: sessionRef.current === session,
+            outputBlocked: outputCaptureGuard.isInputBlocked(),
+          })
+        ) {
+          return;
+        }
 
         const now = performance.now();
         if (now - levelUpdatedAtRef.current > 55) {
@@ -1089,7 +1167,7 @@ export function useGeminiLive(
       silentGainRef.current = silentGain;
       void inputContext.resume();
     },
-    [],
+    [getOutputCaptureGuard],
   );
 
   const start = useCallback(async () => {
@@ -1449,9 +1527,16 @@ export function useGeminiLive(
       setMicLevel(0);
       if (!activeSourcesRef.current.size) updatePhase("muted");
     } else {
-      updatePhase(activeSourcesRef.current.size ? "speaking" : "listening");
+      const outputBlocked = getOutputCaptureGuard().isInputBlocked();
+      updatePhase(
+        activeSourcesRef.current.size
+          ? "speaking"
+          : outputBlocked
+            ? "thinking"
+            : "listening",
+      );
     }
-  }, [updatePhase]);
+  }, [getOutputCaptureGuard, updatePhase]);
 
   const repeatTurn = useCallback(
     (turnId: string, options: { slow?: boolean } = {}) => {
