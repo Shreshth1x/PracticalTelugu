@@ -22,6 +22,7 @@ test("returns an honest, actionable empty grade when there are no turns", () => 
   const grade = gradeLiveSession([]);
 
   assert.deepEqual(grade, {
+    rubricVersion: 2,
     averageResponseMs: null,
     assessedTurns: 0,
     overallScore: null,
@@ -36,7 +37,7 @@ test("returns an honest, actionable empty grade when there are no turns", () => 
   assert.equal(isLiveSessionGrade(grade), true);
 });
 
-test("grades only final learner turns and computes the 40/40/20 aggregate", () => {
+test("grades only final learner turns and gives response timing zero overall weight", () => {
   const grade = gradeLiveSession([
     learnerTurn({
       id: "one",
@@ -85,28 +86,85 @@ test("grades only final learner turns and computes the 40/40/20 aggregate", () =
   assert.equal(grade.accuracyScore, 80);
   assert.equal(grade.averageResponseMs, 4_000);
   assert.equal(grade.responseScore, 92);
-  assert.equal(grade.overallScore, 78);
-  assert.equal(grade.strongestMetric, "response");
+  assert.equal(grade.overallScore, 75);
+  assert.equal(grade.strongestMetric, "accuracy");
+  assert.equal(grade.rubricVersion, 2);
 });
 
-test("normalizes available weights when English has no pronunciation score", () => {
+test("uses accuracy alone when English has no pronunciation score", () => {
   const grade = gradeLiveSession([
     learnerTurn({
       sourceLanguage: "english",
       responseLatencyMs: 4_001,
       assessment: {
         pronunciationScore: null,
-        accuracyScore: 94,
+        accuracyScore: 50,
         feedback: "Try answering with the Telugu phrase next time.",
       },
     }),
   ]);
 
   assert.equal(grade.pronunciationScore, null);
-  assert.equal(grade.accuracyScore, 94);
+  assert.equal(grade.accuracyScore, 50);
   assert.equal(grade.responseScore, 82);
-  assert.equal(grade.overallScore, 90);
+  assert.equal(grade.overallScore, 50);
   assert.equal(grade.strongestMetric, "accuracy");
+});
+
+test("averages each turn's language score so English turns keep their full weight", () => {
+  const englishAssessment = {
+    pronunciationScore: null,
+    accuracyScore: 50,
+    languageScore: 50,
+    feedback: "Try the same meaning in Telugu next time.",
+  };
+  const grade = gradeLiveSession([
+    learnerTurn({ id: "english-one", assessment: englishAssessment }),
+    learnerTurn({ id: "english-two", assessment: englishAssessment }),
+    learnerTurn({ id: "english-three", assessment: englishAssessment }),
+    learnerTurn({
+      id: "telugu-perfect",
+      assessment: {
+        pronunciationScore: 100,
+        accuracyScore: 100,
+        languageScore: 100,
+        feedback: "Keep going.",
+      },
+    }),
+  ]);
+
+  assert.equal(grade.assessedTurns, 4);
+  assert.equal(grade.pronunciationScore, 100);
+  assert.equal(grade.accuracyScore, 63);
+  assert.equal(grade.overallScore, 63);
+});
+
+test("keeps the overall language score identical across response speeds", () => {
+  const fast = gradeLiveSession([
+    learnerTurn({
+      responseLatencyMs: 500,
+      assessment: {
+        pronunciationScore: 60,
+        accuracyScore: 80,
+        feedback: "Keep practicing.",
+      },
+    }),
+  ]);
+  const slow = gradeLiveSession([
+    learnerTurn({
+      responseLatencyMs: 25_000,
+      assessment: {
+        pronunciationScore: 60,
+        accuracyScore: 80,
+        feedback: "Keep practicing.",
+      },
+    }),
+  ]);
+
+  assert.equal(fast.responseScore, 100);
+  assert.equal(slow.responseScore, 25);
+  assert.equal(fast.overallScore, 70);
+  assert.equal(slow.overallScore, 70);
 });
 
 test("uses novice-friendly response-time bands at every boundary", () => {
@@ -186,6 +244,35 @@ test("keeps response-only data but does not invent an overall grade", () => {
   assert.equal(isLiveSessionGrade(grade), true);
 });
 
+test("keeps a low-confidence repeat unscored while preserving its next step", () => {
+  const grade = gradeLiveSession([
+    learnerTurn({
+      responseLatencyMs: 3_000,
+      assessment: {
+        pronunciationScore: null,
+        accuracyScore: null,
+        languageScore: null,
+        confidence: "low",
+        ratings: {
+          intelligibility: null,
+          pronunciation: null,
+          meaning: null,
+          form: null,
+          teluguCoverage: null,
+        },
+        feedback: "Please repeat once at a comfortable volume.",
+      },
+    }),
+  ]);
+
+  assert.equal(grade.assessedTurns, 0);
+  assert.equal(grade.pronunciationScore, null);
+  assert.equal(grade.accuracyScore, null);
+  assert.equal(grade.responseScore, 92);
+  assert.equal(grade.overallScore, null);
+  assert.equal(grade.nextStep, "Please repeat once at a comfortable volume.");
+});
+
 test("rounds and clamps all aggregated metric scores to integer 0-100", () => {
   const grade = gradeLiveSession([
     learnerTurn({
@@ -212,7 +299,7 @@ test("rounds and clamps all aggregated metric scores to integer 0-100", () => {
   assert.equal(grade.accuracyScore, 45);
   assert.equal(grade.averageResponseMs, 1_001);
   assert.equal(grade.responseScore, 100);
-  assert.equal(grade.overallScore, 74);
+  assert.equal(grade.overallScore, 68);
 });
 
 test("type guard rejects malformed and internally inconsistent grades", () => {
@@ -227,10 +314,25 @@ test("type guard rejects malformed and internally inconsistent grades", () => {
   ]);
 
   assert.equal(isLiveSessionGrade(valid), true);
+  assert.equal(valid.rubricVersion, 2);
   assert.equal(isLiveSessionGrade(null), false);
   assert.equal(isLiveSessionGrade({ ...valid, overallScore: 101 }), false);
   assert.equal(isLiveSessionGrade({ ...valid, accuracyScore: 88.5 }), false);
   assert.equal(isLiveSessionGrade({ ...valid, assessedTurns: -1 }), false);
+  assert.equal(isLiveSessionGrade({ ...valid, rubricVersion: 1 }), false);
+  assert.equal(isLiveSessionGrade({ ...valid, rubricVersion: 3 }), false);
+  assert.equal(isLiveSessionGrade({ ...valid, rubricVersion: "2" }), false);
+  assert.equal(
+    isLiveSessionGrade({ ...valid, strongestMetric: "response" }),
+    false,
+  );
+  const legacy = { ...valid };
+  delete legacy.rubricVersion;
+  assert.equal(
+    isLiveSessionGrade(legacy),
+    true,
+    "legacy saved grades without a version remain readable",
+  );
   assert.equal(
     isLiveSessionGrade({ ...valid, strongestMetric: "fluency" }),
     false,

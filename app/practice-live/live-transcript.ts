@@ -1,14 +1,14 @@
-export type LiveTranscriptSpeaker = "you" | "mayu";
-export type LiveTranscriptSource = "telugu" | "english" | "mixed";
+import {
+  calibrateLiveLearnerAssessment,
+  type CalibratedLiveLearnerAssessment,
+  type LiveAssessmentConfidence,
+  type LiveAssessmentSource,
+} from "./live-assessment.ts";
 
-export type LiveLearnerAssessment = {
-  /** Approximate intelligibility of the Telugu heard, not a phoneme-level grade. */
-  pronunciationScore: number | null;
-  /** How clearly and appropriately the spoken reply answered the active turn. */
-  accuracyScore: number;
-  /** One short, learner-facing improvement in English or English-letter Telugu. */
-  feedback: string;
-};
+export type LiveTranscriptSpeaker = "you" | "mayu";
+export type LiveTranscriptSource = LiveAssessmentSource;
+
+export type LiveLearnerAssessment = CalibratedLiveLearnerAssessment;
 
 export type LiveTranscriptTurn = {
   id: string;
@@ -58,6 +58,26 @@ const LATIN_LETTER = /\p{Script=Latin}/u;
 const NON_LATIN_LETTER = /(?!\p{Script=Latin})\p{Letter}/u;
 const MAX_CAPTION_LENGTH = 420;
 const MAX_FEEDBACK_LENGTH = 180;
+const LIVE_TURN_TOOL_FIELDS = new Set([
+  "mayuTeluguInternal",
+  "mayuRoman",
+  "mayuPronunciation",
+  "mayuEnglish",
+  "cueId",
+  "learnerTeluguInternal",
+  "learnerRoman",
+  "learnerPronunciation",
+  "learnerEnglish",
+  "learnerSourceLanguage",
+  "learnerAssessmentConfidence",
+  "learnerIntelligibilityRating",
+  "learnerPronunciationRating",
+  "learnerMeaningRating",
+  "learnerFormRating",
+  "learnerTeluguCoverageRating",
+  "learnerFeedback",
+  "replay",
+]);
 const FORBIDDEN_AUDIBLE_ENGLISH =
   /(?:^|[\s,.;:!?])(?:oh|okay|ok|yes|great|hello|hi|thanks|thank you|please|sorry|wow|cool|sure|bye)(?=$|[\s,.;:!?])/iu;
 const FORBIDDEN_TELUGU_LOAN_INTERJECTIONS =
@@ -93,6 +113,12 @@ function cleanInternalTelugu(value: unknown) {
 
 function sourceLanguage(value: unknown): LiveTranscriptSource | null {
   return value === "telugu" || value === "english" || value === "mixed"
+    ? value
+    : null;
+}
+
+function assessmentConfidence(value: unknown): LiveAssessmentConfidence | null {
+  return value === "high" || value === "medium" || value === "low"
     ? value
     : null;
 }
@@ -198,6 +224,9 @@ export function parseLiveTurnToolCall(
 ): ParsedLiveTurnToolCall | null {
   if (!value || typeof value !== "object") return null;
   const args = value as Record<string, unknown>;
+  if (Object.keys(args).some((field) => !LIVE_TURN_TOOL_FIELDS.has(field))) {
+    return null;
+  }
 
   const mayuTeluguInternal = cleanInternalTelugu(args.mayuTeluguInternal);
   const mayuRoman = cleanCaptionText(args.mayuRoman);
@@ -225,40 +254,144 @@ export function parseLiveTurnToolCall(
     args.learnerTeluguInternal,
   );
   const learnerSourceLanguage = sourceLanguage(args.learnerSourceLanguage);
+  const learnerAssessmentConfidence = assessmentConfidence(
+    args.learnerAssessmentConfidence,
+  );
+  const learnerIntelligibilityRating = integerRating(
+    args.learnerIntelligibilityRating,
+  );
   const learnerPronunciationRating = integerRating(
     args.learnerPronunciationRating,
   );
-  const learnerAccuracyRating = integerRating(args.learnerAccuracyRating);
-  const learnerFeedback = cleanLearnerFeedback(args.learnerFeedback);
-  const hasLearnerPronunciationRating = Object.hasOwn(
-    args,
-    "learnerPronunciationRating",
+  const learnerMeaningRating = integerRating(args.learnerMeaningRating);
+  const learnerFormRating = integerRating(args.learnerFormRating);
+  const learnerTeluguCoverageRating = integerRating(
+    args.learnerTeluguCoverageRating,
   );
-  const hasAnyLearnerField = [
+  const learnerFeedback = cleanLearnerFeedback(args.learnerFeedback);
+  const learnerCaptionFields = [
     "learnerTeluguInternal",
     "learnerRoman",
     "learnerPronunciation",
     "learnerEnglish",
     "learnerSourceLanguage",
+  ] as const;
+  const learnerRatingFields = [
+    "learnerIntelligibilityRating",
     "learnerPronunciationRating",
-    "learnerAccuracyRating",
+    "learnerMeaningRating",
+    "learnerFormRating",
+    "learnerTeluguCoverageRating",
+  ] as const;
+  const learnerFields = [
+    ...learnerCaptionFields,
+    "learnerAssessmentConfidence",
+    ...learnerRatingFields,
     "learnerFeedback",
-  ].some((field) => Object.hasOwn(args, field));
+  ] as const;
+  const hasAnyLearnerField = learnerFields.some((field) =>
+    Object.hasOwn(args, field),
+  );
+  const hasAnyLearnerCaption = learnerCaptionFields.some((field) =>
+    Object.hasOwn(args, field),
+  );
+  const hasAnyLearnerRating = learnerRatingFields.some((field) =>
+    Object.hasOwn(args, field),
+  );
+  const hasInvalidRating = ([
+    ["learnerIntelligibilityRating", learnerIntelligibilityRating],
+    ["learnerPronunciationRating", learnerPronunciationRating],
+    ["learnerMeaningRating", learnerMeaningRating],
+    ["learnerFormRating", learnerFormRating],
+    ["learnerTeluguCoverageRating", learnerTeluguCoverageRating],
+  ] as const).some(
+    ([field, rating]) => Object.hasOwn(args, field) && rating === null,
+  );
 
-  if (
-    hasAnyLearnerField &&
-    (!learnerTeluguInternal ||
-      !learnerRoman ||
-      !learnerPronunciation ||
-      !learnerEnglish ||
-      !learnerSourceLanguage ||
-      learnerAccuracyRating === null ||
-      !learnerFeedback ||
-      (learnerSourceLanguage !== "english" &&
-        learnerPronunciationRating === null) ||
-      (hasLearnerPronunciationRating && learnerPronunciationRating === null))
-  ) {
-    return null;
+  let learner: ParsedLiveTurnToolCall["learner"] = null;
+  if (hasAnyLearnerField) {
+    if (!learnerAssessmentConfidence || !learnerFeedback || hasInvalidRating) {
+      return null;
+    }
+
+    if (learnerAssessmentConfidence === "low") {
+      // A fair abstention must not force the model to invent words it could
+      // not hear. Preserve the turn with an explicit local placeholder.
+      if (hasAnyLearnerCaption || hasAnyLearnerRating) return null;
+
+      learner = {
+        teluguInternal: "",
+        roman: "Audio unclear",
+        english: "This reply was not scored. Please try it once more.",
+        assessment: calibrateLiveLearnerAssessment({
+          sourceLanguage: "telugu",
+          confidence: learnerAssessmentConfidence,
+          ratings: {
+            intelligibility: null,
+            pronunciation: null,
+            meaning: null,
+            form: null,
+            teluguCoverage: null,
+          },
+          feedback: learnerFeedback,
+        }),
+      };
+    } else {
+      if (
+        !learnerTeluguInternal ||
+        !learnerRoman ||
+        !learnerPronunciation ||
+        !learnerEnglish ||
+        !learnerSourceLanguage ||
+        learnerMeaningRating === null
+      ) {
+        return null;
+      }
+
+      const hasTeluguQualityRatings =
+        learnerIntelligibilityRating !== null &&
+        learnerPronunciationRating !== null &&
+        learnerFormRating !== null;
+      const hasProhibitedEnglishRatings = [
+        "learnerIntelligibilityRating",
+        "learnerPronunciationRating",
+        "learnerFormRating",
+        "learnerTeluguCoverageRating",
+      ].some((field) => Object.hasOwn(args, field));
+
+      if (
+        (learnerSourceLanguage === "english" && hasProhibitedEnglishRatings) ||
+        (learnerSourceLanguage === "telugu" &&
+          (!hasTeluguQualityRatings ||
+            Object.hasOwn(args, "learnerTeluguCoverageRating"))) ||
+        (learnerSourceLanguage === "mixed" &&
+          (!hasTeluguQualityRatings ||
+            learnerTeluguCoverageRating === null ||
+            learnerTeluguCoverageRating === 0))
+      ) {
+        return null;
+      }
+
+      learner = {
+        teluguInternal: learnerTeluguInternal,
+        roman: learnerRoman,
+        pronunciation: learnerPronunciation,
+        english: learnerEnglish,
+        sourceLanguage: learnerSourceLanguage,
+        assessment: calibrateLiveLearnerAssessment({
+          sourceLanguage: learnerSourceLanguage,
+          confidence: learnerAssessmentConfidence,
+          ratings: {
+            intelligibility: learnerIntelligibilityRating,
+            pronunciation: learnerPronunciationRating,
+            meaning: learnerMeaningRating,
+            form: learnerFormRating,
+            teluguCoverage: learnerTeluguCoverageRating,
+          },
+          feedback: learnerFeedback,
+        }),
+      };
+    }
   }
 
   return {
@@ -270,23 +403,7 @@ export function parseLiveTurnToolCall(
       cueId: rawCueId,
       sourceLanguage: "telugu",
     },
-    learner: hasAnyLearnerField
-      ? {
-          teluguInternal: learnerTeluguInternal,
-          roman: learnerRoman,
-          pronunciation: learnerPronunciation,
-          english: learnerEnglish,
-          sourceLanguage: learnerSourceLanguage!,
-          assessment: {
-            pronunciationScore:
-              learnerPronunciationRating === null
-                ? null
-                : learnerPronunciationRating * 25,
-            accuracyScore: learnerAccuracyRating! * 25,
-            feedback: learnerFeedback,
-          },
-        }
-      : null,
+    learner,
     replay: args.replay === true,
   };
 }

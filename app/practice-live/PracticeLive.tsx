@@ -37,6 +37,10 @@ import {
   type LiveScoreMetric,
   type LiveSessionGrade,
 } from "./live-session-grading";
+import {
+  describeLiveScoreProgress,
+  isComparableLiveSession,
+} from "./live-session-comparison";
 
 const LIVE_HISTORY_KEY = "practicaltelugu.live-sessions.v1";
 
@@ -155,17 +159,17 @@ function metricNote(metric: LiveScoreMetric, score: number | null) {
   }
 
   if (metric === "pronunciation") {
-    if (score >= 90) return "Your Telugu was immediately easy to understand.";
-    if (score >= 75) return "Your Telugu was clear, with only a small rough edge.";
-    if (score >= 55) return "The meaning came through; one sound needs another rep.";
-    return "Slow the phrase down and make each word distinct.";
+    if (score >= 90) return "The words were easy to understand and the sound pattern stayed strong.";
+    if (score >= 75) return "The words stayed understandable; keep refining the sound pattern.";
+    if (score >= 55) return "The words were recoverable; repeat one short phrase slowly.";
+    return "Some sounds obscured the words; use one short phrase for the next rep.";
   }
 
   if (metric === "accuracy") {
-    if (score >= 90) return "Your replies fit the question and kept the meaning intact.";
-    if (score >= 75) return "Your meaning landed with one small correction to make.";
-    if (score >= 55) return "Mayu could follow you, but the reply needs a cleaner form.";
-    return "Use one short Telugu answer before adding more detail.";
+    if (score >= 90) return "Your reply's meaning and Telugu use worked well together.";
+    if (score >= 75) return "The reply worked; keep making the Telugu more complete and precise.";
+    if (score >= 55) return "The meaning was recoverable; use more complete Telugu next time.";
+    return "Use one short course phrase before building a longer reply.";
   }
 
   if (score >= 90) return "You answered without a long pause.";
@@ -207,18 +211,10 @@ function SessionResults({
 }) {
   const grade = session.grade ?? unavailableGrade;
   const previousScore = previousSession?.grade?.overallScore ?? null;
-  const scoreDelta =
-    grade.overallScore === null || previousScore === null
-      ? null
-      : grade.overallScore - previousScore;
-  const progressCopy =
-    scoreDelta === null
-      ? "Baseline saved. Your next practice with this same setup will compare here."
-      : scoreDelta > 0
-        ? `Up ${scoreDelta} ${scoreDelta === 1 ? "point" : "points"} from your last matching practice.`
-        : scoreDelta < 0
-          ? `Today: ${grade.overallScore}. Last matching practice: ${previousScore}.`
-          : "You matched your last score with this setup.";
+  const progressCopy = describeLiveScoreProgress(
+    grade.overallScore,
+    previousScore,
+  );
   const metrics: Array<{
     id: LiveScoreMetric;
     label: string;
@@ -360,9 +356,12 @@ function SessionResults({
       </section>
 
       <p className="live-results-method">
-        Pronunciation is an AI estimate of how understandable the Telugu sounded,
-        not a phoneme-by-phoneme accent grade. Response time is measured from when
-        Mayu finishes to when you begin.
+        Pronunciation combines word understandability with Telugu sound accuracy.
+        A non-native accent is not penalized unless it changes or obscures the
+        words. Accuracy checks your intended meaning, Telugu form, and, for a
+        mixed reply, how much Telugu you actually used. English-only replies get
+        limited conversational credit. Unclear audio is left unscored. Response
+        time is shown separately and does not change your language score.
       </p>
 
       <div className="live-results-actions">
@@ -540,9 +539,13 @@ function ConversationTranscript({
                 <span>{turn.speaker === "mayu" ? "Mayu" : "You"}</span>
                 <small>
                   {turn.final
-                    ? turn.speaker === "you" && turn.sourceLanguage !== "telugu"
-                      ? "Telugu version"
-                      : ""
+                    ? turn.speaker === "you" &&
+                      turn.assessment?.confidence === "low"
+                      ? "Not scored"
+                      : turn.speaker === "you" &&
+                          turn.sourceLanguage !== "telugu"
+                        ? "Telugu version"
+                        : ""
                     : turn.speaker === "you"
                       ? "Translating…"
                       : "Preparing…"}
@@ -551,7 +554,12 @@ function ConversationTranscript({
               {turn.final ? (
                 <div className="live-transcript-copy">
                   <div className="live-transcript-spoken">
-                    <p className="live-transcript-roman" lang="te-Latn">
+                    <p
+                      className="live-transcript-roman"
+                      lang={
+                        turn.assessment?.confidence === "low" ? "en" : "te-Latn"
+                      }
+                    >
                       {turn.roman}
                     </p>
                     {turn.pronunciation ? (
@@ -706,15 +714,7 @@ export default function PracticeLive() {
 
     return (
       history.find(
-        (session) =>
-          session.id !== completedSession.id &&
-          session.scenarioId === completedSession.scenarioId &&
-          session.familyVoice === completedSession.familyVoice &&
-          (session.voiceMode ?? "gemini") ===
-            (completedSession.voiceMode ?? "gemini") &&
-          session.relationship === completedSession.relationship &&
-          session.grade?.overallScore !== null &&
-          session.grade?.overallScore !== undefined,
+        (session) => isComparableLiveSession(completedSession, session),
       ) ?? null
     );
   }, [history, live.completedSession]);

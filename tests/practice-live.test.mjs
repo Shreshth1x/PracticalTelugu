@@ -174,8 +174,11 @@ test("accepts complete English-letter captions and blocks Telugu script", () => 
     learnerPronunciation: "CHAA-loo, ka-DOO-poo nin-DIN-dee.",
     learnerEnglish: "That is enough, I am full.",
     learnerSourceLanguage: "telugu",
+    learnerAssessmentConfidence: "high",
+    learnerIntelligibilityRating: 4,
     learnerPronunciationRating: 3,
-    learnerAccuracyRating: 4,
+    learnerMeaningRating: 4,
+    learnerFormRating: 4,
     learnerFeedback: "Keep the long aa sound steady in chaalu.",
     cueId: "have-you-eaten__primary",
   });
@@ -183,8 +186,10 @@ test("accepts complete English-letter captions and blocks Telugu script", () => 
   assert.equal(parsed?.mayu.roman, "Inkaa konchem tintaavaa?");
   assert.equal(parsed?.mayu.english, "Will you eat a little more?");
   assert.equal(parsed?.learner?.sourceLanguage, "telugu");
-  assert.equal(parsed?.learner?.assessment.pronunciationScore, 75);
+  assert.equal(parsed?.learner?.assessment.confidence, "high");
+  assert.equal(parsed?.learner?.assessment.pronunciationScore, 94);
   assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
+  assert.equal(parsed?.learner?.assessment.languageScore, 97);
   assert.equal(parsed?.replay, false);
 
   assert.equal(
@@ -322,10 +327,23 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     "english",
     "mixed",
   ]);
-  assert.equal(schema?.properties?.learnerPronunciationRating?.minimum, 0);
-  assert.equal(schema?.properties?.learnerPronunciationRating?.maximum, 4);
-  assert.equal(schema?.properties?.learnerAccuracyRating?.minimum, 0);
-  assert.equal(schema?.properties?.learnerAccuracyRating?.maximum, 4);
+  assert.deepEqual(schema?.properties?.learnerAssessmentConfidence?.enum, [
+    "high",
+    "medium",
+    "low",
+  ]);
+  for (const ratingField of [
+    "learnerIntelligibilityRating",
+    "learnerPronunciationRating",
+    "learnerMeaningRating",
+    "learnerFormRating",
+    "learnerTeluguCoverageRating",
+  ]) {
+    assert.equal(schema?.properties?.[ratingField]?.type, "integer", ratingField);
+    assert.equal(schema?.properties?.[ratingField]?.minimum, 0, ratingField);
+    assert.equal(schema?.properties?.[ratingField]?.maximum, 4, ratingField);
+  }
+  assert.equal(schema?.properties?.learnerAccuracyRating, undefined);
   assert.equal(schema?.properties?.learnerFeedback?.maxLength, 180);
   assert.match(String(config.systemInstruction), /present_turn/);
   assert.match(
@@ -357,9 +375,43 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
     instruction,
     /interface never renders the internal fields/,
   );
+  assert.match(instruction, /Assess only the learner's ACTUAL AUDIO/);
+  assert.match(
+    instruction,
+    /learnerAssessmentConfidence first from the audio evidence/,
+  );
+  assert.match(instruction, /high when the words are clearly audible/);
+  assert.match(instruction, /medium when .* still judgeable/);
+  assert.match(instruction, /low when .* fair judgment impossible/);
+  assert.match(
+    instruction,
+    /Low confidence.{0,300}learnerAssessmentConfidence.{0,300}learnerFeedback/is,
+  );
+  assert.match(
+    instruction,
+    /Low confidence.{0,500}omit.{0,300}(?:caption|learnerRoman)/is,
+  );
+  assert.match(
+    instruction,
+    /Telugu audio with high\/medium confidence.{0,100}four independent quality ratings/is,
+  );
+  assert.match(
+    instruction,
+    /mixed.{0,300}learnerTeluguCoverageRating/is,
+  );
+  assert.match(
+    instruction,
+    /entirely English audio, include only learnerMeaningRating/,
+  );
+  assert.match(instruction, /learnerIntelligibilityRating/);
   assert.match(instruction, /learnerPronunciationRating/);
-  assert.match(instruction, /0-4 intelligibility rating/);
+  assert.match(instruction, /learnerMeaningRating/);
+  assert.match(instruction, /learnerFormRating/);
+  assert.match(instruction, /learnerTeluguCoverageRating/);
+  assert.match(instruction, /Never lower this merely for a non-native accent/);
+  assert.match(instruction, /broken Telugu that remains recoverable/);
   assert.match(instruction, /Never claim phoneme-level certainty/);
+  assert.doesNotMatch(instruction, /learnerAccuracyRating/);
   assert.doesNotMatch(instruction, /Use short English connective words/i);
   assert.doesNotMatch(instruction, /brief English scene-setting sentence/i);
   assert.match(instruction, /RESPECTFUL RELATIONSHIP LOCK/);

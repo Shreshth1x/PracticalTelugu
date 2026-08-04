@@ -3,6 +3,7 @@ import type { LiveTranscriptTurn } from "./live-transcript";
 export type LiveScoreMetric = "pronunciation" | "accuracy" | "response";
 
 export type LiveSessionGrade = {
+  rubricVersion?: 2;
   averageResponseMs: number | null;
   assessedTurns: number;
   overallScore: number | null;
@@ -16,7 +17,8 @@ export type LiveSessionGrade = {
 
 type LiveTurnAssessment = {
   pronunciationScore: number | null;
-  accuracyScore: number;
+  accuracyScore: number | null;
+  languageScore?: number | null;
   feedback: string;
 };
 
@@ -26,9 +28,11 @@ type GradableLiveTranscriptTurn = LiveTranscriptTurn & {
 };
 
 const METRIC_WEIGHTS: Record<LiveScoreMetric, number> = {
-  pronunciation: 0.4,
-  accuracy: 0.4,
-  response: 0.2,
+  pronunciation: 0.5,
+  accuracy: 0.5,
+  // Response time remains useful coaching context, but VAD, microphone, room,
+  // and accessibility differences make it too noisy to call language quality.
+  response: 0,
 };
 
 const EMPTY_NEXT_STEP =
@@ -67,6 +71,7 @@ export function isLiveSessionGrade(value: unknown): value is LiveSessionGrade {
     strongestMetric,
     summary,
     nextStep,
+    rubricVersion,
   } = value;
 
   if (
@@ -83,6 +88,7 @@ export function isLiveSessionGrade(value: unknown): value is LiveSessionGrade {
     !isNullableScore(pronunciationScore) ||
     !isNullableScore(accuracyScore) ||
     !isNullableScore(responseScore) ||
+    !(rubricVersion === undefined || rubricVersion === 2) ||
     !(strongestMetric === null || isMetric(strongestMetric)) ||
     typeof summary !== "string" ||
     summary.trim().length === 0 ||
@@ -104,6 +110,7 @@ export function isLiveSessionGrade(value: unknown): value is LiveSessionGrade {
   ) {
     return false;
   }
+  if (rubricVersion === 2 && strongestMetric === "response") return false;
 
   return true;
 }
@@ -144,7 +151,7 @@ function strongestMetricFor(
     "response",
   ] as const) {
     const score = scores[metric];
-    if (score === null) continue;
+    if (score === null || METRIC_WEIGHTS[metric] === 0) continue;
     if (strongest === null || score > scores[strongest]!) strongest = metric;
   }
 
@@ -176,12 +183,28 @@ function sessionSummary(overallScore: number, strongest: LiveScoreMetric) {
 }
 
 function assessmentStrength(assessment: LiveTurnAssessment) {
-  const pronunciation = normalizedScore(assessment.pronunciationScore ?? Number.NaN);
-  const accuracy = normalizedScore(assessment.accuracyScore);
+  const language = assessmentLanguageScore(assessment);
+  if (language !== null) return language;
 
-  if (pronunciation === null) return accuracy ?? Number.POSITIVE_INFINITY;
+  return Number.POSITIVE_INFINITY;
+}
+
+function assessmentLanguageScore(assessment: LiveTurnAssessment) {
+  const pronunciation = normalizedScore(
+    assessment.pronunciationScore ?? Number.NaN,
+  );
+  const accuracy = normalizedScore(assessment.accuracyScore ?? Number.NaN);
+
+  if (pronunciation === null && accuracy === null) return null;
+
+  const calibrated = normalizedScore(assessment.languageScore ?? Number.NaN);
+  if (calibrated !== null) return calibrated;
+
+  // Legacy and hand-built assessments predate per-turn languageScore. Derive
+  // the same balanced score so saved sessions and focused tests remain valid.
+  if (pronunciation === null) return accuracy;
   if (accuracy === null) return pronunciation;
-  return (pronunciation + accuracy) / 2;
+  return Math.round((pronunciation + accuracy) / 2);
 }
 
 export function gradeLiveSession(
@@ -190,12 +213,15 @@ export function gradeLiveSession(
   const learnerTurns = (turns as readonly GradableLiveTranscriptTurn[]).filter(
     (turn) => turn.speaker === "you" && turn.final,
   );
-  const assessed = learnerTurns.flatMap((turn) => {
-    const assessment = turn.assessment;
-    if (!assessment || normalizedScore(assessment.accuracyScore) === null) {
-      return [];
-    }
-    return [assessment];
+  const assessments = learnerTurns.flatMap((turn) =>
+    turn.assessment ? [turn.assessment] : [],
+  );
+  const assessed = assessments.filter(
+    (assessment) => assessmentLanguageScore(assessment) !== null,
+  );
+  const languageScores = assessed.flatMap((assessment) => {
+    const score = assessmentLanguageScore(assessment);
+    return score === null ? [] : [score];
   });
 
   const pronunciationScores = assessed.flatMap((assessment) => {
@@ -204,7 +230,7 @@ export function gradeLiveSession(
     return score === null ? [] : [score];
   });
   const accuracyScores = assessed.flatMap((assessment) => {
-    const score = normalizedScore(assessment.accuracyScore);
+    const score = normalizedScore(assessment.accuracyScore ?? Number.NaN);
     return score === null ? [] : [score];
   });
   const responseTimes = learnerTurns.flatMap((turn) => {
@@ -224,33 +250,15 @@ export function gradeLiveSession(
     accuracy: accuracyScore,
     response: responseScore,
   };
-  const hasCoreScore = pronunciationScore !== null || accuracyScore !== null;
+  const overallScore = average(languageScores);
+  const hasCoreScore = overallScore !== null;
   const strongestMetric = hasCoreScore
     ? strongestMetricFor(metricScores)
     : null;
 
-  let overallScore: number | null = null;
-  if (hasCoreScore) {
-    let weightedTotal = 0;
-    let availableWeight = 0;
-
-    for (const metric of [
-      "pronunciation",
-      "accuracy",
-      "response",
-    ] as const) {
-      const score = metricScores[metric];
-      if (score === null) continue;
-      weightedTotal += score * METRIC_WEIGHTS[metric];
-      availableWeight += METRIC_WEIGHTS[metric];
-    }
-
-    overallScore = Math.round(weightedTotal / availableWeight);
-  }
-
   let nextStep = EMPTY_NEXT_STEP;
-  if (assessed.length > 0) {
-    const weakest = assessed.reduce((currentWeakest, assessment) =>
+  if (assessments.length > 0) {
+    const weakest = assessments.reduce((currentWeakest, assessment) =>
       assessmentStrength(assessment) < assessmentStrength(currentWeakest)
         ? assessment
         : currentWeakest,
@@ -260,6 +268,7 @@ export function gradeLiveSession(
   }
 
   return {
+    rubricVersion: 2,
     averageResponseMs,
     assessedTurns: assessed.length,
     overallScore,

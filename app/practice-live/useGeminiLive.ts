@@ -803,7 +803,7 @@ export function useGeminiLive(
               name: call.name,
               response: {
                 error:
-                  "Provide the internal Telugu cross-check plus complete Telugu written in English letters, pronunciation, and English fields. If any learner field is included, include all learner fields, the accuracy rating, the pronunciation rating when Telugu was spoken, one short coaching tip, and an explicit telugu, english, or mixed source language. Keep Telugu script out of learner-facing fields.",
+                  "Provide every complete Mayu caption field. For judgeable learner audio, include every learner caption/source field, confidence, one short coaching tip, and exactly the ratings required by the source: meaning only for English, four quality ratings for Telugu, or those four plus Telugu coverage for mixed. For low-confidence audio, include only confidence low and feedback; omit learner captions, source, and every rating. Rate only the actual audio and keep Telugu script out of learner-facing fields.",
               },
             };
           }
@@ -904,19 +904,27 @@ export function useGeminiLive(
             };
           }
 
-          if (
-            learnerCaptionRequired(
-              learnerTurnStateRef.current,
-              parsed.replay,
-            ) &&
-            !parsed.learner
-          ) {
+          const needsLearnerCaption = learnerCaptionRequired(
+            learnerTurnStateRef.current,
+            parsed.replay,
+          );
+          if (needsLearnerCaption && !parsed.learner) {
             return {
               id: call.id,
               name: call.name,
               response: {
                 error:
-                  "Include the learner caption fields from the reply you just heard, then try present_turn again.",
+                  "For judgeable audio, include the complete learner captions, source, required ratings, confidence, and feedback. If the audio cannot be judged fairly, include only learnerAssessmentConfidence low and learnerFeedback, omit every other learner field, and ask for a repeat.",
+              },
+            };
+          }
+          if (!needsLearnerCaption && parsed.learner) {
+            return {
+              id: call.id,
+              name: call.name,
+              response: {
+                error:
+                  "No learner reply is pending for this turn. Omit every learner field and call present_turn again.",
               },
             };
           }

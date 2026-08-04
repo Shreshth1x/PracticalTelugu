@@ -295,7 +295,26 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
   assert.match(pageSource, /Response time/);
   assert.match(pageSource, /Your next rep/);
   assert.match(pageSource, /Review your conversation/);
-  assert.match(pageSource, /not a phoneme-by-phoneme accent grade/);
+  assert.match(pageSource, /Simple coaching estimates from this conversation/);
+  assert.match(
+    pageSource,
+    /Pronunciation combines word understandability with Telugu sound accuracy/,
+  );
+  assert.match(
+    pageSource,
+    /A non-native accent is not penalized unless it changes or obscures the/,
+  );
+  assert.match(
+    pageSource,
+    /Accuracy checks your intended meaning, Telugu form, and, for a/,
+  );
+  assert.match(pageSource, /mixed reply, how much Telugu you actually used/);
+  assert.match(pageSource, /English-only replies get/);
+  assert.match(pageSource, /Unclear audio is left unscored/);
+  assert.match(
+    pageSource,
+    /Response\s+time is shown[\s\S]*separately and does not change your language score/,
+  );
   assert.match(pageSource, /getLiveSessionVoiceLabel/);
   assert.ok(
     pageSource.indexOf("<SessionResults") <
@@ -303,7 +322,23 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
     "the score appears before the optional transcript review",
   );
   assert.match(gradingSource, /scoreLiveResponseTime/);
-  assert.match(gradingSource, /METRIC_WEIGHTS/);
+  assert.match(gradingSource, /assessment\.languageScore/);
+  assert.match(gradingSource, /average\(languageScores\)/);
+  assert.match(gradingSource, /rubricVersion: 2/);
+});
+
+test("keeps Live retry guidance compatible with honest audio abstention", async () => {
+  const liveClientSource = await readFile(
+    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(liveClientSource, /If the audio cannot be judged fairly/);
+  assert.match(
+    liveClientSource,
+    /include only learnerAssessmentConfidence low and learnerFeedback/,
+  );
+  assert.match(liveClientSource, /omit every other learner field/);
 });
 
 test("keeps permanent Gemini and Fish credentials on the server", async () => {

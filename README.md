@@ -17,11 +17,18 @@ does not require an AI service.
 
 Practice Live is an optional Telugu voice conversation with Mayu.
 Mayu keeps the spoken exchange in Telugu while the screen pairs every turn's
-Telugu written in English letters and its pronunciation guide with its English meaning. Native
-Telugu script and raw speech-recognition output never enter the live display.
+Telugu written in English letters and its pronunciation guide with its English
+meaning. Native Telugu script and raw speech-recognition output never enter the
+live display.
 Completed live-session totals are stored on the current device; microphone
 audio is sent directly from the browser to Google Gemini only while the learner
 has an active session. Practice Live does not save that conversation audio.
+Post-session coaching separates first-listen intelligibility, Telugu sound
+accuracy, conversational meaning, and usable grammar/word choice/register.
+Mixed replies also account for how much Telugu was actually spoken. Unreliable
+audio is left unscored, and response timing is shown separately from the
+language score. The result is broad AI coaching, not a phoneme-level accent
+measurement.
 
 The separate `/recordings` route is an owner-only family tool for deliberately
 capturing phrase clips. Access is claimed against the private administrator
