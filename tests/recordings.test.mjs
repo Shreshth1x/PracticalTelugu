@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
@@ -77,13 +78,22 @@ test("maps every course form to its canonical published recording", async () => 
   );
 
   for (const [recordingKey, publicSrc] of publishedEntries) {
-    assert.equal(publicSrc, `/audio/phrases/${recordingKey}.mp3`);
-    const fileUrl = new URL(`../public${publicSrc}`, import.meta.url);
+    const sourceMatch = publicSrc.match(
+      /^\/audio\/phrases\/(phrase-[a-z0-9]+)\.mp3\?v=([a-f0-9]{12})$/,
+    );
+    assert.equal(sourceMatch?.[1], recordingKey);
+    const publicPath = publicSrc.split("?", 1)[0];
+    const fileUrl = new URL(`../public${publicPath}`, import.meta.url);
     const file = await stat(fileUrl);
     const bytes = await readFile(fileUrl);
+    const contentVersion = createHash("sha256")
+      .update(bytes)
+      .digest("hex")
+      .slice(0, 12);
     const beginsWithId3 = bytes.subarray(0, 3).toString("ascii") === "ID3";
     const beginsWithMp3Frame = bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0;
 
+    assert.equal(sourceMatch?.[2], contentVersion);
     assert.ok(file.size > 5_000, `${recordingKey} is unexpectedly small`);
     assert.ok(
       beginsWithId3 || beginsWithMp3Frame,
@@ -410,7 +420,12 @@ test("exports recordings through the linked CLI without revealing an admin key",
   assert.match(exporter, /members\.role = 'owner'/);
   assert.match(exporter, /members\.active/);
   assert.doesNotMatch(exporter, /api-keys|service_role|serviceRoleKey/);
-  assert.match(processor, /silenceremove=/);
+  assert.match(
+    processor,
+    /start_duration=0\.12:start_threshold=-38dB:start_silence=0\.16/,
+  );
+  assert.match(processor, /MAX_REMAINING_START_TRIM_MS = 100/);
+  assert.match(processor, /remainingStartTrimMs > MAX_REMAINING_START_TRIM_MS/);
   assert.match(processor, /loudnorm=I=-19:TP=-1\.5/);
   assert.match(processor, /practicaltelugu-\$\{speakerSlug\}-voice-clone\.wav/);
 });

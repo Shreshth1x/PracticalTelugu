@@ -18,10 +18,15 @@ const manifest = JSON.parse(
   await readFile(path.join(workRoot, "manifest.json"), "utf8"),
 );
 
+// A brief breath or handling noise used to fool the old -45 dB/30 ms detector
+// into leaving up to 1.5 seconds of dead air. Require a sustained, clearly
+// audible onset while retaining 40 ms ahead of it so initial consonants remain
+// intact and playback still feels immediate.
 const START_TRIM =
-  "silenceremove=start_periods=1:start_duration=0.03:start_threshold=-45dB:start_silence=0.13:detection=rms:window=0.02";
+  "silenceremove=start_periods=1:start_duration=0.12:start_threshold=-38dB:start_silence=0.16:detection=rms:window=0.02";
 const END_TRIM =
   "areverse,silenceremove=start_periods=1:start_duration=0.03:start_threshold=-45dB:start_silence=0.18:detection=rms:window=0.02,areverse";
+const MAX_REMAINING_START_TRIM_MS = 100;
 
 await Promise.all(
   [stageRoot, masterRoot, publicRoot, cloneRoot].map((directory) =>
@@ -252,12 +257,47 @@ for (const target of recordingTargets) {
     outputPath,
   ]);
 
+  const publicDurationMs = Math.round(durationSeconds(outputPath) * 1000);
+  const onsetCheckPath = path.join(
+    stageRoot,
+    `${target.recordingKey}-onset-check.wav`,
+  );
+  run("ffmpeg", [
+    "-y",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-i",
+    outputPath,
+    "-af",
+    START_TRIM,
+    "-ac",
+    "1",
+    "-ar",
+    "44100",
+    "-c:a",
+    "pcm_s16le",
+    onsetCheckPath,
+  ]);
+  const remainingStartTrimMs = Math.max(
+    0,
+    publicDurationMs - Math.round(durationSeconds(onsetCheckPath) * 1000),
+  );
+  if (remainingStartTrimMs > MAX_REMAINING_START_TRIM_MS) {
+    throw new Error(
+      `Published audio still has ${remainingStartTrimMs}ms of removable lead-in: ${target.recordingKey}`,
+    );
+  }
+
+  const publicSha256 = await sha256(outputPath);
+
   learnerAssets.push({
     ...processed,
-    public_src: `/audio/phrases/${target.recordingKey}.mp3`,
+    public_src: `/audio/phrases/${target.recordingKey}.mp3?v=${publicSha256.slice(0, 12)}`,
     public_path: path.relative(workspace, outputPath),
-    public_sha256: await sha256(outputPath),
-    public_duration_ms: Math.round(durationSeconds(outputPath) * 1000),
+    public_sha256: publicSha256,
+    public_duration_ms: publicDurationMs,
+    remaining_start_trim_ms: remainingStartTrimMs,
   });
 }
 

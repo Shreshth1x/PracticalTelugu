@@ -62,6 +62,44 @@ type ResultState = "idle" | "correct" | "wrong";
 type WordTab = "today" | "all" | "saved";
 type MayuVariant = "guide" | "success";
 
+const phraseAudioCache = new Map<string, HTMLAudioElement>();
+let activePhraseAudio: HTMLAudioElement | null = null;
+
+function preparePhraseAudio(audioSrc: string) {
+  if (typeof Audio === "undefined") return null;
+
+  const cachedAudio = phraseAudioCache.get(audioSrc);
+  if (cachedAudio) return cachedAudio;
+
+  const audio = new Audio(audioSrc);
+  audio.preload = "auto";
+  audio.load();
+  phraseAudioCache.set(audioSrc, audio);
+  return audio;
+}
+
+function startPhraseAudio(audioSrc: string) {
+  const audio = preparePhraseAudio(audioSrc);
+  if (!audio) return null;
+
+  if (activePhraseAudio && activePhraseAudio !== audio) {
+    activePhraseAudio.pause();
+  }
+
+  if (audio.readyState > 0) audio.currentTime = 0;
+  activePhraseAudio = audio;
+  return {
+    audio,
+    playback: audio.play(),
+  };
+}
+
+function usePhraseAudioPreload(audioSrc: string | undefined) {
+  useEffect(() => {
+    if (audioSrc) preparePhraseAudio(audioSrc);
+  }, [audioSrc]);
+}
+
 type LibraryWord = TeluguWord & {
   key: string;
   lessonTitle: string;
@@ -138,6 +176,12 @@ function RegisterAlternatives({
   showPronunciation?: boolean;
   className?: string;
 }) {
+  useEffect(() => {
+    alternatives?.forEach((alternative) => {
+      if (alternative.audioSrc) preparePhraseAudio(alternative.audioSrc);
+    });
+  }, [alternatives]);
+
   if (!alternatives?.length) return null;
 
   const hasListenerChoice = alternatives.some(
@@ -513,7 +557,7 @@ function playAudioSource(
     return;
   }
 
-  new Audio(audioSrc).play().catch(() => {
+  startPhraseAudio(audioSrc)?.playback.catch(() => {
     notify("That recording could not play. Try again in a moment.");
   });
 }
@@ -531,6 +575,8 @@ function AudioButton({
   notify: (message: string) => void;
   className?: string;
 }) {
+  usePhraseAudioPreload(word.audioSrc);
+
   return (
     <button
       className={`audio-button ${className}`.trim()}
@@ -916,6 +962,8 @@ function WordRow({
   onOpen: (word: LibraryWord) => void;
   onSave: (word: LibraryWord) => void;
 }) {
+  usePhraseAudioPreload(item.audioSrc);
+
   return (
     <article className="word-row">
       <button className="word-row-main" onClick={() => onOpen(item)}>
@@ -1275,11 +1323,11 @@ function DailySession({
   useEffect(() => {
     if (!preferences.autoplay || !current?.audioSrc) return;
 
-    const audio = new Audio(current.audioSrc);
-    audio.play().catch(() => {
+    const playback = startPhraseAudio(current.audioSrc);
+    playback?.playback.catch(() => {
       // Manual playback remains available when the browser blocks autoplay.
     });
-    return () => audio.pause();
+    return () => playback?.audio.pause();
   }, [current?.audioSrc, preferences.autoplay]);
 
   const markWord = (result: "learning" | "ready") => {
@@ -1836,12 +1884,12 @@ function LessonView({
       return;
     }
 
-    const audio = new Audio(step.word.audioSrc);
-    audio.play().catch(() => {
+    const playback = startPhraseAudio(step.word.audioSrc);
+    playback?.playback.catch(() => {
       // Manual playback remains available when autoplay is blocked.
     });
 
-    return () => audio.pause();
+    return () => playback?.audio.pause();
   }, [preferences.autoplay, step]);
 
   const resetStepState = () => {

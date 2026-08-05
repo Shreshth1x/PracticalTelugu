@@ -1370,6 +1370,9 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.match(app, /word\.alternatives/);
   assert.match(app, /alternative\.pronunciation/);
   assert.match(app, /alternative\.audioSrc/);
+  assert.match(app, /const phraseAudioCache = new Map/);
+  assert.match(app, /audio\.preload = "auto"/);
+  assert.match(app, /startPhraseAudio\(audioSrc\)\?\.playback/);
   assert.match(app, /Other useful ways to say this/);
   assert.match(app, /key=\{hydrated \? "daily-restored" : "daily-initial"\}/);
   assert.match(
