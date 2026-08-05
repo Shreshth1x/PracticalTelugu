@@ -843,8 +843,26 @@ svg {
   letter-spacing: -0.03em;
 }
 
-.home-guide-copy .audio-button {
+.home-guide-actions {
+  display: flex;
+  align-items: center;
+  flex-flow: row wrap;
+  gap: 12px;
   margin-top: 24px;
+}
+
+.home-guide-continue {
+  min-width: 156px;
+  padding-right: 18px;
+}
+
+.home-guide-continue svg {
+  width: 19px;
+  height: 19px;
+}
+
+.home-guide-continue:active {
+  transform: scale(0.96);
 }
 
 .mayu-image {
@@ -3367,6 +3385,26 @@ svg {
 }
 
 @media (max-width: 440px) {
+  .home-guide {
+    min-height: 580px;
+  }
+
+  .home-guide-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home-guide-actions .primary-button,
+  .home-guide-actions .audio-button {
+    width: 100%;
+  }
+
+  .home-mayu-stage {
+    bottom: -85px;
+    width: 330px;
+    height: 330px;
+  }
+
   .wordmark {
     gap: 4px;
     font-size: 16px;

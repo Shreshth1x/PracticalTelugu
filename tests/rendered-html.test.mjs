@@ -440,10 +440,23 @@ test("keeps the home hero focused on one compact action cluster", async () => {
   );
   const guideStart = html.indexOf('class="home-guide"', actionsEnd);
   const guideEnd = html.indexOf("</section>", guideStart);
+  const guideActions = html.indexOf('class="home-guide-actions"', guideStart);
+  const continueAction = html.indexOf(
+    'class="primary-button home-guide-continue"',
+    guideActions,
+  );
+  const listenAction = html.indexOf('class="audio-button', guideActions);
   const mayuStage = html.indexOf('class="home-mayu-stage"', guideStart);
   const mayuStageEnd = html.indexOf("</div>", mayuStage);
   const mayuIntro = html.indexOf("Meet Mayu", mayuStage);
   const mayuImage = html.indexOf('class="mayu-image home-mayu"', mayuStage);
+  assert.ok(guideActions > guideStart, "guide has its own action cluster");
+  assert.ok(guideActions < guideEnd, "guide actions stay inside the guide");
+  assert.ok(continueAction > guideActions, "resume action leads the guide actions");
+  const continueMarkup = html.slice(guideActions, listenAction);
+  assert.match(continueMarkup, /href="\/words\/daily"/);
+  assert.match(continueMarkup, />Start practicing[\s\S]*<svg/);
+  assert.ok(listenAction > continueAction, "listen remains the secondary action");
   assert.ok(mayuStage > guideStart, "Mayu has a shared positioning stage");
   assert.ok(mayuStage < guideEnd, "Mayu's stage stays inside the hello guide");
   assert.ok(mayuIntro > guideStart, "Mayu is introduced inside the hello guide");

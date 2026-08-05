@@ -733,6 +733,18 @@ function TodayView({
         : path.completedInPack
           ? "Pick up where you left off."
           : `Next up: ${activePack.title}.`;
+  const hasPracticeProgress =
+    path.completedPacks > 0 || path.completedInPack > 0;
+  const guideActionLabel = path.allComplete
+    ? "Review your first five"
+    : hasPracticeProgress
+      ? "Continue"
+      : "Start practicing";
+  const guideActionAccessibleLabel = path.allComplete
+    ? "Review your first five phrases"
+    : hasPracticeProgress
+      ? `Continue ${activePack.title.toLocaleLowerCase()} practice`
+      : "Start practicing your first five phrases";
 
   return (
     <AppShell screen="today">
@@ -755,7 +767,17 @@ function TodayView({
           <div className="home-guide-copy">
             <h2 id="home-guide-title">{guideTitle}</h2>
             <PhraseStack word={nextWord} size="card" />
-            <AudioButton word={nextWord} notify={notify} />
+            <div className="home-guide-actions">
+              <Link
+                href="/words/daily"
+                className="primary-button home-guide-continue"
+                aria-label={guideActionAccessibleLabel}
+              >
+                {guideActionLabel}
+                <Icon name="arrow" />
+              </Link>
+              <AudioButton word={nextWord} notify={notify} />
+            </div>
           </div>
           <div className="home-mayu-stage">
             <span className="mayu-intro">Meet Mayu</span>
