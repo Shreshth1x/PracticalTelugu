@@ -17,9 +17,11 @@ import {
 } from "../app/practice-live/live-config.ts";
 import {
   applyLiveCaptionTurn,
+  applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
   parseLiveTurnToolCall,
   removePendingLiveTurns,
+  sanitizeLiveProvisionalTranscript,
 } from "../app/practice-live/live-transcript.ts";
 
 const words = [
@@ -241,6 +243,56 @@ test("replaces a private learner placeholder with the paired visible caption", (
 
   const withPending = beginPendingLearnerTurn(turns, "you-unfinished");
   assert.equal(removePendingLiveTurns(withPending).length, 1);
+});
+
+test("keeps provisional ASR Latin-only, disposable, and on one pending row", () => {
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("  nenu   baagunnaanu?  "),
+    "nenu baagunnaanu?",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("nenu బాగున్నాను"),
+    "",
+    "mixed Telugu script is rejected in full",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("привет"),
+    "",
+    "other non-Latin scripts are rejected",
+  );
+
+  let turns = beginPendingLearnerTurn([], "you-pending");
+  turns = applyProvisionalLearnerTranscript(turns, "nenu baagunnaanu");
+  turns = beginPendingLearnerTurn(turns, "duplicate-pending");
+
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0], {
+    id: "you-pending",
+    speaker: "you",
+    roman: "",
+    provisionalRoman: "nenu baagunnaanu",
+    english: "",
+    final: false,
+  });
+
+  turns = applyProvisionalLearnerTranscript(turns, "నేను బాగున్నాను");
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].provisionalRoman, undefined);
+
+  turns = applyProvisionalLearnerTranscript(turns, "nenu baagunnaanu");
+  turns = applyLiveCaptionTurn(turns, {
+    id: "tool-1-learner",
+    speaker: "you",
+    roman: "Nenu baagunnaanu.",
+    pronunciation: "NAY-noo BAA-goon-NAA-noo.",
+    english: "I am well.",
+    sourceLanguage: "telugu",
+  });
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].final, true);
+  assert.equal(turns[0].provisionalRoman, undefined);
+  assert.equal(turns[0].roman, "Nenu baagunnaanu.");
 });
 
 test("preserves the complete alternating conversation transcript in order", () => {

@@ -1,5 +1,6 @@
 import { isLiveFamilyVoice } from "../../../practice-live/live-config.ts";
 import {
+  getFishTtsModel,
   getFishVoiceId,
   getPracticeLiveClientIp,
   verifyFishVoiceAccessToken,
@@ -356,7 +357,7 @@ export async function POST(request: Request) {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
-        model: process.env.FISH_TTS_MODEL?.trim() || "s2.1-pro-free",
+        model: getFishTtsModel(),
       },
       body: JSON.stringify({
         text,
@@ -374,6 +375,15 @@ export async function POST(request: Request) {
         status: fishResponse.status,
         requestId: fishRequestId,
       });
+      if (fishResponse.status === 402) {
+        return json(
+          {
+            code: "fish_payment_required",
+            message: "The cloned voice account needs usable API credit.",
+          },
+          503,
+        );
+      }
       return json(
         {
           code: "fish_rejected",

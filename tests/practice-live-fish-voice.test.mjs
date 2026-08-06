@@ -326,6 +326,37 @@ test("maps Grandma and Grandpa server-side to bounded 24 kHz PCM requests", asyn
   });
 });
 
+test("uses s2-pro when the Fish model is omitted or uses the retired free value", async () => {
+  await withFishEnvironment(async () => {
+    const upstreamModels = [];
+    globalThis.fetch = async (_input, init) => {
+      upstreamModels.push(init.headers.model);
+      return new Response(new Uint8Array([0, 0]), {
+        status: 200,
+        headers: { "Content-Type": "audio/pcm" },
+      });
+    };
+
+    for (const [index, configuredModel] of [
+      undefined,
+      "",
+      "s2.1-pro-free",
+      "S2.1-PRO-FREE",
+    ].entries()) {
+      if (configuredModel === undefined) delete process.env.FISH_TTS_MODEL;
+      else process.env.FISH_TTS_MODEL = configuredModel;
+
+      const ip = `192.0.2.${80 + index}`;
+      const response = await createFishVoice(
+        voiceRequest(await authorizedBody({ ip }), { ip }),
+      );
+      assert.equal(response.status, 200);
+    }
+
+    assert.deepEqual(upstreamModels, ["s2-pro", "s2-pro", "s2-pro", "s2-pro"]);
+  });
+});
+
 test("rejects a missing selected voice without contacting Fish", async () => {
   await withFishEnvironment(async () => {
     let upstreamRequests = 0;
@@ -377,6 +408,13 @@ test("normalizes upstream failures and rejects empty, malformed, and oversized P
 
     try {
       const cases = [
+        {
+          name: "payment required",
+          fetch: async () =>
+            Response.json({ status: 402 }, { status: 402 }),
+          code: "fish_payment_required",
+          status: 503,
+        },
         {
           name: "rejected",
           fetch: async () => Response.json({ detail: "no" }, { status: 422 }),
@@ -430,7 +468,7 @@ test("normalizes upstream failures and rejects empty, malformed, and oversized P
         const response = await createFishVoice(
           voiceRequest(await authorizedBody({ ip }), { ip }),
         );
-        assert.equal(response.status, 502, scenario.name);
+        assert.equal(response.status, scenario.status ?? 502, scenario.name);
         assert.equal((await response.json()).code, scenario.code, scenario.name);
       }
     } finally {

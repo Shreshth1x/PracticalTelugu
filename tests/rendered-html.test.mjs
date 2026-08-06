@@ -233,6 +233,29 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   assert.doesNotMatch(source, /turn\.text/);
   assert.doesNotMatch(source, /live-follow-telugu/);
 
+  const liveDraftStart = source.indexOf(
+    'className="live-follow-learner-draft"',
+  );
+  assert.ok(
+    liveDraftStart >= 0 && liveDraftStart < source.indexOf('className="live-follow-phrase"'),
+    "the immediate learner draft appears on the main card before the prior prompt",
+  );
+  assert.match(source, /Live draft · not final/);
+  assert.match(source, /Reply heard — preparing readable Telugu…/);
+  assert.match(
+    source.slice(liveDraftStart, source.indexOf("{turn ?", liveDraftStart)),
+    /role="status"[\s\S]*aria-live="polite"/,
+    "the main-card learner draft is announced as a polite status",
+  );
+
+  const voiceNoticeStart = source.indexOf('className="live-voice-notice"');
+  assert.ok(voiceNoticeStart >= 0, "the active voice notice is rendered near session setup");
+  assert.match(
+    source.slice(voiceNoticeStart, source.indexOf("</small>", voiceNoticeStart)),
+    /role="status"[\s\S]*aria-live="polite"/,
+    "voice fallback notices use a non-disruptive polite status",
+  );
+
   const currentTurnStart = source.indexOf('className="live-follow-spoken"');
   const currentTurnEnd = source.indexOf("</div>", source.indexOf('className="live-follow-english"'));
   const currentTurn = source.slice(currentTurnStart, currentTurnEnd);
@@ -339,6 +362,32 @@ test("keeps Live retry guidance compatible with honest audio abstention", async 
     /include only learnerAssessmentConfidence low and learnerFeedback/,
   );
   assert.match(liveClientSource, /omit every other learner field/);
+});
+
+test("retries private voice authorization and renders early ASR safely", async () => {
+  const liveClientSource = await readFile(
+    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    liveClientSource,
+    /accountSession\.status !== "authenticated"[\s\S]*ACCOUNT_SESSION_RETRY_TIMEOUT_MS/,
+  );
+  assert.match(
+    liveClientSource,
+    /tokenPayload\.familyVoice !== familyVoice/,
+    "a token response cannot silently switch the requested family voice",
+  );
+  assert.match(liveClientSource, /isLiveVoiceModeReason/);
+  assert.match(
+    liveClientSource,
+    /interimInput[\s\S]*applyLearnerTranscriptDraft\(interimInput\)/,
+  );
+  assert.match(
+    liveClientSource,
+    /finalInput\.finished === true[\s\S]*applyLearnerTranscriptDraft\(finalInput\.text\)/,
+  );
 });
 
 test("keeps permanent Gemini and Fish credentials on the server", async () => {

@@ -12,7 +12,10 @@ import {
   getPracticeLiveClientIp,
   hasFishVoice,
 } from "../fish-config.ts";
-import { canUsePrivateFishVoice } from "../fish-authorization.ts";
+import {
+  getPrivateFishVoiceAuthorization,
+  type FishVoiceAuthorization,
+} from "../fish-authorization.ts";
 import {
   getLiveOpeningCue,
   getLiveScenario,
@@ -277,9 +280,13 @@ export async function POST(request: Request) {
   const options = { relationship, durationSeconds };
   const config = buildLiveConnectConfig(scenario, options);
   const tokenConstraintConfig = buildLiveTokenConstraintConfig(config);
-  const privateVoiceAuthorization = hasFishVoice(familyVoice)
-    ? canUsePrivateFishVoice(request)
-    : Promise.resolve(false);
+  const privateVoiceAuthorization: Promise<FishVoiceAuthorization> =
+    hasFishVoice(familyVoice)
+      ? getPrivateFishVoiceAuthorization(request)
+      : Promise.resolve({
+          authorized: false,
+          reason: "not_configured",
+        });
 
   try {
     const tokenExpiresAt = new Date(
@@ -293,7 +300,7 @@ export async function POST(request: Request) {
       apiKey,
       httpOptions: { apiVersion: "v1alpha" },
     });
-    const [authToken, canUseFishVoice] = await Promise.all([
+    const [authToken, voiceAuthorization] = await Promise.all([
       ai.authTokens.create({
         config: {
           uses: 1,
@@ -313,7 +320,7 @@ export async function POST(request: Request) {
       throw new Error("Gemini returned an empty ephemeral token.");
     }
 
-    const voiceMode = canUseFishVoice ? "fish" : "gemini";
+    const voiceMode = voiceAuthorization.authorized ? "fish" : "gemini";
     const voiceAccessToken =
       voiceMode === "fish"
         ? await createFishVoiceAccessToken(
@@ -328,6 +335,7 @@ export async function POST(request: Request) {
       model: LIVE_MODEL,
       config,
       voiceMode,
+      voiceModeReason: voiceAuthorization.reason,
       familyVoice,
       ...(voiceAccessToken ? { voiceAccessToken } : {}),
       openingCue: getLiveOpeningCue(scenario, relationship),

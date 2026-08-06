@@ -14,6 +14,12 @@ export type LiveTranscriptTurn = {
   id: string;
   speaker: LiveTranscriptSpeaker;
   roman: string;
+  /**
+   * Provider ASR shown only while this learner turn is pending. This is a
+   * disposable Latin-script draft, never the authoritative caption used for
+   * assessment, persistence, or session results.
+   */
+  provisionalRoman?: string;
   pronunciation?: string;
   english: string;
   final: boolean;
@@ -425,6 +431,45 @@ export function beginPendingLearnerTurn(
       final: false,
     },
   ];
+}
+
+/**
+ * Keeps an early provider transcript on the safe side of the same display
+ * boundary as final captions. Mixed-script input is rejected in full so a
+ * Telugu-script token can never leak beside an otherwise Latin draft.
+ */
+export function sanitizeLiveProvisionalTranscript(value: unknown) {
+  return cleanCaptionText(value);
+}
+
+/**
+ * Adds a disposable ASR preview to the latest pending learner row. Unsafe or
+ * non-Latin input clears an older preview and leaves the immediate "heard"
+ * state in place. It never creates a second row or changes a turn to final.
+ */
+export function applyProvisionalLearnerTranscript(
+  turns: LiveTranscriptTurn[],
+  value: unknown,
+) {
+  const pendingIndex = turns.findLastIndex(
+    (turn) => turn.speaker === "you" && !turn.final,
+  );
+  if (pendingIndex < 0) return turns;
+
+  const provisionalRoman = sanitizeLiveProvisionalTranscript(value);
+  const current = turns[pendingIndex];
+  if (current.provisionalRoman === provisionalRoman) return turns;
+
+  const next = [...turns];
+  if (provisionalRoman) {
+    next[pendingIndex] = { ...current, provisionalRoman };
+  } else {
+    const withoutProvisional = { ...current };
+    delete withoutProvisional.provisionalRoman;
+    next[pendingIndex] = withoutProvisional;
+  }
+
+  return next;
 }
 
 export function applyLiveCaptionTurn(

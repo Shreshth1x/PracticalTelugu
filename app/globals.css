@@ -3766,6 +3766,17 @@ svg {
   letter-spacing: 0.025em;
 }
 
+.live-voice-notice {
+  display: block;
+  max-width: 520px;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
 .live-practice-details {
   grid-area: details;
   width: 100%;
@@ -4979,6 +4990,41 @@ svg {
   text-align: right;
 }
 
+.live-follow-learner-draft {
+  margin-top: 16px;
+  padding: 13px 15px;
+  border-radius: 16px;
+  background: rgba(15, 106, 77, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(15, 106, 77, 0.11);
+}
+
+.live-follow-learner-draft > span {
+  display: block;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-follow-learner-draft > p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.live-follow-learner-draft[data-has-preview="true"] > p {
+  color: var(--ink-strong);
+  font-size: 17px;
+}
+
+.live-follow-learner-draft + .live-follow-phrase {
+  margin-top: 12px;
+}
+
 .live-follow-phrase {
   display: flex;
   flex-direction: column;
@@ -5327,10 +5373,32 @@ svg {
   animation: live-pending-pulse 1.25s ease-in-out infinite;
 }
 
+.live-transcript-pending > div {
+  min-width: 0;
+}
+
+.live-transcript-pending small {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  line-height: 1.35;
+  text-transform: uppercase;
+}
+
 .live-transcript-pending p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.live-transcript-pending[data-has-preview="true"] p {
+  color: var(--ink-strong);
+  font-size: 15px;
+  font-weight: 700;
 }
 
 @keyframes live-pending-pulse {

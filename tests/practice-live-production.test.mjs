@@ -225,6 +225,7 @@ test("mints one-use tokens with exact connection and session headroom", async ()
       assert.equal(payload.sessionLimitSeconds, durationSeconds);
       assert.equal(payload.tokenExpiresAt, request.expireTime);
       assert.equal(payload.voiceMode, "gemini");
+      assert.equal(payload.voiceModeReason, "not_configured");
       assert.equal(payload.voiceAccessToken, undefined);
       assert.equal(
         payload.familyVoice,
@@ -307,6 +308,10 @@ test("enables Fish only for an allowlisted signed-in owner and configured voice"
       const payload = await response.json();
       assert.equal(payload.familyVoice, familyVoice);
       assert.equal(payload.voiceMode, expectedMode);
+      assert.equal(
+        payload.voiceModeReason,
+        expectedMode === "fish" ? "authorized" : "not_configured",
+      );
       if (expectedMode === "fish") {
         assert.equal(typeof payload.voiceAccessToken, "string");
         assert.deepEqual(
@@ -389,10 +394,30 @@ test("fails private voice authorization closed without blocking public Gemini", 
 
   try {
     for (const scenario of [
-      { name: "anonymous", token: "", auth: "unused" },
-      { name: "unallowlisted", token: "other-token", auth: "other" },
-      { name: "invalid", token: "invalid-token", auth: "invalid" },
-      { name: "auth-outage", token: "outage-token", auth: "outage" },
+      {
+        name: "anonymous",
+        token: "",
+        auth: "unused",
+        reason: "signed_out",
+      },
+      {
+        name: "unallowlisted",
+        token: "other-token",
+        auth: "other",
+        reason: "not_allowlisted",
+      },
+      {
+        name: "invalid",
+        token: "invalid-token",
+        auth: "invalid",
+        reason: "signed_out",
+      },
+      {
+        name: "auth-outage",
+        token: "outage-token",
+        auth: "outage",
+        reason: "auth_unavailable",
+      },
     ]) {
       globalThis.fetch = async (input) => {
         if (String(input).endsWith("/auth/v1/user")) {
@@ -413,9 +438,27 @@ test("fails private voice authorization closed without blocking public Gemini", 
       assert.equal(response.status, 200, scenario.name);
       const payload = await response.json();
       assert.equal(payload.voiceMode, "gemini", scenario.name);
+      assert.equal(payload.voiceModeReason, scenario.reason, scenario.name);
       assert.equal(payload.voiceAccessToken, undefined, scenario.name);
       assert.equal(typeof payload.token, "string", scenario.name);
     }
+
+    delete process.env.FISH_ALLOWED_EMAIL_SHA256;
+    globalThis.fetch = async (input) => {
+      assert.doesNotMatch(String(input), /\/auth\/v1\/user$/u);
+      return Response.json({ name: "auth_tokens/missing-allowlist" });
+    };
+    const missingAllowlist = await createLiveToken(
+      request("private-voice-missing-allowlist", "owner-token"),
+    );
+    assert.equal(missingAllowlist.status, 200);
+    const missingAllowlistPayload = await missingAllowlist.json();
+    assert.equal(missingAllowlistPayload.voiceMode, "gemini");
+    assert.equal(missingAllowlistPayload.voiceModeReason, "not_configured");
+
+    process.env.FISH_ALLOWED_EMAIL_SHA256 = createHash("sha256")
+      .update(ownerEmail)
+      .digest("hex");
 
     const originalSetTimeout = globalThis.setTimeout;
     const originalClearTimeout = globalThis.clearTimeout;
@@ -449,6 +492,7 @@ test("fails private voice authorization closed without blocking public Gemini", 
       assert.equal(response.status, 200);
       const payload = await response.json();
       assert.equal(payload.voiceMode, "gemini");
+      assert.equal(payload.voiceModeReason, "auth_unavailable");
       assert.equal(payload.voiceAccessToken, undefined);
       assert.equal(typeof payload.token, "string");
     } finally {

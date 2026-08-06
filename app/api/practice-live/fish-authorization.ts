@@ -7,7 +7,24 @@ const SUPABASE_PUBLISHABLE_KEY =
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
 const MAX_BEARER_LENGTH = 4_096;
-export const FISH_AUTH_TIMEOUT_MS = 1_500;
+// The user lookup runs alongside Gemini token minting. Three seconds leaves
+// room for an auth cold start without turning a transient delay into a silent
+// fallback, while keeping the private-voice check tightly bounded.
+export const FISH_AUTH_TIMEOUT_MS = 3_000;
+
+export type FishVoiceModeReason =
+  | "authorized"
+  | "not_configured"
+  | "signed_out"
+  | "not_allowlisted"
+  | "auth_unavailable";
+
+export type FishVoiceAuthorization =
+  | { authorized: true; reason: "authorized" }
+  | {
+      authorized: false;
+      reason: Exclude<FishVoiceModeReason, "authorized">;
+    };
 
 function allowedEmailHashes() {
   return new Set(
@@ -35,10 +52,15 @@ async function sha256Hex(value: string) {
     .join("");
 }
 
-export async function canUsePrivateFishVoice(request: Request) {
+export async function getPrivateFishVoiceAuthorization(
+  request: Request,
+): Promise<FishVoiceAuthorization> {
   const allowed = allowedEmailHashes();
   const token = bearerToken(request);
-  if (!allowed.size || !token) return false;
+  if (!allowed.size) {
+    return { authorized: false, reason: "not_configured" };
+  }
+  if (!token) return { authorized: false, reason: "signed_out" };
 
   const controller = new AbortController();
   const forwardRequestAbort = () => controller.abort(request.signal.reason);
@@ -59,20 +81,30 @@ export async function canUsePrivateFishVoice(request: Request) {
       cache: "no-store",
       signal: controller.signal,
     });
-    if (!response.ok) return false;
+    if (!response.ok) {
+      return {
+        authorized: false,
+        reason:
+          response.status === 401 || response.status === 403
+            ? "signed_out"
+            : "auth_unavailable",
+      };
+    }
 
     const payload = (await response.json()) as { email?: unknown };
     if (typeof payload.email !== "string" || !payload.email.trim()) {
-      return false;
+      return { authorized: false, reason: "auth_unavailable" };
     }
 
     const emailHash = await sha256Hex(
       payload.email.trim().toLocaleLowerCase("en-US"),
     );
-    return allowed.has(emailHash);
+    return allowed.has(emailHash)
+      ? { authorized: true, reason: "authorized" }
+      : { authorized: false, reason: "not_allowlisted" };
   } catch {
     // Private voices fail closed while the public Gemini practice remains usable.
-    return false;
+    return { authorized: false, reason: "auth_unavailable" };
   } finally {
     clearTimeout(deadline);
     request.signal.removeEventListener("abort", forwardRequestAbort);

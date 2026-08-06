@@ -6,6 +6,8 @@ const VOICE_CAPABILITY_DOMAIN =
 const VOICE_IP_BINDING_DOMAIN =
   "practice-live:fish-voice-ip-binding:v1";
 const MAX_VOICE_CAPABILITY_LENGTH = 1_024;
+const DEFAULT_FISH_TTS_MODEL = "s2-pro";
+const LEGACY_FISH_TTS_MODEL = "s2.1-pro-free";
 const textEncoder = new TextEncoder();
 
 type VoiceCapabilityPayload = [
@@ -88,6 +90,15 @@ export function getFishVoiceId(familyVoice: LiveFamilyVoice) {
 
 export function hasFishVoice(familyVoice: LiveFamilyVoice) {
   return Boolean(fishApiKey() && getFishVoiceId(familyVoice));
+}
+
+export function getFishTtsModel() {
+  const configured = process.env.FISH_TTS_MODEL?.trim();
+  if (!configured || configured.toLowerCase() === LEGACY_FISH_TTS_MODEL) {
+    return DEFAULT_FISH_TTS_MODEL;
+  }
+
+  return configured;
 }
 
 export async function createFishVoiceAccessToken(

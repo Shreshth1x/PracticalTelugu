@@ -421,18 +421,22 @@ function turnDisplayLabel(
 
 function CurrentTurnCard({
   turn,
+  learnerDraft,
   phase,
   hasLearnerTurn,
   canRepeatTurn,
   onRepeatTurn,
 }: {
   turn: LiveTranscriptTurn | null;
+  learnerDraft: LiveTranscriptTurn | null;
   phase: LivePhase;
   hasLearnerTurn: boolean;
   canRepeatTurn: boolean;
   onRepeatTurn: (turnId: string, options?: { slow?: boolean }) => void;
 }) {
   const label = turnDisplayLabel(phase, hasLearnerTurn);
+  const showLearnerDraft =
+    Boolean(learnerDraft) && (phase === "listening" || phase === "thinking");
 
   return (
     <section
@@ -450,6 +454,26 @@ function CurrentTurnCard({
           <span className="live-follow-context">Preparing the first turn</span>
         )}
       </div>
+
+      {showLearnerDraft && learnerDraft ? (
+        <div
+          className="live-follow-learner-draft"
+          data-has-preview={learnerDraft.provisionalRoman ? "true" : "false"}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span>
+            {learnerDraft.provisionalRoman
+              ? "Live draft · not final"
+              : "Reply heard"}
+          </span>
+          <p lang={learnerDraft.provisionalRoman ? "und-Latn" : "en"}>
+            {learnerDraft.provisionalRoman ||
+              "Reply heard — preparing readable Telugu…"}
+          </p>
+        </div>
+      ) : null}
 
       {turn ? (
         <>
@@ -547,7 +571,9 @@ function ConversationTranscript({
                         ? "Telugu version"
                         : ""
                     : turn.speaker === "you"
-                      ? "Translating…"
+                      ? turn.provisionalRoman
+                        ? "Live draft"
+                        : "Reply heard"
                       : "Preparing…"}
                 </small>
               </div>
@@ -573,9 +599,21 @@ function ConversationTranscript({
                   </p>
                 </div>
               ) : (
-                <div className="live-transcript-pending">
+                <div
+                  className="live-transcript-pending"
+                  data-has-preview={turn.provisionalRoman ? "true" : "false"}
+                >
                   <span aria-hidden="true" />
-                  <p>Turning your reply into readable Telugu…</p>
+                  <div>
+                    {turn.provisionalRoman ? (
+                      <>
+                        <small>Live draft · not final</small>
+                        <p lang="und-Latn">{turn.provisionalRoman}</p>
+                      </>
+                    ) : (
+                      <p>Reply heard — preparing readable Telugu…</p>
+                    )}
+                  </div>
                 </div>
               )}
               {showRepeatActions && turn.final && turn.speaker === "mayu" ? (
@@ -807,6 +845,10 @@ export default function PracticeLive() {
         usedVoiceFallback: live.usedVoiceFallback,
       })
     : familyVoiceLabel;
+  const pendingLearnerTurn =
+    [...live.transcript]
+      .reverse()
+      .find((turn) => turn.speaker === "you" && !turn.final) ?? null;
   const completedSessionVoiceLabel = live.completedSession
     ? getLiveSessionVoiceLabel({
         familyVoice:
@@ -847,11 +889,23 @@ export default function PracticeLive() {
           <strong>{scenario.title}</strong>
           <p>{scenario.description}</p>
           {isBusy ? (
-            <small className="live-session-lock">
-              {activeVoiceLabel}
-              {` · ${relationshipLabel}`}
-              {` · ${formatDuration(sessionDuration)} practice`}
-            </small>
+            <>
+              <small className="live-session-lock">
+                {activeVoiceLabel}
+                {` · ${relationshipLabel}`}
+                {` · ${formatDuration(sessionDuration)} practice`}
+              </small>
+              {live.voiceNotice ? (
+                <small
+                  className="live-voice-notice"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {live.voiceNotice}
+                </small>
+              ) : null}
+            </>
           ) : null}
         </div>
 
@@ -1155,6 +1209,7 @@ export default function PracticeLive() {
 
             <CurrentTurnCard
               turn={live.activeTurn}
+              learnerDraft={pendingLearnerTurn}
               phase={live.phase}
               hasLearnerTurn={live.transcript.some(
                 (turn) => turn.speaker === "you",
