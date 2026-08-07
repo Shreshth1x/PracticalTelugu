@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   LIVE_ASSESSMENT_CONFIDENCES,
   calibrateLiveLearnerAssessment,
+  isCalibratedLiveLearnerAssessment,
 } from "../app/practice-live/live-assessment.ts";
 
 const completeRatings = {
@@ -26,6 +27,32 @@ function assess(overrides = {}) {
 
 test("keeps the audio-evidence confidence vocabulary explicit", () => {
   assert.deepEqual(LIVE_ASSESSMENT_CONFIDENCES, ["high", "medium", "low"]);
+});
+
+test("accepts only complete calibrated server assessments", () => {
+  const assessment = assess();
+  assert.equal(isCalibratedLiveLearnerAssessment(assessment), true);
+  assert.equal(
+    isCalibratedLiveLearnerAssessment({
+      ...assessment,
+      ratings: { ...assessment.ratings, meaning: 5 },
+    }),
+    false,
+  );
+  assert.equal(
+    isCalibratedLiveLearnerAssessment({
+      ...assessment,
+      pronunciationScore: 101,
+    }),
+    false,
+  );
+  assert.equal(
+    isCalibratedLiveLearnerAssessment({
+      ...assessment,
+      feedback: "",
+    }),
+    false,
+  );
 });
 
 test("maps every 0-4 rubric band to stable product scores", () => {

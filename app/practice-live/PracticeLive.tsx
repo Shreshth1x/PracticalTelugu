@@ -421,18 +421,22 @@ function turnDisplayLabel(
 
 function CurrentTurnCard({
   turn,
+  learnerDraft,
   phase,
   hasLearnerTurn,
   canRepeatTurn,
   onRepeatTurn,
 }: {
   turn: LiveTranscriptTurn | null;
+  learnerDraft: LiveTranscriptTurn | null;
   phase: LivePhase;
   hasLearnerTurn: boolean;
   canRepeatTurn: boolean;
   onRepeatTurn: (turnId: string, options?: { slow?: boolean }) => void;
 }) {
   const label = turnDisplayLabel(phase, hasLearnerTurn);
+  const showLearnerDraft =
+    Boolean(learnerDraft) && (phase === "listening" || phase === "thinking");
 
   return (
     <section
@@ -450,6 +454,18 @@ function CurrentTurnCard({
           <span className="live-follow-context">Preparing the first turn</span>
         )}
       </div>
+
+      {showLearnerDraft && learnerDraft ? (
+        <div
+          className="live-follow-learner-draft"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          <span>Reply heard</span>
+          <p lang="en">Preparing the checked transcript…</p>
+        </div>
+      ) : null}
 
       {turn ? (
         <>
@@ -543,11 +559,12 @@ function ConversationTranscript({
                       turn.assessment?.confidence === "low"
                       ? "Not scored"
                       : turn.speaker === "you" &&
+                          turn.sourceLanguage &&
                           turn.sourceLanguage !== "telugu"
                         ? "Telugu version"
                         : ""
                     : turn.speaker === "you"
-                      ? "Translating…"
+                      ? "Reply heard"
                       : "Preparing…"}
                 </small>
               </div>
@@ -575,7 +592,9 @@ function ConversationTranscript({
               ) : (
                 <div className="live-transcript-pending">
                   <span aria-hidden="true" />
-                  <p>Turning your reply into readable Telugu…</p>
+                  <div>
+                    <p>Reply heard — preparing the checked transcript…</p>
+                  </div>
                 </div>
               )}
               {showRepeatActions && turn.final && turn.speaker === "mayu" ? (
@@ -730,11 +749,10 @@ export default function PracticeLive() {
     const completedSession = live.completedSession;
     const frame = window.requestAnimationFrame(() => {
       setHistory((current) => {
-        if (current.some((session) => session.id === completedSession.id)) {
-          return current;
-        }
-
-        const next = [completedSession, ...current].slice(0, 12);
+        const next = [
+          completedSession,
+          ...current.filter((session) => session.id !== completedSession.id),
+        ].slice(0, 12);
         window.localStorage.setItem(LIVE_HISTORY_KEY, JSON.stringify(next));
         return next;
       });
@@ -807,6 +825,10 @@ export default function PracticeLive() {
         usedVoiceFallback: live.usedVoiceFallback,
       })
     : familyVoiceLabel;
+  const pendingLearnerTurn =
+    [...live.transcript]
+      .reverse()
+      .find((turn) => turn.speaker === "you" && !turn.final) ?? null;
   const completedSessionVoiceLabel = live.completedSession
     ? getLiveSessionVoiceLabel({
         familyVoice:
@@ -847,11 +869,23 @@ export default function PracticeLive() {
           <strong>{scenario.title}</strong>
           <p>{scenario.description}</p>
           {isBusy ? (
-            <small className="live-session-lock">
-              {activeVoiceLabel}
-              {` · ${relationshipLabel}`}
-              {` · ${formatDuration(sessionDuration)} practice`}
-            </small>
+            <>
+              <small className="live-session-lock">
+                {activeVoiceLabel}
+                {` · ${relationshipLabel}`}
+                {` · ${formatDuration(sessionDuration)} practice`}
+              </small>
+              {live.voiceNotice ? (
+                <small
+                  className="live-voice-notice"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  {live.voiceNotice}
+                </small>
+              ) : null}
+            </>
           ) : null}
         </div>
 
@@ -1155,6 +1189,7 @@ export default function PracticeLive() {
 
             <CurrentTurnCard
               turn={live.activeTurn}
+              learnerDraft={pendingLearnerTurn}
               phase={live.phase}
               hasLearnerTurn={live.transcript.some(
                 (turn) => turn.speaker === "you",

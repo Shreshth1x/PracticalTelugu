@@ -6,8 +6,10 @@ import type {
   LiveServerMessage,
   Session,
 } from "@google/genai";
+import { FunctionResponseScheduling } from "@google/genai";
 import {
   findLivePhraseCue,
+  resolveLivePhraseCue,
   type LivePhraseCue,
 } from "./live-follow-along";
 import {
@@ -44,18 +46,38 @@ import {
   gradeLiveSession,
   type LiveSessionGrade,
 } from "./live-session-grading";
+import { isCalibratedLiveLearnerAssessment } from "./live-assessment";
+import {
+  appendLiveAssessmentAudio,
+  createLiveAssessmentAudioCapture,
+  markLiveAssessmentActivityEnd,
+  markLiveAssessmentActivityStart,
+  resetLiveAssessmentAudioCapture,
+  takeLiveAssessmentAudio,
+} from "./live-assessment-audio";
 import {
   applyLiveCaptionTurn,
+  applyLiveLearnerAssessment,
+  applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
+  createUnscoredLiveLearnerCaption,
+  finalizeLiveTranscriptForEnd,
   hasForbiddenAudibleEnglish,
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
-  parseLiveTurnToolCall,
-  removePendingLiveTurns,
+  parseLivePresentedTurnToolCall,
+  type ParsedLiveCaptionTurn,
+  type ParsedLivePresentedTurnToolCall,
   type LiveTranscriptTurn,
 } from "./live-transcript";
+import {
+  getLiveVoiceFallbackNotice,
+  getLiveVoiceModeNotice,
+  isLiveVoiceModeReason,
+  type LiveVoiceModeReason,
+} from "./live-voice-status";
 import { getSupabaseBrowserClient } from "../supabase-client";
 
 export type { LiveTranscriptTurn } from "./live-transcript";
@@ -95,7 +117,9 @@ type TokenResponse = {
   model?: string;
   config?: LiveConnectConfig;
   voiceMode?: LiveVoiceMode;
+  voiceModeReason?: LiveVoiceModeReason;
   voiceAccessToken?: string;
+  assessmentAccessToken?: string;
   familyVoice?: LiveFamilyVoice;
   openingCue?: string;
   relationship?: LiveListenerRelationship;
@@ -116,8 +140,29 @@ const PCM_WORKLET_NAME = "practicaltelugu-live-pcm";
 const PCM_WORKLET_URL = "/live-pcm-worklet.js";
 const LAST_EXCHANGE_SECONDS = 15;
 const ACCOUNT_SESSION_TIMEOUT_MS = 1_500;
+const ACCOUNT_SESSION_RETRY_TIMEOUT_MS = 3_000;
 
 type CompletionReason = CompletedLiveSession["completionReason"];
+
+type PendingPresentedTurn = {
+  toolCallId: string;
+  parsed: ParsedLivePresentedTurnToolCall;
+  cue: LivePhraseCue | null;
+  learnerCaption: ParsedLiveCaptionTurn | null;
+  learnerTurnId: string;
+  learnerResponseLatencyMs?: number;
+  isControlTurn: boolean;
+};
+
+type LearnerAssessmentRequest = {
+  turnId: string;
+  pcm: Int16Array;
+  priorMayu: Pick<LiveTranscriptTurn, "roman" | "english">;
+  checkedCaption: Pick<
+    ParsedLiveCaptionTurn,
+    "roman" | "english" | "sourceLanguage"
+  >;
+};
 
 let genAILibraryPromise: Promise<typeof import("@google/genai")> | null = null;
 
@@ -126,17 +171,31 @@ function loadGenAILibrary() {
   return genAILibraryPromise;
 }
 
-async function loadAccountAccessToken() {
+type AccountAccessTokenResult =
+  | { status: "authenticated"; accessToken: string }
+  | { status: "signed_out" | "unavailable" | "timed_out" };
+
+async function loadAccountAccessToken(
+  timeoutMs = ACCOUNT_SESSION_TIMEOUT_MS,
+): Promise<AccountAccessTokenResult> {
   let timeoutId: number | null = null;
 
   try {
     return await Promise.race([
       getSupabaseBrowserClient()
         .auth.getSession()
-        .then(({ data }) => data.session?.access_token ?? "")
-        .catch(() => ""),
-      new Promise<string>((resolve) => {
-        timeoutId = window.setTimeout(() => resolve(""), ACCOUNT_SESSION_TIMEOUT_MS);
+        .then(({ data }) => {
+          const accessToken = data.session?.access_token?.trim() ?? "";
+          return accessToken
+            ? ({ status: "authenticated", accessToken } as const)
+            : ({ status: "signed_out" } as const);
+        })
+        .catch(() => ({ status: "unavailable" }) as const),
+      new Promise<AccountAccessTokenResult>((resolve) => {
+        timeoutId = window.setTimeout(
+          () => resolve({ status: "timed_out" }),
+          timeoutMs,
+        );
       }),
     ]);
   } finally {
@@ -301,6 +360,7 @@ export function useGeminiLive(
   const [activeVoiceMode, setActiveVoiceMode] =
     useState<LiveVoiceMode | null>(null);
   const [usedVoiceFallback, setUsedVoiceFallback] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState("");
   const [latestTurnLatencyMs, setLatestTurnLatencyMs] = useState<number | null>(
     null,
   );
@@ -330,6 +390,8 @@ export function useGeminiLive(
     () => undefined,
   );
   const tokenRequestRef = useRef<AbortController | null>(null);
+  const assessmentAccessTokenRef = useRef<string | null>(null);
+  const assessmentRequestControllersRef = useRef(new Set<AbortController>());
   const voiceModeRef = useRef<LiveVoiceMode>("gemini");
   const voiceAccessTokenRef = useRef<string | null>(null);
   const usedVoiceFallbackRef = useRef(false);
@@ -355,9 +417,17 @@ export function useGeminiLive(
   const pendingLearnerResponseLatencyMsRef = useRef<number | null>(null);
   const learnerTurnsRef = useRef(0);
   const learnerTurnStateRef = useRef(createLearnerTurnState());
+  const microphoneStreamOpenRef = useRef(false);
   const transcriptRef = useRef<LiveTranscriptTurn[]>([]);
   const activeTurnRef = useRef<LiveTranscriptTurn | null>(null);
   const toolTurnIdsRef = useRef(new Map<string, string>());
+  const mayuPresentationReadyRef = useRef(false);
+  const suppressNativeAudioUntilBoundaryRef = useRef(false);
+  const pendingNativeAudioRef = useRef<string[]>([]);
+  const pendingPresentedTurnRef = useRef<PendingPresentedTurn | null>(null);
+  const learnerAssessmentAudioRef = useRef(
+    createLiveAssessmentAudioCapture(),
+  );
   const usedCueIdsRef = useRef<string[]>([]);
   const mountedRef = useRef(true);
 
@@ -405,6 +475,24 @@ export function useGeminiLive(
     deadlineCheckRef.current = () => undefined;
   }, []);
 
+  const cancelPendingAssessmentRequests = useCallback(() => {
+    for (const controller of assessmentRequestControllersRef.current) {
+      controller.abort();
+    }
+    assessmentRequestControllersRef.current.clear();
+    assessmentAccessTokenRef.current = null;
+    resetLiveAssessmentAudioCapture(learnerAssessmentAudioRef.current);
+  }, []);
+
+  const endMicrophoneStream = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session || !microphoneStreamOpenRef.current) return false;
+
+    microphoneStreamOpenRef.current = false;
+    session.sendRealtimeInput({ audioStreamEnd: true });
+    return true;
+  }, []);
+
   const stopPlayback = useCallback(() => {
     fishSpeechControllerRef.current?.cancel();
     fishSpeechControllerRef.current = null;
@@ -444,6 +532,7 @@ export function useGeminiLive(
 
     const session = sessionRef.current;
     sessionRef.current = null;
+    microphoneStreamOpenRef.current = false;
     if (session) {
       try {
         session.close();
@@ -505,6 +594,118 @@ export function useGeminiLive(
     setTranscript(next);
   }, []);
 
+  const attachLearnerAssessment = useCallback(
+    (
+      turnId: string,
+      assessment: LiveTranscriptTurn["assessment"],
+    ) => {
+      if (!assessment) return false;
+      const next = applyLiveLearnerAssessment(
+        transcriptRef.current,
+        turnId,
+        assessment,
+      );
+      if (next === transcriptRef.current) return false;
+
+      commitTranscript(next);
+      setCompletedSession((current) =>
+        current
+          ? {
+              ...current,
+              grade: gradeLiveSession(next),
+            }
+          : current,
+      );
+      return true;
+    },
+    [commitTranscript],
+  );
+
+  const requestLearnerAssessment = useCallback(
+    ({
+      turnId,
+      pcm,
+      priorMayu,
+      checkedCaption,
+    }: LearnerAssessmentRequest) => {
+      const accessToken = assessmentAccessTokenRef.current;
+      if (!accessToken || !pcm.length) return;
+
+      const controller = new AbortController();
+      assessmentRequestControllersRef.current.add(controller);
+      const requestBody = JSON.stringify({
+        scenarioId: scenario.id,
+        relationship: activeRelationshipRef.current,
+        pcm16Base64: pcm16ToBase64(pcm),
+        priorMayu: {
+          roman: priorMayu.roman,
+          english: priorMayu.english,
+        },
+        checkedCaption: {
+          roman: checkedCaption.roman,
+          english: checkedCaption.english,
+          sourceLanguage: checkedCaption.sourceLanguage,
+        },
+      });
+
+      void (async () => {
+        let assessment: LiveTranscriptTurn["assessment"];
+        try {
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+              const response = await fetch("/api/practice-live/assessment", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: requestBody,
+                cache: "no-store",
+                credentials: "same-origin",
+                signal: controller.signal,
+              });
+              const payload = await response.json().catch(() => null);
+              if (
+                response.ok &&
+                isCalibratedLiveLearnerAssessment(payload)
+              ) {
+                assessment = payload;
+                break;
+              }
+              if (response.status < 500) break;
+            } catch {
+              if (controller.signal.aborted) throw new DOMException(
+                "Assessment request aborted.",
+                "AbortError",
+              );
+            }
+          }
+        } catch {
+          // Aborted sessions must not update a later transcript.
+        } finally {
+          assessmentRequestControllersRef.current.delete(controller);
+        }
+
+        if (controller.signal.aborted) return;
+        attachLearnerAssessment(
+          turnId,
+          assessment ??
+            createUnscoredLiveLearnerCaption(
+              "I could not assess this reply confidently. Try the next reply at a comfortable pace.",
+              "incomplete-assessment",
+            ).assessment,
+        );
+      })();
+    },
+    [attachLearnerAssessment, scenario.id],
+  );
+
+  const prepareMayuResponse = useCallback(() => {
+    mayuPresentationReadyRef.current = false;
+    pendingNativeAudioRef.current = [];
+    pendingPresentedTurnRef.current = null;
+  }, []);
+
   const beginLearnerCaption = useCallback(() => {
     const next = beginPendingLearnerTurn(
       transcriptRef.current,
@@ -516,6 +717,21 @@ export function useGeminiLive(
     setTranscript(next);
   }, []);
 
+  const applyLearnerTranscriptDraft = useCallback(
+    (value: unknown) => {
+      const next = applyProvisionalLearnerTranscript(
+        transcriptRef.current,
+        value,
+      );
+      if (next === transcriptRef.current) return;
+      // Provider ASR has no stability/finality guarantee. Keep it privately as
+      // an end-of-session fallback, but do not flash an unverified guess in the
+      // learner-facing transcript before the checked caption arrives.
+      transcriptRef.current = next;
+    },
+    [],
+  );
+
   const applyLearnerTurnEvent = useCallback(
     (event: LearnerTurnEvent) => {
       const transition = advanceLearnerTurn(
@@ -524,7 +740,10 @@ export function useGeminiLive(
       );
       learnerTurnStateRef.current = transition.state;
 
-      if (transition.effects.beginPendingCaption) beginLearnerCaption();
+      if (transition.effects.beginPendingCaption) {
+        prepareMayuResponse();
+        beginLearnerCaption();
+      }
       if (transition.effects.countLearnerTurn) learnerTurnsRef.current += 1;
       if (transition.effects.startLatencyClock) {
         learnerTurnFinishedAtRef.current = performance.now();
@@ -532,7 +751,7 @@ export function useGeminiLive(
 
       return transition.effects;
     },
-    [beginLearnerCaption],
+    [beginLearnerCaption, prepareMayuResponse],
   );
 
   const openLearnerReplyWindow = useCallback(() => {
@@ -544,6 +763,7 @@ export function useGeminiLive(
       return;
     }
 
+    resetLiveAssessmentAudioCapture(learnerAssessmentAudioRef.current);
     learnerReplyWindowOpenedAtRef.current =
       mayuAudioEndedAtRef.current ?? performance.now();
   }, []);
@@ -590,12 +810,18 @@ export function useGeminiLive(
       }
 
       mayuAudioEndedAtRef.current = performance.now();
+      prepareMayuResponse();
       openLearnerReplyWindow();
       if (isSessionPhase(phaseRef.current)) {
         updatePhase(mutedRef.current ? "muted" : "listening");
       }
     });
-  }, [getOutputCaptureGuard, openLearnerReplyWindow, updatePhase]);
+  }, [
+    getOutputCaptureGuard,
+    openLearnerReplyWindow,
+    prepareMayuResponse,
+    updatePhase,
+  ]);
 
   const playSamples = useCallback(
     (samples: Float32Array) => {
@@ -603,6 +829,10 @@ export function useGeminiLive(
       if (!context || context.state === "closed") return;
       if (!samples.length) return;
 
+      // Playback pauses microphone uploads for longer than a second. Close the
+      // current Live audio stream before that gap so Gemini flushes any cached
+      // input; a later PCM frame starts a fresh stream automatically.
+      endMicrophoneStream();
       getOutputCaptureGuard().beginOutput();
       setMicLevel(0);
 
@@ -647,7 +877,12 @@ export function useGeminiLive(
       void context.resume();
       source.start(startAt);
     },
-    [getOutputCaptureGuard, settleAssistantPlayback, updatePhase],
+    [
+      endMicrophoneStream,
+      getOutputCaptureGuard,
+      settleAssistantPlayback,
+      updatePhase,
+    ],
   );
 
   const playAudio = useCallback(
@@ -660,6 +895,7 @@ export function useGeminiLive(
   const requestFishSpeech = useCallback(
     (text: string) => {
       if (voiceModeRef.current !== "fish") return;
+      let fallbackCode: unknown;
 
       const controller =
         fishSpeechControllerRef.current ??
@@ -688,7 +924,13 @@ export function useGeminiLive(
             credentials: "same-origin",
             signal,
           });
-          if (!response.ok) throw new Error("Fish Audio rejected the turn.");
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null) as {
+              code?: unknown;
+            } | null;
+            fallbackCode = payload?.code;
+            throw new Error("Fish Audio rejected the turn.");
+          }
 
           const samples = pcmBytesToFloat32(
             new Uint8Array(await response.arrayBuffer()),
@@ -700,7 +942,15 @@ export function useGeminiLive(
         playFallback: playAudio,
         onFallback: () => {
           usedVoiceFallbackRef.current = true;
-          if (mountedRef.current) setUsedVoiceFallback(true);
+          if (mountedRef.current) {
+            setUsedVoiceFallback(true);
+            setVoiceNotice(
+              getLiveVoiceFallbackNotice(
+                activeFamilyVoiceRef.current,
+                fallbackCode,
+              ),
+            );
+          }
         },
         onFallbackReleased: () => {
           if (
@@ -714,6 +964,106 @@ export function useGeminiLive(
     },
     [playAudio, playSamples, settleAssistantPlayback],
   );
+
+  const playPresentedNativeAudio = useCallback(
+    (encodedAudio: string) => {
+      const fishSpeechController =
+        voiceModeRef.current === "fish"
+          ? fishSpeechControllerRef.current
+          : null;
+      if (!fishSpeechController?.bufferFallback(encodedAudio)) {
+        playAudio(encodedAudio);
+      }
+    },
+    [playAudio],
+  );
+
+  const finalizePendingPresentation = useCallback(() => {
+    const pending = pendingPresentedTurnRef.current;
+    if (!pending) return false;
+
+    pendingPresentedTurnRef.current = null;
+    const priorMayu = activeTurnRef.current;
+    let assessmentRequest: LearnerAssessmentRequest | null = null;
+    let next = transcriptRef.current;
+    if (!pending.parsed.replay && pending.learnerCaption) {
+      const learnerEffects = applyLearnerTurnEvent({
+        type: "learner-caption",
+      });
+      if (learnerEffects.applyLearnerCaption) {
+        next = applyLiveCaptionTurn(next, {
+          id: pending.learnerTurnId,
+          speaker: "you",
+          roman: pending.learnerCaption.roman,
+          pronunciation: pending.learnerCaption.pronunciation,
+          english: pending.learnerCaption.english,
+          sourceLanguage: pending.learnerCaption.sourceLanguage,
+          responseLatencyMs: pending.learnerResponseLatencyMs,
+        });
+        const pcm = takeLiveAssessmentAudio(learnerAssessmentAudioRef.current);
+        if (pcm && priorMayu?.speaker === "mayu") {
+          assessmentRequest = {
+            turnId: pending.learnerTurnId,
+            pcm,
+            priorMayu,
+            checkedCaption: pending.learnerCaption,
+          };
+        }
+      }
+    }
+
+    pendingLearnerResponseLatencyMsRef.current = null;
+    learnerReplyWindowOpenedAtRef.current = null;
+    mayuAudioEndedAtRef.current = null;
+    mayuTurnCompleteRef.current = false;
+
+    const mayuTurn: LiveTranscriptTurn = {
+      id: pending.toolCallId,
+      speaker: "mayu",
+      roman: pending.parsed.mayu.roman,
+      pronunciation: pending.parsed.mayu.pronunciation,
+      english: pending.parsed.mayu.english,
+      final: true,
+      cueId: pending.cue?.id,
+      sourceLanguage: "telugu",
+    };
+
+    if (!pending.parsed.replay) {
+      next = applyLiveCaptionTurn(next, mayuTurn);
+      toolTurnIdsRef.current.set(pending.toolCallId, mayuTurn.id);
+      commitTranscript(next);
+      applyLearnerTurnEvent({
+        type: "mayu-turn-presented",
+        expectsReply: !pending.isControlTurn,
+      });
+    }
+
+    activateTurn(mayuTurn);
+    if (pending.cue) activateCue(pending.cue);
+    requestFishSpeech(pending.parsed.mayu.teluguInternal);
+
+    mayuPresentationReadyRef.current = true;
+    const pendingAudio = pendingNativeAudioRef.current;
+    pendingNativeAudioRef.current = [];
+    for (const encodedAudio of pendingAudio) {
+      playPresentedNativeAudio(encodedAudio);
+    }
+    if (assessmentRequest) {
+      window.setTimeout(
+        () => requestLearnerAssessment(assessmentRequest),
+        0,
+      );
+    }
+    return true;
+  }, [
+    activateCue,
+    activateTurn,
+    applyLearnerTurnEvent,
+    commitTranscript,
+    playPresentedNativeAudio,
+    requestFishSpeech,
+    requestLearnerAssessment,
+  ]);
 
   const handleServerMessage = useCallback(
     (message: LiveServerMessage) => {
@@ -742,16 +1092,19 @@ export function useGeminiLive(
       );
 
       if (activityEvent?.type === "activity-start") {
+        markLiveAssessmentActivityStart(learnerAssessmentAudioRef.current);
         markLearnerResponseStarted();
         applyLearnerTurnEvent(activityEvent);
         if (
           !mutedRef.current &&
+          !mayuPresentationReadyRef.current &&
           !getOutputCaptureGuard().isInputBlocked()
         ) {
           updatePhase("listening");
         }
       }
       if (activityEvent?.type === "activity-end") {
+        markLiveAssessmentActivityEnd(learnerAssessmentAudioRef.current);
         applyLearnerTurnEvent(activityEvent);
         updatePhase("thinking");
       }
@@ -788,46 +1141,76 @@ export function useGeminiLive(
       const functionCalls = message.toolCall?.functionCalls ?? [];
       if (functionCalls.length) {
         const functionResponses = functionCalls.map((call) => {
-          if (call.name !== PRESENT_TURN_TOOL_NAME) {
+          const rejectToolCall = (
+            error: string,
+            scheduling: FunctionResponseScheduling =
+              FunctionResponseScheduling.INTERRUPT,
+            preservePendingPresentation = false,
+          ) => {
+            if (
+              call.name === PRESENT_TURN_TOOL_NAME &&
+              !preservePendingPresentation
+            ) {
+              prepareMayuResponse();
+            }
             return {
               id: call.id,
               name: call.name,
-              response: { error: "Use the present_turn caption tool." },
+              scheduling,
+              response: { error },
+            };
+          };
+
+          if (call.name !== PRESENT_TURN_TOOL_NAME) {
+            return rejectToolCall(
+              "Use present_turn for every Mayu reply.",
+            );
+          }
+
+          if (
+            mayuPresentationReadyRef.current &&
+            learnerReplyWindowOpenedAtRef.current === null
+          ) {
+            suppressNativeAudioUntilBoundaryRef.current = true;
+            return {
+              id: call.id,
+              name: call.name,
+              scheduling: FunctionResponseScheduling.SILENT,
+              response: {
+                error:
+                  "The current Mayu speech has already been presented. Do not call present_turn again until the learner replies.",
+              },
             };
           }
 
-          const parsed = parseLiveTurnToolCall(call.args);
+          const parsed = parseLivePresentedTurnToolCall(call.args);
           if (!parsed) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "Provide every complete Mayu caption field. For judgeable learner audio, include every learner caption/source field, confidence, one short coaching tip, and exactly the ratings required by the source: meaning only for English, four quality ratings for Telugu, or those four plus Telugu coverage for mixed. For low-confidence audio, include only confidence low and feedback; omit learner captions, source, and every rating. Rate only the actual audio and keep Telugu script out of learner-facing fields.",
-              },
-            };
+            return rejectToolCall(
+              "Provide every complete Mayu caption field and only present_turn fields. Omit learner fields before any learner reply; afterward include the complete safe learner caption and source fields. Keep Telugu script out of learner-facing fields.",
+            );
+          }
+          const needsLearnerCaption = learnerCaptionRequired(
+            learnerTurnStateRef.current,
+            parsed.replay,
+          );
+          if (!needsLearnerCaption && parsed.learner) {
+            return rejectToolCall(
+              "No learner reply exists for this turn. Remove every learner field, keep Mayu in her role, and continue from the already accepted opening.",
+              FunctionResponseScheduling.INTERRUPT,
+              true,
+            );
           }
 
           if (hasForbiddenAudibleEnglish(parsed.mayu)) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "Remove every English interjection or copied-English word from the audible Telugu turn. Use a natural Telugu acknowledgment instead, then call present_turn again.",
-              },
-            };
+            return rejectToolCall(
+              "Remove every English interjection or copied-English word from the audible Telugu turn. Use a natural Telugu acknowledgment instead, then call present_turn again.",
+            );
           }
 
           if (hasKnownMayuMeaningMismatch(parsed.mayu)) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "For the hungry family follow-up, use avunaa, not avunnaa, and ask inkaa emainaa tintaavaa? (close) or inkaa emainaa tintaaraa? (respectful). Correct every Mayu field and call present_turn again.",
-              },
-            };
+            return rejectToolCall(
+              "Correct the known phrase mismatch. For the hungry family follow-up, use avunaa, not avunnaa. For a water handoff, never use deenigaa; use idigoo neellu with the locked relationship form. Correct every Mayu field and call present_turn again.",
+            );
           }
 
           if (
@@ -836,53 +1219,24 @@ export function useGeminiLive(
               activeRelationshipRef.current,
             )
           ) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "The hunger follow-up uses the wrong listener relationship. Use tintaavaa for someone close or tintaaraa for an elder or someone new, matching the locked session, then call present_turn again.",
-              },
-            };
-          }
-
-          if (
-            parsed.learner &&
-            hasKnownLearnerMeaningMismatch(parsed.learner)
-          ) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "For a learner meaning that says hungry, use ఆకలి / aakali, such as naaku inkaa aakaligaa undi. Never use pasi or pasigaa for hunger. Correct every learner field and call present_turn again.",
-              },
-            };
+            return rejectToolCall(
+              "The hunger follow-up uses the wrong listener relationship. Use tintaavaa for someone close or tintaaraa for an elder or someone new, matching the locked session, then call present_turn again.",
+            );
           }
 
           const cue = parsed.mayu.cueId
             ? findLivePhraseCue(scenario.words, parsed.mayu.cueId)
             : null;
           if (parsed.mayu.cueId && !cue) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "That cueId is not reviewed for this situation. Omit cueId for a natural conversational turn.",
-              },
-            };
+            return rejectToolCall(
+              "That cueId is not reviewed for this situation. Omit cueId for a natural conversational turn.",
+            );
           }
 
           if (cue && !matchesReviewedLiveCue(parsed.mayu, cue)) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "That cueId requires the exact reviewed native Telugu, romanization, pronunciation, and English meaning. Correct all four fields, or omit cueId for a natural conversational turn.",
-              },
-            };
+            return rejectToolCall(
+              "That cueId requires the exact reviewed native Telugu, romanization, pronunciation, and English meaning. Correct all four fields, or omit cueId for a natural conversational turn.",
+            );
           }
 
           const requiredCueAudience =
@@ -894,40 +1248,37 @@ export function useGeminiLive(
             cue.audience !== "anyone" &&
             cue.audience !== requiredCueAudience
           ) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "That reviewed cue conflicts with the locked relationship. Use a matching cue, or omit cueId for a natural matching turn.",
-              },
-            };
+            return rejectToolCall(
+              "That reviewed cue conflicts with the locked relationship. Use a matching cue, or omit cueId for a natural matching turn.",
+            );
           }
 
-          const needsLearnerCaption = learnerCaptionRequired(
-            learnerTurnStateRef.current,
-            parsed.replay,
-          );
-          if (needsLearnerCaption && !parsed.learner) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "For judgeable audio, include the complete learner captions, source, required ratings, confidence, and feedback. If the audio cannot be judged fairly, include only learnerAssessmentConfidence low and learnerFeedback, omit every other learner field, and ask for a repeat.",
-              },
-            };
+          const parsedLearnerCaption = parsed.learner;
+          const reviewedLearnerCue = parsedLearnerCaption
+            ? resolveLivePhraseCue(
+                parsedLearnerCaption.teluguInternal ||
+                  parsedLearnerCaption.roman,
+                scenario.words,
+              )
+            : null;
+          const validLearnerCaption =
+            parsedLearnerCaption &&
+            !hasKnownLearnerMeaningMismatch(parsedLearnerCaption)
+              ? {
+                  ...parsedLearnerCaption,
+                  pronunciation:
+                    parsedLearnerCaption.pronunciation ??
+                    reviewedLearnerCue?.pronunciation,
+                }
+              : null;
+          if (needsLearnerCaption && !validLearnerCaption) {
+            return rejectToolCall(
+              "This turn follows a learner reply. Include the complete safe learner caption and source fields, matching only what the learner actually said, then call present_turn again before speaking.",
+            );
           }
-          if (!needsLearnerCaption && parsed.learner) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "No learner reply is pending for this turn. Omit every learner field and call present_turn again.",
-              },
-            };
-          }
+          const learnerCaption = needsLearnerCaption
+            ? validLearnerCaption
+            : null;
 
           const toolCallId =
             call.id ??
@@ -935,63 +1286,37 @@ export function useGeminiLive(
           const isControlTurn = learnerTurnStateRef.current.controlTurnPending;
           const learnerResponseLatencyMs =
             pendingLearnerResponseLatencyMsRef.current ?? undefined;
-          let next = transcriptRef.current;
+          const learnerTurnId = [...transcriptRef.current]
+            .reverse()
+            .find((turn) => turn.speaker === "you" && !turn.final)?.id ??
+            `${toolCallId}-learner`;
 
-          if (!parsed.replay && parsed.learner) {
-            const learnerEffects = applyLearnerTurnEvent({
-              type: "learner-caption",
-            });
-            if (learnerEffects.applyLearnerCaption) {
-              next = applyLiveCaptionTurn(next, {
-                id: `${toolCallId}-learner`,
-                speaker: "you",
-                roman: parsed.learner.roman,
-                pronunciation: parsed.learner.pronunciation,
-                english: parsed.learner.english,
-                sourceLanguage: parsed.learner.sourceLanguage,
-                responseLatencyMs: learnerResponseLatencyMs,
-                assessment: parsed.learner.assessment,
-              });
-            }
-          }
-
-          pendingLearnerResponseLatencyMsRef.current = null;
-          learnerReplyWindowOpenedAtRef.current = null;
-          mayuAudioEndedAtRef.current = null;
-          mayuTurnCompleteRef.current = false;
-
-          const mayuTurn: LiveTranscriptTurn = {
-            id: toolCallId,
-            speaker: "mayu",
-            roman: parsed.mayu.roman,
-            pronunciation: parsed.mayu.pronunciation,
-            english: parsed.mayu.english,
-            final: true,
-            cueId: cue?.id,
-            sourceLanguage: "telugu",
+          // Gemini 2.5 can revise a valid non-blocking presentation before its
+          // first audio chunk. Keep only the newest validated candidate, then
+          // atomically expose its caption and release audio so the UI never
+          // flashes an earlier draft or pairs speech with stale text.
+          pendingPresentedTurnRef.current = {
+            toolCallId,
+            parsed,
+            cue,
+            learnerCaption,
+            learnerTurnId,
+            learnerResponseLatencyMs,
+            isControlTurn,
           };
-
-          if (!parsed.replay) {
-            next = applyLiveCaptionTurn(next, mayuTurn);
-            toolTurnIdsRef.current.set(toolCallId, mayuTurn.id);
-            commitTranscript(next);
-            applyLearnerTurnEvent({
-              type: "mayu-turn-presented",
-              expectsReply: !isControlTurn,
-            });
-          }
-
-          activateTurn(mayuTurn);
-          if (cue) activateCue(cue);
-          requestFishSpeech(parsed.mayu.teluguInternal);
 
           return {
             id: call.id,
             name: call.name,
+            scheduling: FunctionResponseScheduling.WHEN_IDLE,
             response: {
               output: {
                 accepted: true,
                 captionReady: true,
+                continueSameTurn: true,
+                spokenTelugu: parsed.mayu.teluguInternal,
+                instruction:
+                  "CONTINUATION ONLY: call no tool. Speak exactly spokenTelugu now, then wait.",
                 ...(cue ? { cueId: cue.id } : {}),
               },
             },
@@ -999,17 +1324,29 @@ export function useGeminiLive(
         });
 
         sessionRef.current?.sendToolResponse({ functionResponses });
+        if (
+          pendingNativeAudioRef.current.length &&
+          pendingPresentedTurnRef.current
+        ) {
+          finalizePendingPresentation();
+        }
       }
 
       const content = message.serverContent;
       if (!content) return;
 
-      const audioParts = (content.modelTurn?.parts ?? []).filter(
+      const receivedAudioParts = (content.modelTurn?.parts ?? []).filter(
         (part) => Boolean(part.inlineData?.data),
       );
+      const audioParts =
+        suppressNativeAudioUntilBoundaryRef.current
+        ? []
+        : receivedAudioParts;
       const hasModelOutput = Boolean(audioParts.length);
 
       if (content.interrupted) {
+        suppressNativeAudioUntilBoundaryRef.current = false;
+        prepareMayuResponse();
         markLearnerResponseStarted();
         const captureReleasePending = stopPlayback();
         if (captureReleasePending) {
@@ -1031,8 +1368,10 @@ export function useGeminiLive(
       if (interimInput) {
         markLearnerResponseStarted();
         applyLearnerTurnEvent({ type: "interim-transcription" });
+        applyLearnerTranscriptDraft(interimInput);
         if (
           !mutedRef.current &&
+          !mayuPresentationReadyRef.current &&
           !getOutputCaptureGuard().isInputBlocked()
         ) {
           updatePhase("listening");
@@ -1042,16 +1381,23 @@ export function useGeminiLive(
       const finalInput = content.inputTranscription;
       if (finalInput?.text) {
         markLearnerResponseStarted();
-        if (finalInput.finished === true) {
+        // Gemini Live can omit `finished` on the final inputTranscription
+        // event. Only an explicit false is provisional;
+        // interimInputTranscription remains the low-latency draft channel.
+        if (finalInput.finished !== false) {
+          markLiveAssessmentActivityEnd(learnerAssessmentAudioRef.current);
           applyLearnerTurnEvent({
             type: "final-transcription",
             text: finalInput.text,
           });
+          applyLearnerTranscriptDraft(finalInput.text);
           updatePhase("thinking");
         } else {
           applyLearnerTurnEvent({ type: "interim-transcription" });
+          applyLearnerTranscriptDraft(finalInput.text);
           if (
             !mutedRef.current &&
+            !mayuPresentationReadyRef.current &&
             !getOutputCaptureGuard().isInputBlocked()
           ) {
             updatePhase("listening");
@@ -1061,20 +1407,29 @@ export function useGeminiLive(
 
       if (hasModelOutput) applyLearnerTurnEvent({ type: "model-output" });
 
+      if (
+        audioParts.length &&
+        !mayuPresentationReadyRef.current &&
+        pendingPresentedTurnRef.current
+      ) {
+        finalizePendingPresentation();
+      }
+
       for (const part of audioParts) {
         const encodedAudio = part.inlineData?.data;
         if (!encodedAudio) continue;
-
-        const fishSpeechController =
-          voiceModeRef.current === "fish"
-            ? fishSpeechControllerRef.current
-            : null;
-        if (!fishSpeechController?.bufferFallback(encodedAudio)) {
-          playAudio(encodedAudio);
+        if (mayuPresentationReadyRef.current) {
+          playPresentedNativeAudio(encodedAudio);
+        } else {
+          pendingNativeAudioRef.current = [
+            ...pendingNativeAudioRef.current,
+            encodedAudio,
+          ];
         }
       }
 
       if (content.turnComplete || content.waitingForInput) {
+        suppressNativeAudioUntilBoundaryRef.current = false;
         mayuTurnCompleteRef.current = true;
         applyLearnerTurnEvent({ type: "model-turn-complete" });
         const fishSpeechPending =
@@ -1088,14 +1443,14 @@ export function useGeminiLive(
       }
     },
     [
-      activateCue,
-      activateTurn,
       applyLearnerTurnEvent,
+      applyLearnerTranscriptDraft,
       commitTranscript,
+      finalizePendingPresentation,
       getOutputCaptureGuard,
       markLearnerResponseStarted,
-      playAudio,
-      requestFishSpeech,
+      playPresentedNativeAudio,
+      prepareMayuResponse,
       scenario.words,
       settleAssistantPlayback,
       stopPlayback,
@@ -1115,6 +1470,7 @@ export function useGeminiLive(
 
       const sendPcm = (pcm: Int16Array, level: number) => {
         if (
+          mayuPresentationReadyRef.current ||
           !shouldForwardLiveMicrophoneFrame({
             isMuted: mutedRef.current,
             sessionMatches: sessionRef.current === session,
@@ -1136,6 +1492,13 @@ export function useGeminiLive(
             mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
           },
         });
+        if (
+          learnerReplyWindowOpenedAtRef.current !== null &&
+          learnerTurnStateRef.current.expectsLearnerResponse
+        ) {
+          appendLiveAssessmentAudio(learnerAssessmentAudioRef.current, pcm);
+        }
+        microphoneStreamOpenRef.current = true;
       };
 
       let processor: AudioNode;
@@ -1182,21 +1545,28 @@ export function useGeminiLive(
     if (isSessionPhase(phaseRef.current)) return;
 
     ignoreConnectionEventsRef.current = true;
+    cancelPendingAssessmentRequests();
     releaseHardware();
     const attemptId = connectionAttemptRef.current;
     clearTimer();
     transcriptRef.current = [];
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
+    mayuPresentationReadyRef.current = false;
+    suppressNativeAudioUntilBoundaryRef.current = false;
+    pendingNativeAudioRef.current = [];
+    pendingPresentedTurnRef.current = null;
     usedCueIdsRef.current = [];
     voiceModeRef.current = "gemini";
     voiceAccessTokenRef.current = null;
+    assessmentAccessTokenRef.current = null;
     usedVoiceFallbackRef.current = false;
     setTranscript([]);
     setActiveTurn(null);
     setCompletedSession(null);
     setActiveVoiceMode(null);
     setUsedVoiceFallback(false);
+    setVoiceNotice("");
     setErrorMessage("");
     setElapsedSeconds(0);
     setRemainingSeconds(durationSeconds);
@@ -1204,6 +1574,7 @@ export function useGeminiLive(
     elapsedRef.current = 0;
     learnerTurnsRef.current = 0;
     learnerTurnStateRef.current = createLearnerTurnState();
+    microphoneStreamOpenRef.current = false;
     mutedRef.current = false;
     setIsMuted(false);
     closingRequestedRef.current = false;
@@ -1287,7 +1658,19 @@ export function useGeminiLive(
       }
       streamRef.current = stream;
 
-      const accountAccessToken = await accountAccessTokenPromise;
+      let accountSession = await accountAccessTokenPromise;
+      if (accountSession.status !== "authenticated") {
+        // Permission prompts and an expired session refresh can outlast the
+        // first bounded lookup. Recheck once after microphone access so the
+        // authorized owner is not silently routed to the public backup voice.
+        accountSession = await loadAccountAccessToken(
+          ACCOUNT_SESSION_RETRY_TIMEOUT_MS,
+        );
+      }
+      const accountAccessToken =
+        accountSession.status === "authenticated"
+          ? accountSession.accessToken
+          : "";
       if (attemptId !== connectionAttemptRef.current) {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -1345,10 +1728,16 @@ export function useGeminiLive(
         !tokenPayload.config ||
         (tokenPayload.voiceMode !== "gemini" &&
           tokenPayload.voiceMode !== "fish") ||
+        !isLiveVoiceModeReason(tokenPayload.voiceModeReason) ||
+        ((tokenPayload.voiceMode === "fish") !==
+          (tokenPayload.voiceModeReason === "authorized")) ||
         (tokenPayload.voiceMode === "fish" &&
           (typeof tokenPayload.voiceAccessToken !== "string" ||
             !tokenPayload.voiceAccessToken)) ||
+        typeof tokenPayload.assessmentAccessToken !== "string" ||
+        !tokenPayload.assessmentAccessToken ||
         !isLiveFamilyVoice(tokenPayload.familyVoice) ||
+        tokenPayload.familyVoice !== familyVoice ||
         !isLiveListenerRelationship(tokenPayload.relationship) ||
         !isLiveSessionDuration(tokenPayload.sessionLimitSeconds) ||
         !Number.isFinite(parsedTokenExpiry) ||
@@ -1363,7 +1752,15 @@ export function useGeminiLive(
         tokenPayload.voiceMode === "fish"
           ? tokenPayload.voiceAccessToken ?? null
           : null;
+      assessmentAccessTokenRef.current = tokenPayload.assessmentAccessToken;
       setActiveVoiceMode(tokenPayload.voiceMode);
+      setVoiceNotice(
+        getLiveVoiceModeNotice({
+          familyVoice: tokenPayload.familyVoice,
+          voiceMode: tokenPayload.voiceMode,
+          reason: tokenPayload.voiceModeReason,
+        }),
+      );
       activeSessionLimitRef.current = tokenPayload.sessionLimitSeconds;
       tokenExpiresAtRef.current = parsedTokenExpiry;
       setRemainingSeconds(tokenPayload.sessionLimitSeconds);
@@ -1473,6 +1870,7 @@ export function useGeminiLive(
         ) {
           closingRequestedRef.current = true;
           applyLearnerTurnEvent({ type: "control-turn-requested" });
+          prepareMayuResponse();
           updatePhase("thinking");
           sessionRef.current.sendRealtimeInput({
             text:
@@ -1491,6 +1889,7 @@ export function useGeminiLive(
       );
       updateDeadline();
 
+      prepareMayuResponse();
       updatePhase("thinking");
       session.sendRealtimeInput({
         text:
@@ -1507,11 +1906,13 @@ export function useGeminiLive(
     }
   }, [
     applyLearnerTurnEvent,
+    cancelPendingAssessmentRequests,
     clearTimer,
     failSession,
     handleServerMessage,
     durationSeconds,
     familyVoice,
+    prepareMayuResponse,
     relationship,
     releaseHardware,
     scenarioId,
@@ -1531,20 +1932,21 @@ export function useGeminiLive(
     });
 
     if (nextMuted) {
-      sessionRef.current.sendRealtimeInput({ audioStreamEnd: true });
+      endMicrophoneStream();
       setMicLevel(0);
       if (!activeSourcesRef.current.size) updatePhase("muted");
     } else {
       const outputBlocked = getOutputCaptureGuard().isInputBlocked();
+      const turnInProgress = mayuPresentationReadyRef.current;
       updatePhase(
         activeSourcesRef.current.size
           ? "speaking"
-          : outputBlocked
+          : outputBlocked || turnInProgress
             ? "thinking"
             : "listening",
       );
     }
-  }, [getOutputCaptureGuard, updatePhase]);
+  }, [endMicrophoneStream, getOutputCaptureGuard, updatePhase]);
 
   const repeatTurn = useCallback(
     (turnId: string, options: { slow?: boolean } = {}) => {
@@ -1556,6 +1958,7 @@ export function useGeminiLive(
         !session ||
         !turn ||
         mutedRef.current ||
+        mayuPresentationReadyRef.current ||
         !isSessionPhase(phaseRef.current)
       ) {
         return;
@@ -1563,6 +1966,7 @@ export function useGeminiLive(
 
       activateTurn(turn);
       stopPlayback();
+      prepareMayuResponse();
       updatePhase("thinking");
       session.sendRealtimeInput({
         text:
@@ -1579,7 +1983,7 @@ export function useGeminiLive(
           }. Wait for me to reply.`,
       });
     },
-    [activateTurn, stopPlayback, updatePhase],
+    [activateTurn, prepareMayuResponse, stopPlayback, updatePhase],
   );
 
   const end = useCallback((completionReason: CompletionReason = "manual") => {
@@ -1594,7 +1998,9 @@ export function useGeminiLive(
     clearTimer();
     mutedRef.current = false;
     setIsMuted(false);
-    const completedTranscript = removePendingLiveTurns(transcriptRef.current);
+    const completedTranscript = finalizeLiveTranscriptForEnd(
+      transcriptRef.current,
+    );
     const grade = gradeLiveSession(completedTranscript);
     commitTranscript(completedTranscript);
     elapsedRef.current = actualDurationSeconds;
@@ -1623,6 +2029,7 @@ export function useGeminiLive(
 
   const reset = useCallback(() => {
     ignoreConnectionEventsRef.current = true;
+    cancelPendingAssessmentRequests();
     releaseHardware();
     clearTimer();
     mutedRef.current = false;
@@ -1642,6 +2049,10 @@ export function useGeminiLive(
     transcriptRef.current = [];
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
+    mayuPresentationReadyRef.current = false;
+    suppressNativeAudioUntilBoundaryRef.current = false;
+    pendingNativeAudioRef.current = [];
+    pendingPresentedTurnRef.current = null;
     usedCueIdsRef.current = [];
     voiceModeRef.current = "gemini";
     voiceAccessTokenRef.current = null;
@@ -1654,9 +2065,16 @@ export function useGeminiLive(
     setCompletedSession(null);
     setActiveVoiceMode(null);
     setUsedVoiceFallback(false);
+    setVoiceNotice("");
     setErrorMessage("");
     updatePhase("idle");
-  }, [clearTimer, durationSeconds, releaseHardware, updatePhase]);
+  }, [
+    cancelPendingAssessmentRequests,
+    clearTimer,
+    durationSeconds,
+    releaseHardware,
+    updatePhase,
+  ]);
 
   useEffect(() => {
     endSessionRef.current = end;
@@ -1692,10 +2110,11 @@ export function useGeminiLive(
     return () => {
       mountedRef.current = false;
       ignoreConnectionEventsRef.current = true;
+      cancelPendingAssessmentRequests();
       releaseHardware();
       clearTimer();
     };
-  }, [clearTimer, releaseHardware]);
+  }, [cancelPendingAssessmentRequests, clearTimer, releaseHardware]);
 
   return {
     phase,
@@ -1715,6 +2134,7 @@ export function useGeminiLive(
     completedSession,
     activeVoiceMode,
     usedVoiceFallback,
+    voiceNotice,
     canRepeatTurn:
       !isMuted &&
       (phase === "listening" ||

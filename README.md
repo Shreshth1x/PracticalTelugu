@@ -107,11 +107,11 @@ returns bounded 24 kHz PCM audio. If Fish rejects a turn or is unavailable, the
 live session releases the buffered Gemini audio as a clearly labeled fallback
 rather than dropping the response.
 
-The Fish model defaults to `s2.1-pro-free` for development. Set
-`FISH_TTS_MODEL` to a paid production model when the free development model is
-retired or when the deployment needs production guarantees. Keep the cloned
-voice private with the provider and retain explicit speaker consent for cloned,
-interactive use.
+The Fish model defaults to the current `s2-pro` model. A legacy
+`FISH_TTS_MODEL=s2.1-pro-free` value is normalized to `s2-pro` so an older
+deployment setting cannot route a cloned turn to a retired model. Keep the
+cloned voice private with the provider and retain explicit speaker consent for
+cloned, interactive use.
 
 Before starting, the learner chooses the listener relationship and a fixed
 one- or two-minute session. Respectful Telugu is the safe default for an elder

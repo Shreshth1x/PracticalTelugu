@@ -17,9 +17,11 @@ import {
 } from "../app/practice-live/live-config.ts";
 import {
   applyLiveCaptionTurn,
+  applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
   parseLiveTurnToolCall,
   removePendingLiveTurns,
+  sanitizeLiveProvisionalTranscript,
 } from "../app/practice-live/live-transcript.ts";
 
 const words = [
@@ -243,6 +245,60 @@ test("replaces a private learner placeholder with the paired visible caption", (
   assert.equal(removePendingLiveTurns(withPending).length, 1);
 });
 
+test("transliterates Telugu ASR into a disposable English-letter live draft", () => {
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("  nenu   baagunnaanu?  "),
+    "nenu baagunnaanu?",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("nenu బాగున్నాను"),
+    "nenu baagunnaanu",
+    "mixed Telugu and Latin input stays readable without exposing script",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("నీళ్లు ఇస్తారా?"),
+    "neellu istaaraa?",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("привет"),
+    "",
+    "other non-Latin scripts are rejected",
+  );
+
+  let turns = beginPendingLearnerTurn([], "you-pending");
+  turns = applyProvisionalLearnerTranscript(turns, "nenu baagunnaanu");
+  turns = beginPendingLearnerTurn(turns, "duplicate-pending");
+
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0], {
+    id: "you-pending",
+    speaker: "you",
+    roman: "",
+    provisionalRoman: "nenu baagunnaanu",
+    english: "",
+    final: false,
+  });
+
+  turns = applyProvisionalLearnerTranscript(turns, "నేను బాగున్నాను");
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].provisionalRoman, "neenu baagunnaanu");
+
+  turns = applyProvisionalLearnerTranscript(turns, "nenu baagunnaanu");
+  turns = applyLiveCaptionTurn(turns, {
+    id: "tool-1-learner",
+    speaker: "you",
+    roman: "Nenu baagunnaanu.",
+    pronunciation: "NAY-noo BAA-goon-NAA-noo.",
+    english: "I am well.",
+    sourceLanguage: "telugu",
+  });
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].final, true);
+  assert.equal(turns[0].provisionalRoman, undefined);
+  assert.equal(turns[0].roman, "Nenu baagunnaanu.");
+});
+
 test("preserves the complete alternating conversation transcript in order", () => {
   let turns = [];
   for (let index = 0; index < 30; index += 1) {
@@ -276,13 +332,16 @@ test("builds a deduplicated bilingual ASR vocabulary", () => {
   assert.ok(!vocabulary.includes("tin-NAA-raa?"));
 });
 
-test("configures low-latency Telugu Live audio and one blocking caption tool", () => {
+test("configures low-latency Telugu Live audio with one non-blocking presentation tool", () => {
   const config = buildLiveConnectConfig(scenario);
   const vad = config.realtimeInputConfig?.automaticActivityDetection;
-  const declaration = config.tools?.[0]?.functionDeclarations?.[0];
-  const schema = declaration?.parametersJsonSchema;
+  const declarations = config.tools?.[0]?.functionDeclarations ?? [];
+  const presentDeclaration = declarations.find(
+    (declaration) => declaration.name === PRESENT_TURN_TOOL_NAME,
+  );
+  const presentSchema = presentDeclaration?.parametersJsonSchema;
 
-  assert.equal(LIVE_MODEL, "gemini-3.1-flash-live-preview");
+  assert.equal(LIVE_MODEL, "gemini-2.5-flash-native-audio-preview-12-2025");
   assert.deepEqual(config.responseModalities, ["AUDIO"]);
   assert.equal(
     config.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName,
@@ -307,45 +366,52 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     config.realtimeInputConfig?.turnCoverage,
     "TURN_INCLUDES_ONLY_ACTIVITY",
   );
-  assert.equal(config.thinkingConfig?.thinkingLevel, "MINIMAL");
+  assert.equal(config.thinkingConfig?.thinkingBudget, 0);
+  assert.equal(config.thinkingConfig?.thinkingLevel, undefined);
   assert.ok(config.contextWindowCompression?.slidingWindow);
   assert.equal(config.temperature, 0.35);
-  assert.equal(declaration?.name, PRESENT_TURN_TOOL_NAME);
-  assert.equal(declaration?.behavior, "BLOCKING");
-  assert.deepEqual(schema?.required, [
+  assert.equal(declarations.length, 1);
+  assert.deepEqual(
+    declarations.map((declaration) => declaration.name),
+    [PRESENT_TURN_TOOL_NAME],
+  );
+  assert.equal(presentDeclaration?.behavior, "NON_BLOCKING");
+  assert.deepEqual(presentSchema?.required, [
     "mayuTeluguInternal",
     "mayuRoman",
     "mayuPronunciation",
     "mayuEnglish",
   ]);
   assert.deepEqual(
-    schema?.properties?.cueId?.enum,
+    presentSchema?.properties?.cueId?.enum,
     getLivePhraseCues(words).map((cue) => cue.id),
   );
-  assert.deepEqual(schema?.properties?.learnerSourceLanguage?.enum, [
+  for (const optionalField of [
+    "cueId",
+    "replay",
+    "learnerTeluguInternal",
+    "learnerRoman",
+    "learnerPronunciation",
+    "learnerEnglish",
+    "learnerSourceLanguage",
+  ]) {
+    assert.ok(presentSchema?.properties?.[optionalField], optionalField);
+    assert.ok(!presentSchema?.required?.includes(optionalField), optionalField);
+  }
+  assert.deepEqual(presentSchema?.properties?.learnerSourceLanguage?.enum, [
     "telugu",
     "english",
     "mixed",
   ]);
-  assert.deepEqual(schema?.properties?.learnerAssessmentConfidence?.enum, [
-    "high",
-    "medium",
-    "low",
-  ]);
-  for (const ratingField of [
-    "learnerIntelligibilityRating",
-    "learnerPronunciationRating",
-    "learnerMeaningRating",
-    "learnerFormRating",
-    "learnerTeluguCoverageRating",
-  ]) {
-    assert.equal(schema?.properties?.[ratingField]?.type, "integer", ratingField);
-    assert.equal(schema?.properties?.[ratingField]?.minimum, 0, ratingField);
-    assert.equal(schema?.properties?.[ratingField]?.maximum, 4, ratingField);
-  }
-  assert.equal(schema?.properties?.learnerAccuracyRating, undefined);
-  assert.equal(schema?.properties?.learnerFeedback?.maxLength, 180);
+  assert.equal(
+    presentSchema?.properties?.learnerAssessmentConfidence,
+    undefined,
+  );
+  assert.equal(presentSchema?.properties?.learnerMeaningRating, undefined);
+  assert.equal(presentSchema?.properties?.learnerFeedback, undefined);
+
   assert.match(String(config.systemInstruction), /present_turn/);
+  assert.doesNotMatch(String(config.systemInstruction), /assess_learner/);
   assert.match(
     String(config.systemInstruction),
     /before EVERY audible Mayu turn/i,
@@ -375,48 +441,50 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
     instruction,
     /interface never renders the internal fields/,
   );
-  assert.match(instruction, /Assess only the learner's ACTUAL AUDIO/);
   assert.match(
     instruction,
-    /learnerAssessmentConfidence first from the audio evidence/,
-  );
-  assert.match(instruction, /high when the words are clearly audible/);
-  assert.match(instruction, /medium when .* still judgeable/);
-  assert.match(instruction, /low when .* fair judgment impossible/);
-  assert.match(
-    instruction,
-    /Low confidence.{0,300}learnerAssessmentConfidence.{0,300}learnerFeedback/is,
+    /Never speak as the learner, invent a learner reply, or repeat the learner's self-report/,
   );
   assert.match(
     instruction,
-    /Low confidence.{0,500}omit.{0,300}(?:caption|learnerRoman)/is,
+    /latest meaning.{0,120}one small natural step forward/is,
+  );
+  assert.match(instruction, /Never .* run through a generic checklist/);
+  assert.match(
+    instruction,
+    /Immediately before EVERY audible Mayu turn.{0,180}speak immediately without waiting/is,
   );
   assert.match(
     instruction,
-    /Telugu audio with high\/medium confidence.{0,100}four independent quality ratings/is,
+    /function-response continuation is still the same Mayu turn.{0,180}do not call it again/is,
   );
   assert.match(
     instruction,
-    /mixed.{0,300}learnerTeluguCoverageRating/is,
+    /On every present_turn call after a learner reply, include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage/,
   );
-  assert.match(
-    instruction,
-    /entirely English audio, include only learnerMeaningRating/,
-  );
-  assert.match(instruction, /learnerIntelligibilityRating/);
-  assert.match(instruction, /learnerPronunciationRating/);
-  assert.match(instruction, /learnerMeaningRating/);
-  assert.match(instruction, /learnerFormRating/);
-  assert.match(instruction, /learnerTeluguCoverageRating/);
-  assert.match(instruction, /Never lower this merely for a non-native accent/);
-  assert.match(instruction, /broken Telugu that remains recoverable/);
-  assert.match(instruction, /Never claim phoneme-level certainty/);
+  assert.match(instruction, /Include learnerPronunciation only when useful/);
+  assert.match(instruction, /claim phoneme-level certainty/);
+  assert.doesNotMatch(instruction, /assess_learner|learnerAssessmentConfidence/);
   assert.doesNotMatch(instruction, /learnerAccuracyRating/);
   assert.doesNotMatch(instruction, /Use short English connective words/i);
   assert.doesNotMatch(instruction, /brief English scene-setting sentence/i);
   assert.match(instruction, /RESPECTFUL RELATIONSHIP LOCK/);
   assert.match(instruction, /including a new person of the learner's own age/);
   assert.match(instruction, /Never switch or mix close and respectful/);
+});
+
+test("anchors a natural water handoff at the table", () => {
+  const instruction = buildLiveSystemInstruction({
+    ...scenario,
+    id: "at-the-table",
+  });
+
+  assert.match(
+    instruction,
+    /tappakundaa, idigoo neellu teesukondi respectfully/,
+  );
+  assert.match(instruction, /idigoo neellu teesukoo with someone close/);
+  assert.match(instruction, /Never use deenigaa/);
 });
 
 test("keeps Live settings locked while leaving the repeated caption tool token-safe", () => {

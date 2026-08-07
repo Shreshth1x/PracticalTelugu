@@ -14,6 +14,7 @@ export type LearnerTurnEpoch = {
   finalText: string | null;
   modelOutputSeen: boolean;
   modelTurnComplete: boolean;
+  modelBoundaryAfterCaption: boolean;
   latencyClockStarted: boolean;
 };
 
@@ -93,6 +94,7 @@ function createEpoch(state: LearnerTurnState) {
     finalText: null,
     modelOutputSeen: false,
     modelTurnComplete: false,
+    modelBoundaryAfterCaption: false,
     latencyClockStarted: false,
   };
 
@@ -316,11 +318,19 @@ export function advanceLearnerTurn(
   if (event.type === "learner-caption") {
     let epoch = state.currentEpoch;
     if (
-      !epoch ||
-      (epoch.captioned &&
-        epoch.finalText !== null &&
-        epoch.modelTurnComplete)
+      epoch?.captioned &&
+      !epoch.modelBoundaryAfterCaption
     ) {
+      // A repeated/retried tool call for the same model exchange must not add
+      // another learner row or score. A genuine next reply can only follow
+      // model output (or its turn-complete boundary).
+      return { state, effects };
+    }
+
+    // The next blocking tool can arrive even when the provider omitted learner
+    // VAD and transcription. Model output is still the exchange boundary, so
+    // start a fresh slot once the prior response has crossed that boundary.
+    if (!epoch || epoch.captioned) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
@@ -333,6 +343,11 @@ export function advanceLearnerTurn(
       observedLearnerInput: true,
       captioned: true,
       pendingCaption: false,
+      // Model audio can race ahead of the blocking caption tool. Only a model
+      // boundary observed after this accepted caption may open the next
+      // tool-only exchange; historical output remains available to latency
+      // bookkeeping but cannot make an immediate retry look new.
+      modelBoundaryAfterCaption: false,
     };
     effects.applyLearnerCaption = true;
     state = {
@@ -353,7 +368,13 @@ export function advanceLearnerTurn(
     if (!epoch?.observedLearnerInput) return { state, effects };
 
     const counted = markCounted(
-      { ...epoch, activityActive: false, modelOutputSeen: true },
+      {
+        ...epoch,
+        activityActive: false,
+        modelOutputSeen: true,
+        modelBoundaryAfterCaption:
+          epoch.modelBoundaryAfterCaption || epoch.captioned,
+      },
       effects,
     );
     return {
@@ -369,6 +390,8 @@ export function advanceLearnerTurn(
       ...epoch,
       activityActive: false,
       modelTurnComplete: true,
+      modelBoundaryAfterCaption:
+        epoch.modelBoundaryAfterCaption || epoch.captioned,
     }),
     effects,
   };

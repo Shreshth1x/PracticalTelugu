@@ -26,6 +26,52 @@ export type CalibratedLiveLearnerAssessment = {
   feedback: string;
 };
 
+function isNullableScore(value: unknown) {
+  return (
+    value === null ||
+    (Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 100)
+  );
+}
+
+function isNullableRating(value: unknown) {
+  return (
+    value === null ||
+    (Number.isInteger(value) && Number(value) >= 0 && Number(value) <= 4)
+  );
+}
+
+/** Strictly validates the calibrated assessment returned by the server. */
+export function isCalibratedLiveLearnerAssessment(
+  value: unknown,
+): value is CalibratedLiveLearnerAssessment {
+  if (!value || typeof value !== "object") return false;
+  const assessment = value as Record<string, unknown>;
+  if (
+    !isNullableScore(assessment.pronunciationScore) ||
+    !isNullableScore(assessment.accuracyScore) ||
+    !isNullableScore(assessment.languageScore) ||
+    !LIVE_ASSESSMENT_CONFIDENCES.includes(
+      assessment.confidence as LiveAssessmentConfidence,
+    ) ||
+    typeof assessment.feedback !== "string" ||
+    !assessment.feedback.trim() ||
+    assessment.feedback.length > 180 ||
+    !assessment.ratings ||
+    typeof assessment.ratings !== "object"
+  ) {
+    return false;
+  }
+
+  const ratings = assessment.ratings as Record<string, unknown>;
+  return (
+    isNullableRating(ratings.intelligibility) &&
+    isNullableRating(ratings.pronunciation) &&
+    isNullableRating(ratings.meaning) &&
+    isNullableRating(ratings.form) &&
+    isNullableRating(ratings.teluguCoverage)
+  );
+}
+
 // These are intentionally broad, learner-friendly bands. Asking the model for
 // four independent ordinal judgments is more repeatable than asking it to
 // invent a precise percentage directly; the app owns the percentage mapping.

@@ -233,6 +233,31 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   assert.doesNotMatch(source, /turn\.text/);
   assert.doesNotMatch(source, /live-follow-telugu/);
 
+  const liveDraftStart = source.indexOf(
+    'className="live-follow-learner-draft"',
+  );
+  assert.ok(
+    liveDraftStart >= 0 && liveDraftStart < source.indexOf('className="live-follow-phrase"'),
+    "the learner reply status appears on the main card before the prior prompt",
+  );
+  assert.match(source, /Preparing the checked transcript…/);
+  assert.match(source, /Reply heard — preparing the checked transcript…/);
+  assert.doesNotMatch(source, /provisionalRoman/);
+  assert.doesNotMatch(source, /Live draft/);
+  assert.match(
+    source.slice(liveDraftStart, source.indexOf("{turn ?", liveDraftStart)),
+    /role="status"[\s\S]*aria-live="polite"/,
+    "the main-card learner draft is announced as a polite status",
+  );
+
+  const voiceNoticeStart = source.indexOf('className="live-voice-notice"');
+  assert.ok(voiceNoticeStart >= 0, "the active voice notice is rendered near session setup");
+  assert.match(
+    source.slice(voiceNoticeStart, source.indexOf("</small>", voiceNoticeStart)),
+    /role="status"[\s\S]*aria-live="polite"/,
+    "voice fallback notices use a non-disruptive polite status",
+  );
+
   const currentTurnStart = source.indexOf('className="live-follow-spoken"');
   const currentTurnEnd = source.indexOf("</div>", source.indexOf('className="live-follow-english"'));
   const currentTurn = source.slice(currentTurnStart, currentTurnEnd);
@@ -327,18 +352,95 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
   assert.match(gradingSource, /rubricVersion: 2/);
 });
 
-test("keeps Live retry guidance compatible with honest audio abstention", async () => {
+test("keeps Live presentation fast and assessment off the conversation session", async () => {
+  const [liveConfigSource, liveClientSource] = await Promise.all([
+    readFile(
+      new URL("../app/practice-live/live-config.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(liveConfigSource, /behavior: Behavior\.NON_BLOCKING/);
+  assert.match(
+    liveConfigSource,
+    /speak immediately without waiting for any function response/,
+  );
+  assert.match(
+    liveConfigSource,
+    /On every \$\{PRESENT_TURN_TOOL_NAME\} call after a learner reply/,
+  );
+  assert.doesNotMatch(liveConfigSource, /assess_learner|ASSESS_LEARNER/);
+
+  const requestStart = liveClientSource.indexOf(
+    "const requestLearnerAssessment = useCallback",
+  );
+  const requestEnd = liveClientSource.indexOf(
+    "const prepareMayuResponse = useCallback",
+    requestStart,
+  );
+  const requestSource = liveClientSource.slice(requestStart, requestEnd);
+  assert.ok(requestStart >= 0 && requestEnd > requestStart);
+  assert.match(
+    requestSource,
+    /void \(async \(\) => \{[\s\S]*fetch\("\/api\/practice-live\/assessment"/,
+    "assessment is an independent fire-and-forget HTTP request",
+  );
+
+  const finalizeStart = liveClientSource.indexOf(
+    "const finalizePendingPresentation = useCallback",
+  );
+  const finalizeEnd = liveClientSource.indexOf(
+    "const handleServerMessage = useCallback",
+    finalizeStart,
+  );
+  const finalizeSource = liveClientSource.slice(finalizeStart, finalizeEnd);
+  const playbackAt = finalizeSource.indexOf(
+    "playPresentedNativeAudio(encodedAudio);",
+  );
+  const assessmentAt = finalizeSource.indexOf(
+    "() => requestLearnerAssessment(assessmentRequest)",
+  );
+  assert.ok(finalizeStart >= 0 && finalizeEnd > finalizeStart);
+  assert.ok(playbackAt >= 0 && assessmentAt > playbackAt);
+  assert.match(
+    finalizeSource,
+    /window\.setTimeout\(\s*\(\) => requestLearnerAssessment\(assessmentRequest\),\s*0,?\s*\)/,
+    "assessment starts only after pending playback has been scheduled",
+  );
+  assert.doesNotMatch(
+    liveClientSource,
+    /PRACTICE-CONTROL TOOL-ONLY TURN|assess_learner/,
+  );
+});
+
+test("retries private voice authorization and renders early ASR safely", async () => {
   const liveClientSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
     "utf8",
   );
 
-  assert.match(liveClientSource, /If the audio cannot be judged fairly/);
   assert.match(
     liveClientSource,
-    /include only learnerAssessmentConfidence low and learnerFeedback/,
+    /accountSession\.status !== "authenticated"[\s\S]*ACCOUNT_SESSION_RETRY_TIMEOUT_MS/,
   );
-  assert.match(liveClientSource, /omit every other learner field/);
+  assert.match(
+    liveClientSource,
+    /tokenPayload\.familyVoice !== familyVoice/,
+    "a token response cannot silently switch the requested family voice",
+  );
+  assert.match(liveClientSource, /isLiveVoiceModeReason/);
+  assert.match(
+    liveClientSource,
+    /interimInput[\s\S]*applyLearnerTranscriptDraft\(interimInput\)/,
+  );
+  assert.match(
+    liveClientSource,
+    /finalInput\.finished !== false[\s\S]*applyLearnerTranscriptDraft\(finalInput\.text\)/,
+  );
 });
 
 test("keeps permanent Gemini and Fish credentials on the server", async () => {

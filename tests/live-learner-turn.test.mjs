@@ -107,12 +107,56 @@ test("model-audio-before-final remains in one epoch and one count", () => {
   assert.equal(result.appliedLearnerCaptions, 1);
   assert.equal(result.countedTurns, 1);
   assert.equal(result.state.currentEpoch.id, 1);
+  assert.equal(result.transitions[1].state.currentEpoch.modelOutputSeen, true);
   assert.equal(result.state.currentEpoch.modelOutputSeen, true);
+  assert.equal(
+    result.state.currentEpoch.modelBoundaryAfterCaption,
+    false,
+    "pre-caption model output cannot become a post-caption exchange boundary",
+  );
   assert.equal(
     result.transitions[2].effects.startLatencyClock,
     false,
     "late transcription must not start a clock for the next model turn",
   );
+});
+
+test("deduplicates a retried caption but accepts the next tool-only learner reply", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "model-output" },
+    { type: "final-transcription", text: "nenu baagunnaanu" },
+    { type: "learner-caption" },
+    { type: "learner-caption" },
+    { type: "model-turn-complete" },
+    { type: "learner-caption" },
+  ]);
+
+  assert.equal(result.pendingRows, 1);
+  assert.equal(result.appliedLearnerCaptions, 2);
+  assert.equal(result.countedTurns, 2);
+  assert.equal(
+    result.transitions[4].state.currentEpoch.id,
+    1,
+    "model output observed before the accepted caption cannot make its retry a new exchange",
+  );
+  assert.equal(
+    result.transitions[4].effects.applyLearnerCaption,
+    false,
+    "a provider retry cannot create another transcript row",
+  );
+  assert.equal(
+    result.transitions[4].effects.countLearnerTurn,
+    false,
+    "a provider retry cannot increment the learner turn count",
+  );
+  assert.equal(
+    result.transitions[6].effects.applyLearnerCaption,
+    true,
+    "a caption after a new post-acceptance model boundary is a genuine next tool-only reply",
+  );
+  assert.equal(result.state.currentEpoch.id, 2);
+  assert.equal(result.state.currentEpoch.captioned, true);
 });
 
 test("requires response captions while permitting opening, replay, and closing control", () => {
