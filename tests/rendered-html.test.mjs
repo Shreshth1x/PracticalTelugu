@@ -238,10 +238,12 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   );
   assert.ok(
     liveDraftStart >= 0 && liveDraftStart < source.indexOf('className="live-follow-phrase"'),
-    "the immediate learner draft appears on the main card before the prior prompt",
+    "the learner reply status appears on the main card before the prior prompt",
   );
-  assert.match(source, /Live draft · not final/);
-  assert.match(source, /Reply heard — preparing readable Telugu…/);
+  assert.match(source, /Preparing the checked transcript…/);
+  assert.match(source, /Reply heard — preparing the checked transcript…/);
+  assert.doesNotMatch(source, /provisionalRoman/);
+  assert.doesNotMatch(source, /Live draft/);
   assert.match(
     source.slice(liveDraftStart, source.indexOf("{turn ?", liveDraftStart)),
     /role="status"[\s\S]*aria-live="polite"/,
@@ -350,18 +352,69 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
   assert.match(gradingSource, /rubricVersion: 2/);
 });
 
-test("keeps Live retry guidance compatible with honest audio abstention", async () => {
-  const liveConfigSource = await readFile(
-    new URL("../app/practice-live/live-config.ts", import.meta.url),
-    "utf8",
-  );
+test("keeps Live presentation fast and assessment off the conversation session", async () => {
+  const [liveConfigSource, liveClientSource] = await Promise.all([
+    readFile(
+      new URL("../app/practice-live/live-config.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+      "utf8",
+    ),
+  ]);
 
-  assert.match(liveConfigSource, /fair judgment impossible/);
+  assert.match(liveConfigSource, /behavior: Behavior\.NON_BLOCKING/);
   assert.match(
     liveConfigSource,
-    /set learnerAssessmentConfidence and learnerFeedback/,
+    /speak immediately without waiting for any function response/,
   );
-  assert.match(liveConfigSource, /keep every learner caption.*null/);
+  assert.match(
+    liveConfigSource,
+    /On every \$\{PRESENT_TURN_TOOL_NAME\} call after a learner reply/,
+  );
+  assert.doesNotMatch(liveConfigSource, /assess_learner|ASSESS_LEARNER/);
+
+  const requestStart = liveClientSource.indexOf(
+    "const requestLearnerAssessment = useCallback",
+  );
+  const requestEnd = liveClientSource.indexOf(
+    "const prepareMayuResponse = useCallback",
+    requestStart,
+  );
+  const requestSource = liveClientSource.slice(requestStart, requestEnd);
+  assert.ok(requestStart >= 0 && requestEnd > requestStart);
+  assert.match(
+    requestSource,
+    /void \(async \(\) => \{[\s\S]*fetch\("\/api\/practice-live\/assessment"/,
+    "assessment is an independent fire-and-forget HTTP request",
+  );
+
+  const finalizeStart = liveClientSource.indexOf(
+    "const finalizePendingPresentation = useCallback",
+  );
+  const finalizeEnd = liveClientSource.indexOf(
+    "const handleServerMessage = useCallback",
+    finalizeStart,
+  );
+  const finalizeSource = liveClientSource.slice(finalizeStart, finalizeEnd);
+  const playbackAt = finalizeSource.indexOf(
+    "playPresentedNativeAudio(encodedAudio);",
+  );
+  const assessmentAt = finalizeSource.indexOf(
+    "() => requestLearnerAssessment(assessmentRequest)",
+  );
+  assert.ok(finalizeStart >= 0 && finalizeEnd > finalizeStart);
+  assert.ok(playbackAt >= 0 && assessmentAt > playbackAt);
+  assert.match(
+    finalizeSource,
+    /window\.setTimeout\(\s*\(\) => requestLearnerAssessment\(assessmentRequest\),\s*0,?\s*\)/,
+    "assessment starts only after pending playback has been scheduled",
+  );
+  assert.doesNotMatch(
+    liveClientSource,
+    /PRACTICE-CONTROL TOOL-ONLY TURN|assess_learner/,
+  );
 });
 
 test("retries private voice authorization and renders early ASR safely", async () => {

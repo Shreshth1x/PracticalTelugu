@@ -458,20 +458,12 @@ function CurrentTurnCard({
       {showLearnerDraft && learnerDraft ? (
         <div
           className="live-follow-learner-draft"
-          data-has-preview={learnerDraft.provisionalRoman ? "true" : "false"}
           role="status"
           aria-live="polite"
           aria-atomic="true"
         >
-          <span>
-            {learnerDraft.provisionalRoman
-              ? "Live draft · not final"
-              : "Reply heard"}
-          </span>
-          <p lang={learnerDraft.provisionalRoman ? "und-Latn" : "en"}>
-            {learnerDraft.provisionalRoman ||
-              "Reply heard — preparing readable Telugu…"}
-          </p>
+          <span>Reply heard</span>
+          <p lang="en">Preparing the checked transcript…</p>
         </div>
       ) : null}
 
@@ -572,9 +564,7 @@ function ConversationTranscript({
                         ? "Telugu version"
                         : ""
                     : turn.speaker === "you"
-                      ? turn.provisionalRoman
-                        ? "Live draft"
-                        : "Reply heard"
+                      ? "Reply heard"
                       : "Preparing…"}
                 </small>
               </div>
@@ -600,20 +590,10 @@ function ConversationTranscript({
                   </p>
                 </div>
               ) : (
-                <div
-                  className="live-transcript-pending"
-                  data-has-preview={turn.provisionalRoman ? "true" : "false"}
-                >
+                <div className="live-transcript-pending">
                   <span aria-hidden="true" />
                   <div>
-                    {turn.provisionalRoman ? (
-                      <>
-                        <small>Live draft · not final</small>
-                        <p lang="und-Latn">{turn.provisionalRoman}</p>
-                      </>
-                    ) : (
-                      <p>Reply heard — preparing readable Telugu…</p>
-                    )}
+                    <p>Reply heard — preparing the checked transcript…</p>
                   </div>
                 </div>
               )}
@@ -769,11 +749,10 @@ export default function PracticeLive() {
     const completedSession = live.completedSession;
     const frame = window.requestAnimationFrame(() => {
       setHistory((current) => {
-        if (current.some((session) => session.id === completedSession.id)) {
-          return current;
-        }
-
-        const next = [completedSession, ...current].slice(0, 12);
+        const next = [
+          completedSession,
+          ...current.filter((session) => session.id !== completedSession.id),
+        ].slice(0, 12);
         window.localStorage.setItem(LIVE_HISTORY_KEY, JSON.stringify(next));
         return next;
       });

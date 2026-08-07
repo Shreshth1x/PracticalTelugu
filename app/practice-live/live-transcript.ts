@@ -52,6 +52,12 @@ export type ParsedLiveTurnToolCall = {
   replay: boolean;
 };
 
+export type ParsedLivePresentedTurnToolCall = {
+  mayu: ParsedLiveCaptionTurn;
+  learner: ParsedLiveCaptionTurn | null;
+  replay: boolean;
+};
+
 export type ParsedLiveMayuTurnToolCall = Pick<
   ParsedLiveTurnToolCall,
   "mayu" | "replay"
@@ -73,16 +79,21 @@ const DEFAULT_LEARNER_FEEDBACK =
   "Keep the conversation going and try the next reply naturally.";
 const DEFAULT_LOW_CONFIDENCE_FEEDBACK =
   "Please try that reply once more at a comfortable pace.";
-const LIVE_TURN_TOOL_FIELDS = new Set([
+const PRESENTED_TURN_TOOL_FIELDS = new Set([
   "mayuTeluguInternal",
   "mayuRoman",
   "mayuPronunciation",
   "mayuEnglish",
   "cueId",
+  "reviewedCueId",
   "learnerTeluguInternal",
   "learnerRoman",
   "learnerPronunciation",
   "learnerEnglish",
+  "learnerSourceLanguage",
+  "replay",
+]);
+const ASSESS_LEARNER_TOOL_FIELDS = new Set([
   "learnerSourceLanguage",
   "learnerAssessmentConfidence",
   "learnerIntelligibilityRating",
@@ -91,7 +102,10 @@ const LIVE_TURN_TOOL_FIELDS = new Set([
   "learnerFormRating",
   "learnerTeluguCoverageRating",
   "learnerFeedback",
-  "replay",
+]);
+const LIVE_TURN_TOOL_FIELDS = new Set([
+  ...PRESENTED_TURN_TOOL_FIELDS,
+  ...ASSESS_LEARNER_TOOL_FIELDS,
 ]);
 const LEARNER_CAPTION_FIELDS = [
   "learnerTeluguInternal",
@@ -107,11 +121,15 @@ const LEARNER_RATING_FIELDS = [
   "learnerFormRating",
   "learnerTeluguCoverageRating",
 ] as const;
-const LEARNER_FIELDS = [
-  ...LEARNER_CAPTION_FIELDS,
+const LEARNER_ASSESSMENT_FIELDS = [
+  "learnerSourceLanguage",
   "learnerAssessmentConfidence",
   ...LEARNER_RATING_FIELDS,
   "learnerFeedback",
+] as const;
+const LEARNER_FIELDS = [
+  ...LEARNER_CAPTION_FIELDS,
+  ...LEARNER_ASSESSMENT_FIELDS,
 ] as const;
 const TELUGU_INDEPENDENT_VOWELS: Record<string, string> = {
   "అ": "a",
@@ -234,6 +252,17 @@ function hasMeaningfulField(
   return args[field] !== undefined && args[field] !== null;
 }
 
+function selectToolFields(
+  args: Record<string, unknown>,
+  fields: readonly string[],
+) {
+  const selected: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (Object.hasOwn(args, field)) selected[field] = args[field];
+  }
+  return selected;
+}
+
 /**
  * Converts provider Telugu-script ASR into the same simple English-letter
  * spelling used throughout Practice Live. This is a mechanical script
@@ -306,8 +335,12 @@ function cleanInternalTelugu(value: unknown) {
 }
 
 function sourceLanguage(value: unknown): LiveTranscriptSource | null {
-  return value === "telugu" || value === "english" || value === "mixed"
-    ? value
+  const normalized =
+    typeof value === "string" ? value.trim().toLocaleLowerCase("en-US") : "";
+  return normalized === "telugu" ||
+    normalized === "english" ||
+    normalized === "mixed"
+    ? normalized
     : null;
 }
 
@@ -387,7 +420,7 @@ export function hasKnownLearnerMeaningMismatch(
 
 /** Rejects two provider mistakes observed in the reviewed family dialogue. */
 export function hasKnownMayuMeaningMismatch(turn: ParsedLiveCaptionTurn) {
-  if (/\bavunnaa\b/iu.test(turn.roman)) return true;
+  if (/\b(?:avunnaa|deenigaa)\b/iu.test(turn.roman)) return true;
 
   return (
     /\bwhat would you like to eat\b/iu.test(turn.english) &&
@@ -432,10 +465,20 @@ export function parseLiveMayuTurnToolCall(
     return null;
   }
 
-  const hasCueId = hasMeaningfulField(args, "cueId");
+  const hasCueId =
+    hasMeaningfulField(args, "cueId") ||
+    hasMeaningfulField(args, "reviewedCueId");
+  if (
+    hasMeaningfulField(args, "cueId") &&
+    hasMeaningfulField(args, "reviewedCueId") &&
+    args.cueId !== args.reviewedCueId
+  ) {
+    return null;
+  }
+  const cueIdValue = args.cueId ?? args.reviewedCueId;
   const rawCueId =
-    typeof args.cueId === "string" && args.cueId.trim()
-      ? args.cueId.trim()
+    typeof cueIdValue === "string" && cueIdValue.trim()
+      ? cueIdValue.trim()
       : undefined;
   if (hasCueId && !rawCueId) return null;
 
@@ -486,6 +529,33 @@ export function parseLiveLearnerCaption(
 }
 
 /**
+ * Parses the split present_turn payload. Mayu's complete turn is required,
+ * while a learner caption is independently optional. Assessment fields belong
+ * to the independent audio-assessment request and are rejected here so missing
+ * or late scoring can never invalidate an otherwise safe visible caption.
+ */
+export function parseLivePresentedTurnToolCall(
+  value: unknown,
+): ParsedLivePresentedTurnToolCall | null {
+  const mayuTurn = parseLiveMayuTurnToolCall(value);
+  if (!mayuTurn || !value || typeof value !== "object") return null;
+  const args = value as Record<string, unknown>;
+  if (
+    Object.keys(args).some((field) => !PRESENTED_TURN_TOOL_FIELDS.has(field))
+  ) {
+    return null;
+  }
+
+  const hasAnyLearnerCaption = LEARNER_CAPTION_FIELDS.some((field) =>
+    hasMeaningfulField(args, field),
+  );
+  if (!hasAnyLearnerCaption) return { ...mayuTurn, learner: null };
+
+  const learner = parseLiveLearnerCaption(args);
+  return learner ? { ...mayuTurn, learner } : null;
+}
+
+/**
  * Parses only audio-derived scoring evidence. Display enrichment is kept
  * independent so an omitted pronunciation guide or caption cannot erase
  * otherwise valid pronunciation and accuracy ratings.
@@ -495,6 +565,11 @@ export function parseLiveLearnerAssessment(
 ): LiveLearnerAssessment | null {
   if (!value || typeof value !== "object") return null;
   const args = value as Record<string, unknown>;
+  if (
+    Object.keys(args).some((field) => !ASSESS_LEARNER_TOOL_FIELDS.has(field))
+  ) {
+    return null;
+  }
   const learnerSourceLanguage = sourceLanguage(args.learnerSourceLanguage);
   const learnerAssessmentConfidence = assessmentConfidence(
     args.learnerAssessmentConfidence,
@@ -511,10 +586,7 @@ export function parseLiveLearnerAssessment(
     args.learnerTeluguCoverageRating,
   );
   const learnerFeedback = cleanLearnerFeedback(args.learnerFeedback);
-  const hasAnyLearnerField = LEARNER_FIELDS.some((field) =>
-    hasMeaningfulField(args, field),
-  );
-  const hasAnyLearnerCaption = LEARNER_CAPTION_FIELDS.some((field) =>
+  const hasAnyLearnerField = LEARNER_ASSESSMENT_FIELDS.some((field) =>
     hasMeaningfulField(args, field),
   );
   const hasAnyLearnerRating = LEARNER_RATING_FIELDS.some((field) =>
@@ -536,7 +608,12 @@ export function parseLiveLearnerAssessment(
   }
 
   if (learnerAssessmentConfidence === "low") {
-    if (hasAnyLearnerCaption || hasAnyLearnerRating) return null;
+    if (
+      hasMeaningfulField(args, "learnerSourceLanguage") ||
+      hasAnyLearnerRating
+    ) {
+      return null;
+    }
 
     return calibrateLiveLearnerAssessment({
       sourceLanguage: "telugu",
@@ -622,7 +699,9 @@ export function parseLiveTurnToolCall(
   );
   if (!hasAnyLearnerField) return { ...mayuTurn, learner: null };
 
-  const assessment = parseLiveLearnerAssessment(args);
+  const assessment = parseLiveLearnerAssessment(
+    selectToolFields(args, LEARNER_ASSESSMENT_FIELDS),
+  );
   if (!assessment) return null;
   if (assessment.confidence === "low") {
     return {
@@ -679,7 +758,7 @@ export function createLiveLearnerTranscriptFallback(
     teluguInternal: "",
     roman: roman || "Reply received",
     english: roman
-      ? "Automatic transcript from your microphone; English meaning unavailable."
+      ? "Automatic microphone transcript; it may be inaccurate and is unverified. English meaning unavailable."
       : "Your reply was heard, but a readable transcript was unavailable.",
   };
 }
@@ -778,21 +857,54 @@ export function applyLiveCaptionTurn(
   return next;
 }
 
+/**
+ * Attaches an asynchronous audio-assessment result to exactly one completed
+ * learner row. Pending provider ASR and Mayu rows are never made authoritative
+ * by an assessment response, and every unrelated row keeps its position and
+ * object identity.
+ */
+export function applyLiveLearnerAssessment(
+  turns: LiveTranscriptTurn[],
+  learnerTurnId: string,
+  assessment: LiveLearnerAssessment,
+) {
+  const index = turns.findIndex(
+    (turn) =>
+      turn.id === learnerTurnId && turn.speaker === "you" && turn.final,
+  );
+  if (index < 0 || turns[index].assessment === assessment) return turns;
+
+  const next = [...turns];
+  next[index] = { ...turns[index], assessment };
+  return next;
+}
+
 export function removePendingLiveTurns(turns: LiveTranscriptTurn[]) {
   return turns.filter((turn) => turn.final);
 }
 
 /**
- * Preserves a provider transcript when a session ends while the blocking
- * caption/assessment tool is still in flight. The words remain visible, but
- * the turn is explicitly unscored because no validated audio assessment
- * arrived before shutdown.
+ * Preserves a provider transcript only when a session ends, and marks every
+ * completed learner caption whose asynchronous assessment is still missing as
+ * explicitly unscored. Provider ASR remains provisional during the session.
  */
 export function finalizeLiveTranscriptForEnd(
   turns: LiveTranscriptTurn[],
 ) {
   return turns.flatMap((turn) => {
-    if (turn.final) return [turn];
+    if (turn.final) {
+      if (turn.speaker !== "you" || turn.assessment) return [turn];
+
+      return [
+        {
+          ...turn,
+          assessment: createUnscoredLiveLearnerCaption(
+            "The session ended before this reply could be assessed.",
+            "incomplete-assessment",
+          ).assessment,
+        },
+      ];
+    }
     if (turn.speaker !== "you" || !turn.provisionalRoman) return [];
 
     const fallback = createLiveLearnerTranscriptFallback(

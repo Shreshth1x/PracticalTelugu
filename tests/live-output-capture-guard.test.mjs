@@ -194,6 +194,19 @@ test("wires the output guard into every local voice path and microphone upload",
     startCaptureSource,
     /microphoneStreamOpenRef\.current = true;/,
   );
+  const forwardingGuardAt = startCaptureSource.indexOf(
+    "!shouldForwardLiveMicrophoneFrame({",
+  );
+  const uploadAt = startCaptureSource.indexOf("session.sendRealtimeInput({");
+  const assessmentCaptureAt = startCaptureSource.indexOf(
+    "appendLiveAssessmentAudio(learnerAssessmentAudioRef.current, pcm);",
+  );
+  assert.ok(forwardingGuardAt >= 0);
+  assert.ok(uploadAt > forwardingGuardAt);
+  assert.ok(
+    assessmentCaptureAt > uploadAt,
+    "assessment PCM is captured only after the frame passes the microphone forwarding guard",
+  );
   assert.match(
     hookSource,
     /session\.sendRealtimeInput\(\{ audioStreamEnd: true \}\);/,
@@ -206,7 +219,7 @@ test("wires the output guard into every local voice path and microphone upload",
   );
 });
 
-test("keeps natural transcript and scores independent from optional coaching metadata", async () => {
+test("keeps checked captions independent and finalizes only the latest presentation candidate", async () => {
   const hookSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
     "utf8",
@@ -214,27 +227,46 @@ test("keeps natural transcript and scores independent from optional coaching met
 
   assert.match(
     hookSource,
-    /const fullyParsed = parseLiveTurnToolCall\(call\.args\);/,
+    /const parsed = parseLivePresentedTurnToolCall\(call\.args\);/,
   );
   assert.match(
     hookSource,
-    /const parsed = fullyParsed \?\? parseLiveMayuTurnToolCall\(call\.args\);/,
+    /pendingPresentedTurnRef\.current = \{[\s\S]*learnerCaption,[\s\S]*isControlTurn/,
+    "pre-audio presentation revisions replace one private candidate",
   );
   assert.match(
     hookSource,
-    /parseLiveLearnerCaption\(call\.args\)/,
+    /if \(!needsLearnerCaption && parsed\.learner\)[\s\S]*No learner reply exists for this turn[\s\S]*FunctionResponseScheduling\.INTERRUPT[\s\S]*true/,
+    "Mayu cannot fabricate a learner reply before microphone input exists",
   );
   assert.match(
     hookSource,
-    /parseLiveLearnerAssessment\(call\.args\)/,
+    /audioParts\.length &&[\s\S]*pendingPresentedTurnRef\.current[\s\S]*finalizePendingPresentation\(\)/,
+    "the latest checked candidate becomes visible before buffered audio plays",
   );
   assert.match(
+    hookSource,
+    /mayuPresentationReadyRef\.current &&[\s\S]*learnerReplyWindowOpenedAtRef\.current === null[\s\S]*FunctionResponseScheduling\.SILENT/,
+    "post-audio continuation calls cannot create duplicate transcript turns",
+  );
+  assert.match(
+    hookSource,
+    /suppressNativeAudioUntilBoundaryRef\.current = true;[\s\S]*FunctionResponseScheduling\.SILENT/,
+    "audio following a duplicate post-playback tool call is suppressed to the turn boundary",
+  );
+  assert.doesNotMatch(
+    hookSource,
+    /PRACTICE-CONTROL TOOL-ONLY TURN|privateAssessmentTurnRef|learnerAssessmentQueueRef/,
+  );
+  assert.match(
+    hookSource,
+    /transcriptRef\.current = next;/,
+    "provider ASR stays private until a checked learner caption arrives",
+  );
+  assert.doesNotMatch(
     hookSource,
     /validLearnerCaption \?\? transcriptFallback/,
-  );
-  assert.match(
-    hookSource,
-    /assessment: learnerAssessment \?\? undefined/,
+    "an unstable provider transcript cannot become the active caption",
   );
   assert.match(
     hookSource,

@@ -20,6 +20,7 @@ import {
   getLiveOpeningCue,
   getLiveScenario,
 } from "../../../practice-live/live-scenarios.ts";
+import { createLiveAssessmentAccessToken } from "../assessment-config.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -321,17 +322,25 @@ export async function POST(request: Request) {
     }
 
     const voiceMode = voiceAuthorization.authorized ? "fish" : "gemini";
-    const voiceAccessToken =
+    const [voiceAccessToken, assessmentAccessToken] = await Promise.all([
       voiceMode === "fish"
-        ? await createFishVoiceAccessToken(
+        ? createFishVoiceAccessToken(
             familyVoice,
             clientIp,
             Date.parse(tokenExpiresAt),
           )
-        : undefined;
+        : Promise.resolve(undefined),
+      createLiveAssessmentAccessToken(
+        scenario.id,
+        relationship,
+        clientIp,
+        Date.parse(tokenExpiresAt),
+      ),
+    ]);
 
     return json({
       token: authToken.name,
+      assessmentAccessToken,
       model: LIVE_MODEL,
       config,
       voiceMode,
