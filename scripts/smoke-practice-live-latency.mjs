@@ -205,7 +205,7 @@ async function runSmoke(relationship, durationSeconds) {
                   validCueClaim,
               );
               const rejection = !parsed
-                ? "Provide every complete Mayu caption field. For judgeable learner input, include every learner caption/source field, confidence, one short coaching tip, and exactly the ratings required by the source: meaning only for English, four quality ratings for Telugu, or those four plus Telugu coverage for mixed. For low confidence, include only confidence low and feedback; omit learner captions, source, and every rating. Rate only the actual input and keep Telugu script out of learner-facing fields."
+                ? "Provide every complete Mayu caption field. Before a learner reply, set every required learner field to null. For judgeable learner input, include the safe caption/source fields, confidence, one short coaching tip, and the source-appropriate ratings; keep non-applicable fields null. For low confidence, set only confidence and feedback and keep all other learner fields null. Rate only the actual input and keep Telugu script out of learner-facing fields."
                 : hasForbiddenEnglish
                   ? "Remove every English interjection or copied-English word from the audible Telugu turn. Use a natural Telugu acknowledgment instead, then call present_turn again."
                   : hasKnownLearnerMismatch
@@ -270,7 +270,7 @@ async function runSmoke(relationship, durationSeconds) {
             followupSentAt = performance.now();
             session?.sendRealtimeInput({
               text:
-                "Smoke-test learner input: this reply was sent as text and was entirely in English: 'I ate, but I am still a little hungry.' In present_turn, set learnerSourceLanguage to english, learnerAssessmentConfidence to high, and learnerMeaningRating to 4. Omit learnerIntelligibilityRating, learnerPronunciationRating, learnerFormRating, and learnerTeluguCoverageRating because no Telugu audio was heard. Use these exact learner captions: learnerTeluguInternal 'తిన్నాను, కానీ నాకు ఇంకా ఆకలిగా ఉంది.', learnerRoman 'tinnaanu, kaanee naaku inkaa aakaligaa undi.', learnerPronunciation 'tin-NAA-noo, kaa-NEE naa-koo IN-kaa aa-kuh-lee-GAA oon-DEE.', and learnerEnglish 'I ate, but I am still a little hungry.' Continue naturally in Telugu without changing the locked relationship register.",
+                "Smoke-test learner input: this reply was sent as text and was entirely in English: 'I ate, but I am still a little hungry.' In present_turn, set learnerSourceLanguage to english, learnerAssessmentConfidence to high, and learnerMeaningRating to 4. Set learnerIntelligibilityRating, learnerPronunciationRating, learnerFormRating, and learnerTeluguCoverageRating to null because no Telugu audio was heard. Use these exact learner captions: learnerTeluguInternal 'తిన్నాను, కానీ నాకు ఇంకా ఆకలిగా ఉంది.', learnerRoman 'tinnaanu, kaanee naaku inkaa aakaligaa undi.', learnerPronunciation 'tin-NAA-noo, kaa-NEE naa-koo IN-kaa aa-kuh-lee-GAA oon-DEE.', and learnerEnglish 'I ate, but I am still a little hungry.' Continue naturally in Telugu without changing the locked relationship register.",
             });
           }
         },

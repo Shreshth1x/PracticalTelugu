@@ -567,6 +567,7 @@ function ConversationTranscript({
                       turn.assessment?.confidence === "low"
                       ? "Not scored"
                       : turn.speaker === "you" &&
+                          turn.sourceLanguage &&
                           turn.sourceLanguage !== "telugu"
                         ? "Telugu version"
                         : ""

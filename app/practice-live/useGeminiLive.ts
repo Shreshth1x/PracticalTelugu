@@ -8,6 +8,7 @@ import type {
 } from "@google/genai";
 import {
   findLivePhraseCue,
+  resolveLivePhraseCue,
   type LivePhraseCue,
 } from "./live-follow-along";
 import {
@@ -48,15 +49,18 @@ import {
   applyLiveCaptionTurn,
   applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
+  createLiveLearnerTranscriptFallback,
   createUnscoredLiveLearnerCaption,
+  finalizeLiveTranscriptForEnd,
   hasForbiddenAudibleEnglish,
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
+  parseLiveLearnerAssessment,
+  parseLiveLearnerCaption,
   parseLiveMayuTurnToolCall,
   parseLiveTurnToolCall,
-  removePendingLiveTurns,
   type LiveTranscriptTurn,
 } from "./live-transcript";
 import {
@@ -877,7 +881,7 @@ export function useGeminiLive(
               name: call.name,
               response: {
                 error:
-                  "Provide every complete Mayu caption field. For judgeable learner audio, include every learner caption/source field, confidence, one short coaching tip, and exactly the ratings required by the source: meaning only for English, four quality ratings for Telugu, or those four plus Telugu coverage for mixed. For low-confidence audio, include only confidence low and feedback; omit learner captions, source, and every rating. Rate only the actual audio and keep Telugu script out of learner-facing fields.",
+                  "Provide every complete Mayu caption field. Set every learner field to null before a learner reply. After judgeable audio, provide the safe learner caption/source fields, confidence, one short coaching tip, and the source-appropriate ratings. For low-confidence audio, set only confidence and feedback; keep all other learner fields null. Rate only the actual audio and keep Telugu script out of learner-facing fields.",
               },
             };
           }
@@ -968,17 +972,45 @@ export function useGeminiLive(
             learnerTurnStateRef.current,
             parsed.replay,
           );
+          const parsedLearnerCaption =
+            parseLiveLearnerCaption(call.args) ?? fullyParsed?.learner ?? null;
+          const parsedLearnerAssessment =
+            parseLiveLearnerAssessment(call.args) ??
+            fullyParsed?.learner?.assessment ??
+            null;
+          const reviewedLearnerCue = parsedLearnerCaption
+            ? resolveLivePhraseCue(
+                parsedLearnerCaption.teluguInternal ||
+                  parsedLearnerCaption.roman,
+                scenario.words,
+              )
+            : null;
           const validLearnerCaption =
-            fullyParsed?.learner &&
-            !hasKnownLearnerMeaningMismatch(fullyParsed.learner)
-              ? fullyParsed.learner
+            parsedLearnerCaption &&
+            !hasKnownLearnerMeaningMismatch(parsedLearnerCaption)
+              ? {
+                  ...parsedLearnerCaption,
+                  pronunciation:
+                    parsedLearnerCaption.pronunciation ??
+                    reviewedLearnerCue?.pronunciation,
+                }
               : null;
+          const providerTranscript = [...transcriptRef.current]
+            .reverse()
+            .find((turn) => turn.speaker === "you" && !turn.final)
+            ?.provisionalRoman;
+          const transcriptFallback = createLiveLearnerTranscriptFallback(
+            providerTranscript,
+          );
           const learnerCaption = needsLearnerCaption
-            ? validLearnerCaption ??
+            ? validLearnerCaption ?? transcriptFallback
+            : null;
+          const learnerAssessment = needsLearnerCaption
+            ? parsedLearnerAssessment ??
               createUnscoredLiveLearnerCaption(
                 "Keep the conversation going and try the next reply naturally.",
                 "incomplete-assessment",
-              )
+              ).assessment
             : null;
 
           const toolCallId =
@@ -1002,7 +1034,7 @@ export function useGeminiLive(
                 english: learnerCaption.english,
                 sourceLanguage: learnerCaption.sourceLanguage,
                 responseLatencyMs: learnerResponseLatencyMs,
-                assessment: learnerCaption.assessment,
+                assessment: learnerAssessment ?? undefined,
               });
             }
           }
@@ -1679,7 +1711,9 @@ export function useGeminiLive(
     clearTimer();
     mutedRef.current = false;
     setIsMuted(false);
-    const completedTranscript = removePendingLiveTurns(transcriptRef.current);
+    const completedTranscript = finalizeLiveTranscriptForEnd(
+      transcriptRef.current,
+    );
     const grade = gradeLiveSession(completedTranscript);
     commitTranscript(completedTranscript);
     elapsedRef.current = actualDurationSeconds;

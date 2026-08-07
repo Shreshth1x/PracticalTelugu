@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createLiveLearnerTranscriptFallback,
   createUnscoredLiveLearnerCaption,
+  finalizeLiveTranscriptForEnd,
   hasForbiddenAudibleEnglish,
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
+  parseLiveLearnerAssessment,
+  parseLiveLearnerCaption,
   parseLiveMayuTurnToolCall,
   parseLiveTurnToolCall,
 } from "../app/practice-live/live-transcript.ts";
@@ -38,6 +42,21 @@ const completeToolCall = {
   learnerFeedback: "Hold the long aa sound in tinnaanu.",
 };
 
+const nullLearnerFields = {
+  learnerTeluguInternal: null,
+  learnerRoman: null,
+  learnerPronunciation: null,
+  learnerEnglish: null,
+  learnerSourceLanguage: null,
+  learnerAssessmentConfidence: null,
+  learnerIntelligibilityRating: null,
+  learnerPronunciationRating: null,
+  learnerMeaningRating: null,
+  learnerFormRating: null,
+  learnerTeluguCoverageRating: null,
+  learnerFeedback: null,
+};
+
 test("retains native Telugu for internal validation without adding it to visible captions", () => {
   const parsed = parseLiveTurnToolCall(completeToolCall);
 
@@ -60,19 +79,25 @@ test("retains native Telugu for internal validation without adding it to visible
   });
 });
 
-test("requires complete judgeable Telugu captions, ratings, and coaching feedback", () => {
+test("treats the required all-null learner contract as an opening turn", () => {
+  const parsed = parseLiveTurnToolCall({
+    mayuTeluguInternal: completeToolCall.mayuTeluguInternal,
+    mayuRoman: completeToolCall.mayuRoman,
+    mayuPronunciation: completeToolCall.mayuPronunciation,
+    mayuEnglish: completeToolCall.mayuEnglish,
+    ...nullLearnerFields,
+  });
+
+  assert.equal(parsed?.learner, null);
+});
+
+test("requires safe core captions and independently preserves valid score dimensions", () => {
   const learnerFields = [
     "learnerTeluguInternal",
     "learnerRoman",
-    "learnerPronunciation",
     "learnerEnglish",
     "learnerSourceLanguage",
     "learnerAssessmentConfidence",
-    "learnerIntelligibilityRating",
-    "learnerPronunciationRating",
-    "learnerMeaningRating",
-    "learnerFormRating",
-    "learnerFeedback",
   ];
 
   for (const missingField of learnerFields) {
@@ -83,6 +108,19 @@ test("requires complete judgeable Telugu captions, ratings, and coaching feedbac
       null,
       `accepted learner caption without ${missingField}`,
     );
+  }
+
+  for (const [missingField, missingMetric, preservedMetric] of [
+    ["learnerIntelligibilityRating", "pronunciationScore", "accuracyScore"],
+    ["learnerPronunciationRating", "pronunciationScore", "accuracyScore"],
+    ["learnerMeaningRating", "accuracyScore", "pronunciationScore"],
+    ["learnerFormRating", "accuracyScore", "pronunciationScore"],
+  ]) {
+    const partial = { ...completeToolCall };
+    delete partial[missingField];
+    const parsed = parseLiveTurnToolCall(partial);
+    assert.equal(parsed?.learner?.assessment[missingMetric], null);
+    assert.notEqual(parsed?.learner?.assessment[preservedMetric], null);
   }
 
   assert.equal(
@@ -120,7 +158,7 @@ test("requires complete judgeable Telugu captions, ratings, and coaching feedbac
     "learnerFormRating",
   ];
   for (const ratingField of ratingFields) {
-    for (const invalidRating of [-1, 5, 2.5, "4", null, Number.NaN]) {
+    for (const invalidRating of [-1, 5, 2.5, "4", Number.NaN]) {
       assert.equal(
         parseLiveTurnToolCall({
           ...completeToolCall,
@@ -157,19 +195,28 @@ test("requires complete judgeable Telugu captions, ratings, and coaching feedbac
     parseLiveTurnToolCall({
       ...completeToolCall,
       learnerFeedback: "తెలుగు script must stay private.",
-    }),
-    null,
+    })?.learner?.assessment.feedback,
+    "Keep the conversation going and try the next reply naturally.",
+    "unsafe optional coaching is replaced locally instead of erasing scores",
   );
 });
 
-test("keeps a valid Mayu response usable when optional learner coaching is malformed", () => {
+test("keeps transcript and scores when the optional pronunciation guide is missing", () => {
   const missingLearnerPronunciation = { ...completeToolCall };
   delete missingLearnerPronunciation.learnerPronunciation;
 
+  const recovered = parseLiveTurnToolCall(missingLearnerPronunciation);
+  assert.equal(recovered?.learner?.roman, "tinnaanu.");
+  assert.equal(recovered?.learner?.pronunciation, undefined);
+  assert.equal(recovered?.learner?.assessment.pronunciationScore, 94);
+  assert.equal(recovered?.learner?.assessment.accuracyScore, 100);
   assert.equal(
-    parseLiveTurnToolCall(missingLearnerPronunciation),
-    null,
-    "incomplete coaching must never be treated as an authoritative grade",
+    parseLiveLearnerCaption(missingLearnerPronunciation)?.roman,
+    "tinnaanu.",
+  );
+  assert.equal(
+    parseLiveLearnerAssessment(missingLearnerPronunciation)?.languageScore,
+    97,
   );
 
   const mayuTurn = parseLiveMayuTurnToolCall({
@@ -214,6 +261,44 @@ test("keeps a valid Mayu response usable when optional learner coaching is malfo
       },
     },
   );
+
+  assert.deepEqual(
+    createLiveLearnerTranscriptFallback("నీళ్లు ఇస్తారా?"),
+    {
+      teluguInternal: "",
+      roman: "neellu istaaraa?",
+      english:
+        "Automatic transcript from your microphone; English meaning unavailable.",
+    },
+  );
+});
+
+test("preserves the exact natural Telugu payload observed in live audio", () => {
+  const parsed = parseLiveTurnToolCall({
+    mayuTeluguInternal: "ఇగోండి నీళ్లు. ఇంకేమైనా కావాలా?",
+    mayuRoman: "eegodee neellu. inkaymainaa kaavaalaa?",
+    mayuPronunciation: "EE-go-DEE NEEL-loo. in-KAY-my-NAA KAA-vaa-LAA?",
+    mayuEnglish: "Here is water. Do you want anything else?",
+    learnerTeluguInternal: "నీళ్లు ఇస్తారా?",
+    learnerRoman: "neellu istaaraa?",
+    learnerPronunciation: null,
+    learnerEnglish: "Will you give water?",
+    learnerSourceLanguage: "telugu",
+    learnerAssessmentConfidence: "high",
+    learnerIntelligibilityRating: 4,
+    learnerPronunciationRating: 4,
+    learnerMeaningRating: 4,
+    learnerFormRating: 4,
+    learnerTeluguCoverageRating: null,
+    learnerFeedback:
+      "Good question! Try asking for water with neellu kaavaali next time.",
+  });
+
+  assert.equal(parsed?.learner?.roman, "neellu istaaraa?");
+  assert.equal(parsed?.learner?.pronunciation, undefined);
+  assert.equal(parsed?.learner?.assessment.pronunciationScore, 100);
+  assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
+  assert.equal(parsed?.learner?.assessment.languageScore, 100);
 });
 
 test("accepts all four ratings with medium-confidence Telugu audio", () => {
@@ -226,6 +311,74 @@ test("accepts all four ratings with medium-confidence Telugu audio", () => {
   assert.equal(parsed?.learner?.assessment.pronunciationScore, 94);
   assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
   assert.equal(parsed?.learner?.assessment.languageScore, 97);
+});
+
+test("keeps valid ratings scored when learner feedback is explicitly null", () => {
+  const parsed = parseLiveTurnToolCall({
+    ...completeToolCall,
+    learnerFeedback: null,
+  });
+
+  assert.equal(parsed?.learner?.assessment.pronunciationScore, 94);
+  assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
+  assert.equal(parsed?.learner?.assessment.languageScore, 97);
+  assert.equal(
+    parsed?.learner?.assessment.feedback,
+    "Keep the conversation going and try the next reply naturally.",
+    "nullable optional coaching must use the deterministic local fallback",
+  );
+});
+
+test("finalizes pending ASR as a visible unscored learner row at session end", () => {
+  const finalized = finalizeLiveTranscriptForEnd([
+    {
+      id: "you-pending",
+      speaker: "you",
+      roman: "",
+      provisionalRoman: "nenu baagunnaanu",
+      english: "",
+      final: false,
+    },
+  ]);
+
+  assert.equal(finalized.length, 1);
+  assert.equal(finalized[0].id, "you-pending");
+  assert.equal(finalized[0].speaker, "you");
+  assert.equal(finalized[0].final, true);
+  assert.equal(finalized[0].roman, "nenu baagunnaanu");
+  assert.equal(
+    finalized[0].english,
+    "Automatic transcript from your microphone; English meaning unavailable.",
+  );
+  assert.equal(finalized[0].provisionalRoman, undefined);
+  assert.deepEqual(finalized[0].assessment, {
+    pronunciationScore: null,
+    accuracyScore: null,
+    languageScore: null,
+    confidence: "low",
+    ratings: {
+      intelligibility: null,
+      pronunciation: null,
+      meaning: null,
+      form: null,
+      teluguCoverage: null,
+    },
+    feedback: "The session ended before this reply could be assessed.",
+  });
+
+  assert.deepEqual(
+    finalizeLiveTranscriptForEnd([
+      {
+        id: "you-empty",
+        speaker: "you",
+        roman: "",
+        english: "",
+        final: false,
+      },
+    ]),
+    [],
+    "an empty pending placeholder still disappears at session end",
+  );
 });
 
 test("requires only meaning and locally caps an entirely English reply", () => {
@@ -251,12 +404,10 @@ test("requires only meaning and locally caps an entirely English reply", () => {
   for (const requiredField of [
     "learnerTeluguInternal",
     "learnerRoman",
-    "learnerPronunciation",
     "learnerEnglish",
     "learnerSourceLanguage",
     "learnerAssessmentConfidence",
     "learnerMeaningRating",
-    "learnerFeedback",
   ]) {
     const missingField = { ...englishReply };
     delete missingField[requiredField];
@@ -287,7 +438,7 @@ test("requires only meaning and locally caps an entirely English reply", () => {
   assert.equal(parseLiveTurnToolCall(englishReply), null);
 });
 
-test("requires all four quality ratings plus Telugu coverage for mixed audio", () => {
+test("keeps safe partial mixed scores and requires coverage for accuracy", () => {
   const mixedReply = {
     ...completeToolCall,
     learnerSourceLanguage: "mixed",
@@ -300,23 +451,37 @@ test("requires all four quality ratings plus Telugu coverage for mixed audio", (
   assert.equal(parsed?.learner?.assessment.languageScore, 70);
   assert.equal(parsed?.learner?.assessment.ratings.teluguCoverage, 2);
 
-  for (const requiredRating of [
-    "learnerIntelligibilityRating",
-    "learnerPronunciationRating",
-    "learnerMeaningRating",
-    "learnerFormRating",
-  ]) {
-    const missingRating = { ...mixedReply };
-    delete missingRating[requiredRating];
-    assert.equal(
-      parseLiveTurnToolCall(missingRating),
-      null,
-      `mixed audio must require ${requiredRating}`,
-    );
-  }
+  const missingPronunciationRating = { ...mixedReply };
+  delete missingPronunciationRating.learnerPronunciationRating;
+  assert.equal(
+    parseLiveTurnToolCall(missingPronunciationRating)?.learner?.assessment
+      .pronunciationScore,
+    null,
+  );
+  assert.equal(
+    parseLiveTurnToolCall(missingPronunciationRating)?.learner?.assessment
+      .accuracyScore,
+    70,
+  );
+
+  const missingMeaningRating = { ...mixedReply };
+  delete missingMeaningRating.learnerMeaningRating;
+  assert.equal(
+    parseLiveTurnToolCall(missingMeaningRating)?.learner?.assessment
+      .pronunciationScore,
+    94,
+  );
+  assert.equal(
+    parseLiveTurnToolCall(missingMeaningRating)?.learner?.assessment
+      .accuracyScore,
+    null,
+  );
 
   delete mixedReply.learnerTeluguCoverageRating;
-  assert.equal(parseLiveTurnToolCall(mixedReply), null);
+  const withoutCoverage = parseLiveTurnToolCall(mixedReply);
+  assert.equal(withoutCoverage?.learner?.assessment.pronunciationScore, 94);
+  assert.equal(withoutCoverage?.learner?.assessment.accuracyScore, null);
+  assert.equal(withoutCoverage?.learner?.assessment.languageScore, null);
 
   assert.equal(
     parseLiveTurnToolCall({
@@ -327,7 +492,7 @@ test("requires all four quality ratings plus Telugu coverage for mixed audio", (
     "zero Telugu coverage must use the English source contract",
   );
 
-  for (const invalidRating of [-1, 5, 2.5, "2", null, Number.NaN]) {
+  for (const invalidRating of [-1, 5, 2.5, "2", Number.NaN]) {
     assert.equal(
       parseLiveTurnToolCall({
         ...mixedReply,
@@ -345,6 +510,7 @@ test("accepts only a captionless abstention when audio confidence is low", () =>
     mayuRoman: completeToolCall.mayuRoman,
     mayuPronunciation: completeToolCall.mayuPronunciation,
     mayuEnglish: completeToolCall.mayuEnglish,
+    ...nullLearnerFields,
     learnerAssessmentConfidence: "low",
     learnerFeedback: "Please repeat once at a comfortable volume.",
   };
@@ -414,7 +580,11 @@ test("accepts only a captionless abstention when audio confidence is low", () =>
 
   const missingFeedback = { ...lowConfidenceReply };
   delete missingFeedback.learnerFeedback;
-  assert.equal(parseLiveTurnToolCall(missingFeedback), null);
+  assert.equal(
+    parseLiveTurnToolCall(missingFeedback)?.learner?.assessment.feedback,
+    "Please try that reply once more at a comfortable pace.",
+    "missing optional coaching uses the safe low-confidence fallback",
+  );
 });
 
 test("rejects a malformed cueId instead of silently treating it as omitted", () => {

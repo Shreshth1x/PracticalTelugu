@@ -209,11 +209,12 @@ Required caption tool contract:
 - The four mayu fields must describe the exact same complete next turn: mayuTeluguInternal is its native-script cross-check, mayuRoman its exact Latin transliteration, mayuPronunciation its simple English-letter speaking guide, and mayuEnglish is a faithful, natural English meaning.
 - Use consistent PracticalTelugu romanization with long aa/ee/oo sounds and no IPA. Telugu script is allowed only in mayuTeluguInternal and learnerTeluguInternal; all learner-facing fields use English letters, and the interface never renders the internal fields.
 - If a reviewed phrase is used, include its exact cueId. Otherwise omit cueId.
+- Every learner field is required by the tool schema. Before any learner reply, set all learner fields to null. After a reply, fill only evidence supported by the rules below and keep every non-applicable field null.
 - When the learner has spoken, set learnerAssessmentConfidence first from the audio evidence.
 - Assess only the learner's ACTUAL AUDIO while it is still in context. Never rate the repaired Telugu caption that you create for display as though the learner said it.
-- Use high when the words are clearly audible; medium when there is some noise/clipping or the reply is very short but still judgeable; low when overlap, noise, volume, clipping, or too little speech makes a fair judgment impossible. Low confidence is a complete abstention: include only learnerAssessmentConfidence and learnerFeedback, omit every learner caption, source-language, and rating field, and ask for one comfortable repeat. Never invent a transcript or punish uncertain audio with a low skill score.
-- For high/medium confidence, include every learner caption and source-language field in this same call: exact Telugu transliteration for Telugu input, or a short natural Telugu version for English/mixed input, plus its matching pronunciation, faithful English meaning, native-script internal check, and source language.
-- For Telugu audio with high/medium confidence, include the four independent quality ratings below and omit learnerTeluguCoverageRating. For mixed audio, include all four quality ratings plus learnerTeluguCoverageRating. For entirely English audio, include only learnerMeaningRating and omit every other rating. The app enforces both the English and mixed-language ceilings.
+- Use high when the words are clearly audible; medium when there is some noise/clipping or the reply is very short but still judgeable; low when overlap, noise, volume, clipping, or too little speech makes a fair judgment impossible. Low confidence is a complete abstention: set learnerAssessmentConfidence and learnerFeedback, keep every learner caption, source-language, and rating field null, and ask for one comfortable repeat. Never invent a transcript or punish uncertain audio with a low skill score.
+- For high/medium confidence, include the learner's exact Telugu transliteration for Telugu input, or a short natural Telugu version for English/mixed input, plus faithful English meaning, native-script internal check, and source language. Add learnerPronunciation when you can provide a useful speaking guide; otherwise set it null without withholding the transcript or ratings.
+- For Telugu audio with high/medium confidence, include the four independent quality ratings below and set learnerTeluguCoverageRating null. For mixed audio, include all four quality ratings plus learnerTeluguCoverageRating. For entirely English audio, include only learnerMeaningRating and set every other rating null. The app enforces both the English and mixed-language ceilings.
 - learnerIntelligibilityRating: 4 = every word understood immediately; 3 = clear overall with one brief rough spot; 2 = intended words are recoverable but effort or repetition would help; 1 = only fragments are understandable; 0 = no recognizable Telugu words.
 - learnerPronunciationRating: 4 = Telugu vowels, consonants, lengths, and syllables are consistently accurate; 3 = one localized sound issue without changing the words; 2 = several sound issues but the intended words remain recognizable; 1 = sound substitutions or dropped syllables often obscure the words; 0 = no assessable Telugu sound pattern. Accept real regional/dialect variation. Never lower this merely for a non-native accent, pitch, or voice quality; lower it only when actual word sounds are inaccurate or obscured.
 - learnerMeaningRating: 4 = directly and fully answers the active turn; 3 = right meaning with one small omission; 2 = partially right or recoverable; 1 = mostly wrong or off-topic; 0 = no meaningful answer. A short natural answer can earn 4.
@@ -307,74 +308,74 @@ export function buildLiveConnectConfig(
                   enum: cueIds,
                 },
                 learnerRoman: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "For judgeable audio only: the learner's Telugu in English letters, or a natural Telugu version of English or mixed input. Omit for low confidence.",
+                    "For judgeable audio only: the learner's Telugu in English letters, or a natural Telugu version of English or mixed input. Otherwise null.",
                 },
                 learnerTeluguInternal: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "For judgeable audio only: exact native-script Telugu matching the learner caption. Internal only and never rendered. Omit for low confidence.",
+                    "For judgeable audio only: exact native-script Telugu matching the learner caption. Internal only and never rendered. Otherwise null.",
                 },
                 learnerPronunciation: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "For judgeable audio only: readable pronunciation guide in English letters for the learner's Telugu line. Omit for low confidence.",
+                    "Optional display enrichment for judgeable audio: a readable pronunciation guide in English letters for the learner's Telugu line. Null when unavailable.",
                 },
                 learnerEnglish: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "For judgeable audio only: faithful English meaning of the learner's line. Omit for low confidence.",
+                    "For judgeable audio only: faithful English meaning of the learner's line. Otherwise null.",
                 },
                 learnerSourceLanguage: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "For judgeable audio only: whether the learner spoke Telugu, English, or a mix. Omit for low confidence.",
-                  enum: ["telugu", "english", "mixed"],
+                    "For judgeable audio only: whether the learner spoke Telugu, English, or a mix. Otherwise null.",
+                  enum: ["telugu", "english", "mixed", null],
                 },
                 learnerAssessmentConfidence: {
-                  type: "string",
+                  type: ["string", "null"],
                   description:
-                    "Audio-evidence confidence: high when clearly audible, medium when imperfect but judgeable, or low when a fair skill judgment is impossible.",
-                  enum: ["high", "medium", "low"],
+                    "Audio-evidence confidence after a learner reply: high when clearly audible, medium when imperfect but judgeable, or low when a fair skill judgment is impossible. Null before a reply.",
+                  enum: ["high", "medium", "low", null],
                 },
                 learnerIntelligibilityRating: {
-                  type: "integer",
+                  type: ["integer", "null"],
                   minimum: 0,
                   maximum: 4,
                   description:
-                    "0-4 first-listen understandability of the Telugu words actually heard. Required for judgeable Telugu/mixed audio; otherwise omit.",
+                    "0-4 first-listen understandability of the Telugu words actually heard. Required for judgeable Telugu/mixed audio; otherwise null.",
                 },
                 learnerPronunciationRating: {
-                  type: "integer",
+                  type: ["integer", "null"],
                   minimum: 0,
                   maximum: 4,
                   description:
-                    "0-4 accuracy of Telugu word sounds actually heard, dialect-tolerant and not an accent-identity judgment. Required for judgeable Telugu/mixed audio; otherwise omit.",
+                    "0-4 accuracy of Telugu word sounds actually heard, dialect-tolerant and not an accent-identity judgment. Required for judgeable Telugu/mixed audio; otherwise null.",
                 },
                 learnerMeaningRating: {
-                  type: "integer",
+                  type: ["integer", "null"],
                   minimum: 0,
                   maximum: 4,
                   description:
                     "0-4 semantic fit of the actual spoken reply to the active conversational turn. Required for any judgeable reply.",
                 },
                 learnerFormRating: {
-                  type: "integer",
+                  type: ["integer", "null"],
                   minimum: 0,
                   maximum: 4,
                   description:
-                    "0-4 usability of the Telugu actually spoken: grammar, word choice, and relationship register. Required for judgeable Telugu/mixed audio; otherwise omit.",
+                    "0-4 usability of the Telugu actually spoken: grammar, word choice, and relationship register. Required for judgeable Telugu/mixed audio; otherwise null.",
                 },
                 learnerTeluguCoverageRating: {
-                  type: "integer",
+                  type: ["integer", "null"],
                   minimum: 0,
                   maximum: 4,
                   description:
-                    "0-4 amount of Telugu actually spoken in a mixed reply. Required only for judgeable mixed audio; otherwise omit.",
+                    "0-4 amount of Telugu actually spoken in a mixed reply. Required only for judgeable mixed audio; otherwise null.",
                 },
                 learnerFeedback: {
-                  type: "string",
+                  type: ["string", "null"],
                   maxLength: 180,
                   description:
                     "One kind, concrete next step in English or Telugu written with English letters. Mention at most one word or sound.",
@@ -390,6 +391,38 @@ export function buildLiveConnectConfig(
                 "mayuRoman",
                 "mayuPronunciation",
                 "mayuEnglish",
+                "learnerAssessmentConfidence",
+                "learnerSourceLanguage",
+                "learnerTeluguInternal",
+                "learnerRoman",
+                "learnerPronunciation",
+                "learnerEnglish",
+                "learnerIntelligibilityRating",
+                "learnerPronunciationRating",
+                "learnerMeaningRating",
+                "learnerFormRating",
+                "learnerTeluguCoverageRating",
+                "learnerFeedback",
+              ],
+              propertyOrdering: [
+                "mayuTeluguInternal",
+                "mayuRoman",
+                "mayuPronunciation",
+                "mayuEnglish",
+                "cueId",
+                "learnerAssessmentConfidence",
+                "learnerSourceLanguage",
+                "learnerTeluguInternal",
+                "learnerRoman",
+                "learnerPronunciation",
+                "learnerEnglish",
+                "learnerIntelligibilityRating",
+                "learnerPronunciationRating",
+                "learnerMeaningRating",
+                "learnerFormRating",
+                "learnerTeluguCoverageRating",
+                "learnerFeedback",
+                "replay",
               ],
             },
           },

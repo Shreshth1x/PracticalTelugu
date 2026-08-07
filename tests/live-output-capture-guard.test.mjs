@@ -206,7 +206,7 @@ test("wires the output guard into every local voice path and microphone upload",
   );
 });
 
-test("keeps natural audio conversation moving when coaching metadata is incomplete", async () => {
+test("keeps natural transcript and scores independent from optional coaching metadata", async () => {
   const hookSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
     "utf8",
@@ -222,11 +222,45 @@ test("keeps natural audio conversation moving when coaching metadata is incomple
   );
   assert.match(
     hookSource,
-    /validLearnerCaption \?\?\s*createUnscoredLiveLearnerCaption\(/,
+    /parseLiveLearnerCaption\(call\.args\)/,
+  );
+  assert.match(
+    hookSource,
+    /parseLiveLearnerAssessment\(call\.args\)/,
+  );
+  assert.match(
+    hookSource,
+    /validLearnerCaption \?\? transcriptFallback/,
+  );
+  assert.match(
+    hookSource,
+    /assessment: learnerAssessment \?\? undefined/,
   );
   assert.match(
     hookSource,
     /if \(finalInput\.finished !== false\)/,
     "inputTranscription without an explicit false finished flag is final",
+  );
+});
+
+test("uses pending-ASR finalization when ending a live session", async () => {
+  const hookSource = await readFile(
+    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+    "utf8",
+  );
+  const endStart = hookSource.indexOf("const end = useCallback");
+  const endEnd = hookSource.indexOf("const reset = useCallback", endStart);
+
+  assert.ok(endStart >= 0 && endEnd > endStart);
+  const endSource = hookSource.slice(endStart, endEnd);
+  assert.match(
+    endSource,
+    /const completedTranscript = finalizeLiveTranscriptForEnd\(\s*transcriptRef\.current,?\s*\);/,
+    "session end must preserve a safe final ASR transcript while marking it unscored",
+  );
+  assert.doesNotMatch(
+    endSource,
+    /removePendingLiveTurns/,
+    "session end must not discard every in-flight learner row",
   );
 });

@@ -245,15 +245,19 @@ test("replaces a private learner placeholder with the paired visible caption", (
   assert.equal(removePendingLiveTurns(withPending).length, 1);
 });
 
-test("keeps provisional ASR Latin-only, disposable, and on one pending row", () => {
+test("transliterates Telugu ASR into a disposable English-letter live draft", () => {
   assert.equal(
     sanitizeLiveProvisionalTranscript("  nenu   baagunnaanu?  "),
     "nenu baagunnaanu?",
   );
   assert.equal(
     sanitizeLiveProvisionalTranscript("nenu బాగున్నాను"),
-    "",
-    "mixed Telugu script is rejected in full",
+    "nenu baagunnaanu",
+    "mixed Telugu and Latin input stays readable without exposing script",
+  );
+  assert.equal(
+    sanitizeLiveProvisionalTranscript("నీళ్లు ఇస్తారా?"),
+    "neellu istaaraa?",
   );
   assert.equal(
     sanitizeLiveProvisionalTranscript("привет"),
@@ -277,7 +281,7 @@ test("keeps provisional ASR Latin-only, disposable, and on one pending row", () 
 
   turns = applyProvisionalLearnerTranscript(turns, "నేను బాగున్నాను");
   assert.equal(turns.length, 1);
-  assert.equal(turns[0].provisionalRoman, undefined);
+  assert.equal(turns[0].provisionalRoman, "neenu baagunnaanu");
 
   turns = applyProvisionalLearnerTranscript(turns, "nenu baagunnaanu");
   turns = applyLiveCaptionTurn(turns, {
@@ -369,6 +373,18 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     "mayuRoman",
     "mayuPronunciation",
     "mayuEnglish",
+    "learnerAssessmentConfidence",
+    "learnerSourceLanguage",
+    "learnerTeluguInternal",
+    "learnerRoman",
+    "learnerPronunciation",
+    "learnerEnglish",
+    "learnerIntelligibilityRating",
+    "learnerPronunciationRating",
+    "learnerMeaningRating",
+    "learnerFormRating",
+    "learnerTeluguCoverageRating",
+    "learnerFeedback",
   ]);
   assert.deepEqual(
     schema?.properties?.cueId?.enum,
@@ -378,11 +394,13 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     "telugu",
     "english",
     "mixed",
+    null,
   ]);
   assert.deepEqual(schema?.properties?.learnerAssessmentConfidence?.enum, [
     "high",
     "medium",
     "low",
+    null,
   ]);
   for (const ratingField of [
     "learnerIntelligibilityRating",
@@ -391,11 +409,19 @@ test("configures low-latency Telugu Live audio and one blocking caption tool", (
     "learnerFormRating",
     "learnerTeluguCoverageRating",
   ]) {
-    assert.equal(schema?.properties?.[ratingField]?.type, "integer", ratingField);
+    assert.deepEqual(
+      schema?.properties?.[ratingField]?.type,
+      ["integer", "null"],
+      ratingField,
+    );
     assert.equal(schema?.properties?.[ratingField]?.minimum, 0, ratingField);
     assert.equal(schema?.properties?.[ratingField]?.maximum, 4, ratingField);
   }
   assert.equal(schema?.properties?.learnerAccuracyRating, undefined);
+  assert.deepEqual(schema?.properties?.learnerPronunciation?.type, [
+    "string",
+    "null",
+  ]);
   assert.equal(schema?.properties?.learnerFeedback?.maxLength, 180);
   assert.match(String(config.systemInstruction), /present_turn/);
   assert.match(
@@ -441,7 +467,7 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
   );
   assert.match(
     instruction,
-    /Low confidence.{0,500}omit.{0,300}(?:caption|learnerRoman)/is,
+    /Low confidence.{0,500}keep every learner caption.{0,300}null/is,
   );
   assert.match(
     instruction,

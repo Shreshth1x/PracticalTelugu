@@ -359,9 +359,9 @@ test("keeps Live retry guidance compatible with honest audio abstention", async 
   assert.match(liveConfigSource, /fair judgment impossible/);
   assert.match(
     liveConfigSource,
-    /include only learnerAssessmentConfidence and learnerFeedback/,
+    /set learnerAssessmentConfidence and learnerFeedback/,
   );
-  assert.match(liveConfigSource, /omit every learner caption/);
+  assert.match(liveConfigSource, /keep every learner caption.*null/);
 });
 
 test("retries private voice authorization and renders early ASR safely", async () => {
