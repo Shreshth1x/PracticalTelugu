@@ -351,17 +351,17 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
 });
 
 test("keeps Live retry guidance compatible with honest audio abstention", async () => {
-  const liveClientSource = await readFile(
-    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+  const liveConfigSource = await readFile(
+    new URL("../app/practice-live/live-config.ts", import.meta.url),
     "utf8",
   );
 
-  assert.match(liveClientSource, /If the audio cannot be judged fairly/);
+  assert.match(liveConfigSource, /fair judgment impossible/);
   assert.match(
-    liveClientSource,
-    /include only learnerAssessmentConfidence low and learnerFeedback/,
+    liveConfigSource,
+    /include only learnerAssessmentConfidence and learnerFeedback/,
   );
-  assert.match(liveClientSource, /omit every other learner field/);
+  assert.match(liveConfigSource, /omit every learner caption/);
 });
 
 test("retries private voice authorization and renders early ASR safely", async () => {
@@ -386,7 +386,7 @@ test("retries private voice authorization and renders early ASR safely", async (
   );
   assert.match(
     liveClientSource,
-    /finalInput\.finished === true[\s\S]*applyLearnerTranscriptDraft\(finalInput\.text\)/,
+    /finalInput\.finished !== false[\s\S]*applyLearnerTranscriptDraft\(finalInput\.text\)/,
   );
 });
 

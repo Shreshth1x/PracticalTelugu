@@ -48,11 +48,13 @@ import {
   applyLiveCaptionTurn,
   applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
+  createUnscoredLiveLearnerCaption,
   hasForbiddenAudibleEnglish,
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
+  parseLiveMayuTurnToolCall,
   parseLiveTurnToolCall,
   removePendingLiveTurns,
   type LiveTranscriptTurn,
@@ -379,6 +381,7 @@ export function useGeminiLive(
   const pendingLearnerResponseLatencyMsRef = useRef<number | null>(null);
   const learnerTurnsRef = useRef(0);
   const learnerTurnStateRef = useRef(createLearnerTurnState());
+  const microphoneStreamOpenRef = useRef(false);
   const transcriptRef = useRef<LiveTranscriptTurn[]>([]);
   const activeTurnRef = useRef<LiveTranscriptTurn | null>(null);
   const toolTurnIdsRef = useRef(new Map<string, string>());
@@ -429,6 +432,15 @@ export function useGeminiLive(
     deadlineCheckRef.current = () => undefined;
   }, []);
 
+  const endMicrophoneStream = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session || !microphoneStreamOpenRef.current) return false;
+
+    microphoneStreamOpenRef.current = false;
+    session.sendRealtimeInput({ audioStreamEnd: true });
+    return true;
+  }, []);
+
   const stopPlayback = useCallback(() => {
     fishSpeechControllerRef.current?.cancel();
     fishSpeechControllerRef.current = null;
@@ -468,6 +480,7 @@ export function useGeminiLive(
 
     const session = sessionRef.current;
     sessionRef.current = null;
+    microphoneStreamOpenRef.current = false;
     if (session) {
       try {
         session.close();
@@ -639,6 +652,10 @@ export function useGeminiLive(
       if (!context || context.state === "closed") return;
       if (!samples.length) return;
 
+      // Playback pauses microphone uploads for longer than a second. Close the
+      // current Live audio stream before that gap so Gemini flushes any cached
+      // input; a later PCM frame starts a fresh stream automatically.
+      endMicrophoneStream();
       getOutputCaptureGuard().beginOutput();
       setMicLevel(0);
 
@@ -683,7 +700,12 @@ export function useGeminiLive(
       void context.resume();
       source.start(startAt);
     },
-    [getOutputCaptureGuard, settleAssistantPlayback, updatePhase],
+    [
+      endMicrophoneStream,
+      getOutputCaptureGuard,
+      settleAssistantPlayback,
+      updatePhase,
+    ],
   );
 
   const playAudio = useCallback(
@@ -847,7 +869,8 @@ export function useGeminiLive(
             };
           }
 
-          const parsed = parseLiveTurnToolCall(call.args);
+          const fullyParsed = parseLiveTurnToolCall(call.args);
+          const parsed = fullyParsed ?? parseLiveMayuTurnToolCall(call.args);
           if (!parsed) {
             return {
               id: call.id,
@@ -893,20 +916,6 @@ export function useGeminiLive(
               response: {
                 error:
                   "The hunger follow-up uses the wrong listener relationship. Use tintaavaa for someone close or tintaaraa for an elder or someone new, matching the locked session, then call present_turn again.",
-              },
-            };
-          }
-
-          if (
-            parsed.learner &&
-            hasKnownLearnerMeaningMismatch(parsed.learner)
-          ) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "For a learner meaning that says hungry, use ఆకలి / aakali, such as naaku inkaa aakaligaa undi. Never use pasi or pasigaa for hunger. Correct every learner field and call present_turn again.",
               },
             };
           }
@@ -959,26 +968,18 @@ export function useGeminiLive(
             learnerTurnStateRef.current,
             parsed.replay,
           );
-          if (needsLearnerCaption && !parsed.learner) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "For judgeable audio, include the complete learner captions, source, required ratings, confidence, and feedback. If the audio cannot be judged fairly, include only learnerAssessmentConfidence low and learnerFeedback, omit every other learner field, and ask for a repeat.",
-              },
-            };
-          }
-          if (!needsLearnerCaption && parsed.learner) {
-            return {
-              id: call.id,
-              name: call.name,
-              response: {
-                error:
-                  "No learner reply is pending for this turn. Omit every learner field and call present_turn again.",
-              },
-            };
-          }
+          const validLearnerCaption =
+            fullyParsed?.learner &&
+            !hasKnownLearnerMeaningMismatch(fullyParsed.learner)
+              ? fullyParsed.learner
+              : null;
+          const learnerCaption = needsLearnerCaption
+            ? validLearnerCaption ??
+              createUnscoredLiveLearnerCaption(
+                "Keep the conversation going and try the next reply naturally.",
+                "incomplete-assessment",
+              )
+            : null;
 
           const toolCallId =
             call.id ??
@@ -988,7 +989,7 @@ export function useGeminiLive(
             pendingLearnerResponseLatencyMsRef.current ?? undefined;
           let next = transcriptRef.current;
 
-          if (!parsed.replay && parsed.learner) {
+          if (!parsed.replay && learnerCaption) {
             const learnerEffects = applyLearnerTurnEvent({
               type: "learner-caption",
             });
@@ -996,12 +997,12 @@ export function useGeminiLive(
               next = applyLiveCaptionTurn(next, {
                 id: `${toolCallId}-learner`,
                 speaker: "you",
-                roman: parsed.learner.roman,
-                pronunciation: parsed.learner.pronunciation,
-                english: parsed.learner.english,
-                sourceLanguage: parsed.learner.sourceLanguage,
+                roman: learnerCaption.roman,
+                pronunciation: learnerCaption.pronunciation,
+                english: learnerCaption.english,
+                sourceLanguage: learnerCaption.sourceLanguage,
                 responseLatencyMs: learnerResponseLatencyMs,
-                assessment: parsed.learner.assessment,
+                assessment: learnerCaption.assessment,
               });
             }
           }
@@ -1094,7 +1095,10 @@ export function useGeminiLive(
       const finalInput = content.inputTranscription;
       if (finalInput?.text) {
         markLearnerResponseStarted();
-        if (finalInput.finished === true) {
+        // Gemini 3.1 currently omits `finished` on the final
+        // inputTranscription event. Only an explicit false is provisional;
+        // interimInputTranscription remains the low-latency draft channel.
+        if (finalInput.finished !== false) {
           applyLearnerTurnEvent({
             type: "final-transcription",
             text: finalInput.text,
@@ -1191,6 +1195,7 @@ export function useGeminiLive(
             mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
           },
         });
+        microphoneStreamOpenRef.current = true;
       };
 
       let processor: AudioNode;
@@ -1260,6 +1265,7 @@ export function useGeminiLive(
     elapsedRef.current = 0;
     learnerTurnsRef.current = 0;
     learnerTurnStateRef.current = createLearnerTurnState();
+    microphoneStreamOpenRef.current = false;
     mutedRef.current = false;
     setIsMuted(false);
     closingRequestedRef.current = false;
@@ -1610,7 +1616,7 @@ export function useGeminiLive(
     });
 
     if (nextMuted) {
-      sessionRef.current.sendRealtimeInput({ audioStreamEnd: true });
+      endMicrophoneStream();
       setMicLevel(0);
       if (!activeSourcesRef.current.size) updatePhase("muted");
     } else {
@@ -1623,7 +1629,7 @@ export function useGeminiLive(
             : "listening",
       );
     }
-  }, [getOutputCaptureGuard, updatePhase]);
+  }, [endMicrophoneStream, getOutputCaptureGuard, updatePhase]);
 
   const repeatTurn = useCallback(
     (turnId: string, options: { slow?: boolean } = {}) => {

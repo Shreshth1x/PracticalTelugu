@@ -175,19 +175,58 @@ test("wires the output guard into every local voice path and microphone upload",
   const playSamplesSource = hookSource.slice(playSamplesStart, playSamplesEnd);
   const startCaptureSource = hookSource.slice(startCaptureStart, startCaptureEnd);
 
+  assert.match(playSamplesSource, /endMicrophoneStream\(\);/);
   assert.match(
     playSamplesSource,
     /getOutputCaptureGuard\(\)\.beginOutput\(\);/,
+  );
+  assert.ok(
+    playSamplesSource.indexOf("endMicrophoneStream();") <
+      playSamplesSource.indexOf("getOutputCaptureGuard().beginOutput();"),
+    "Gemini must receive audioStreamEnd before the playback capture gap",
   );
   assert.match(playSamplesSource, /source\.start\(startAt\);/);
   assert.match(
     startCaptureSource,
     /outputBlocked:\s*outputCaptureGuard\.isInputBlocked\(\)/,
   );
+  assert.match(
+    startCaptureSource,
+    /microphoneStreamOpenRef\.current = true;/,
+  );
+  assert.match(
+    hookSource,
+    /session\.sendRealtimeInput\(\{ audioStreamEnd: true \}\);/,
+  );
   assert.match(hookSource, /playFish:\s*playSamples/);
   assert.match(hookSource, /playFallback:\s*playAudio/);
   assert.match(
     hookSource,
     /if \(!fishSpeechController\?\.bufferFallback\(encodedAudio\)\)\s*\{\s*playAudio\(encodedAudio\);/,
+  );
+});
+
+test("keeps natural audio conversation moving when coaching metadata is incomplete", async () => {
+  const hookSource = await readFile(
+    new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    hookSource,
+    /const fullyParsed = parseLiveTurnToolCall\(call\.args\);/,
+  );
+  assert.match(
+    hookSource,
+    /const parsed = fullyParsed \?\? parseLiveMayuTurnToolCall\(call\.args\);/,
+  );
+  assert.match(
+    hookSource,
+    /validLearnerCaption \?\?\s*createUnscoredLiveLearnerCaption\(/,
+  );
+  assert.match(
+    hookSource,
+    /if \(finalInput\.finished !== false\)/,
+    "inputTranscription without an explicit false finished flag is final",
   );
 });

@@ -52,6 +52,11 @@ export type ParsedLiveTurnToolCall = {
   replay: boolean;
 };
 
+export type ParsedLiveMayuTurnToolCall = Pick<
+  ParsedLiveTurnToolCall,
+  "mayu" | "replay"
+>;
+
 type ReviewedLiveCueCaption = {
   telugu: string;
   roman: string;
@@ -221,18 +226,15 @@ export function hasKnownMayuRelationshipMismatch(
 }
 
 /**
- * Accepts only display-safe Latin Telugu and English. Gemini may use Telugu
- * script internally for speech accuracy, but it can never cross this boundary
- * into the learner-facing transcript.
+ * Keeps Mayu's spoken turn independently recoverable from optional learner
+ * coaching. A malformed score must never strand a blocking tool call, while
+ * Mayu's own audible Telugu and learner-facing captions remain fail-closed.
  */
-export function parseLiveTurnToolCall(
+export function parseLiveMayuTurnToolCall(
   value: unknown,
-): ParsedLiveTurnToolCall | null {
+): ParsedLiveMayuTurnToolCall | null {
   if (!value || typeof value !== "object") return null;
   const args = value as Record<string, unknown>;
-  if (Object.keys(args).some((field) => !LIVE_TURN_TOOL_FIELDS.has(field))) {
-    return null;
-  }
 
   const mayuTeluguInternal = cleanInternalTelugu(args.mayuTeluguInternal);
   const mayuRoman = cleanCaptionText(args.mayuRoman);
@@ -253,6 +255,35 @@ export function parseLiveTurnToolCall(
       ? args.cueId.trim()
       : undefined;
   if (hasCueId && !rawCueId) return null;
+
+  return {
+    mayu: {
+      teluguInternal: mayuTeluguInternal,
+      roman: mayuRoman,
+      pronunciation: mayuPronunciation,
+      english: mayuEnglish,
+      cueId: rawCueId,
+      sourceLanguage: "telugu",
+    },
+    replay: args.replay === true,
+  };
+}
+
+/**
+ * Accepts only display-safe Latin Telugu and English. Gemini may use Telugu
+ * script internally for speech accuracy, but it can never cross this boundary
+ * into the learner-facing transcript.
+ */
+export function parseLiveTurnToolCall(
+  value: unknown,
+): ParsedLiveTurnToolCall | null {
+  const mayuTurn = parseLiveMayuTurnToolCall(value);
+  if (!mayuTurn || !value || typeof value !== "object") return null;
+  const args = value as Record<string, unknown>;
+  if (Object.keys(args).some((field) => !LIVE_TURN_TOOL_FIELDS.has(field))) {
+    return null;
+  }
+
   const learnerRoman = cleanCaptionText(args.learnerRoman);
   const learnerPronunciation = cleanCaptionText(args.learnerPronunciation);
   const learnerEnglish = cleanCaptionText(args.learnerEnglish);
@@ -325,23 +356,7 @@ export function parseLiveTurnToolCall(
       // not hear. Preserve the turn with an explicit local placeholder.
       if (hasAnyLearnerCaption || hasAnyLearnerRating) return null;
 
-      learner = {
-        teluguInternal: "",
-        roman: "Audio unclear",
-        english: "This reply was not scored. Please try it once more.",
-        assessment: calibrateLiveLearnerAssessment({
-          sourceLanguage: "telugu",
-          confidence: learnerAssessmentConfidence,
-          ratings: {
-            intelligibility: null,
-            pronunciation: null,
-            meaning: null,
-            form: null,
-            teluguCoverage: null,
-          },
-          feedback: learnerFeedback,
-        }),
-      };
+      learner = createUnscoredLiveLearnerCaption(learnerFeedback);
     } else {
       if (
         !learnerTeluguInternal ||
@@ -401,16 +416,38 @@ export function parseLiveTurnToolCall(
   }
 
   return {
-    mayu: {
-      teluguInternal: mayuTeluguInternal,
-      roman: mayuRoman,
-      pronunciation: mayuPronunciation,
-      english: mayuEnglish,
-      cueId: rawCueId,
-      sourceLanguage: "telugu",
-    },
+    ...mayuTurn,
     learner,
-    replay: args.replay === true,
+  };
+}
+
+export function createUnscoredLiveLearnerCaption(
+  feedback: string,
+  reason: "unclear" | "incomplete-assessment" = "unclear",
+): ParsedLiveCaptionTurn & { assessment: LiveLearnerAssessment } {
+  const safeFeedback =
+    cleanLearnerFeedback(feedback) ||
+    "Keep going and try the next reply at a comfortable volume.";
+
+  return {
+    teluguInternal: "",
+    roman: reason === "unclear" ? "Audio unclear" : "Reply received",
+    english:
+      reason === "unclear"
+        ? "This reply was not scored. Please try it once more."
+        : "Your reply was heard, but this turn was not scored.",
+    assessment: calibrateLiveLearnerAssessment({
+      sourceLanguage: "telugu",
+      confidence: "low",
+      ratings: {
+        intelligibility: null,
+        pronunciation: null,
+        meaning: null,
+        form: null,
+        teluguCoverage: null,
+      },
+      feedback: safeFeedback,
+    }),
   };
 }
 

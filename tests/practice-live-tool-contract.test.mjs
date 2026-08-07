@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createUnscoredLiveLearnerCaption,
   hasForbiddenAudibleEnglish,
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
+  parseLiveMayuTurnToolCall,
   parseLiveTurnToolCall,
 } from "../app/practice-live/live-transcript.ts";
 
@@ -157,6 +159,60 @@ test("requires complete judgeable Telugu captions, ratings, and coaching feedbac
       learnerFeedback: "తెలుగు script must stay private.",
     }),
     null,
+  );
+});
+
+test("keeps a valid Mayu response usable when optional learner coaching is malformed", () => {
+  const missingLearnerPronunciation = { ...completeToolCall };
+  delete missingLearnerPronunciation.learnerPronunciation;
+
+  assert.equal(
+    parseLiveTurnToolCall(missingLearnerPronunciation),
+    null,
+    "incomplete coaching must never be treated as an authoritative grade",
+  );
+
+  const mayuTurn = parseLiveMayuTurnToolCall({
+    ...missingLearnerPronunciation,
+    unexpectedLearnerMetadata: "ignored",
+  });
+  assert.deepEqual(mayuTurn, {
+    mayu: {
+      teluguInternal: "తిన్నావా?",
+      roman: "tinnaavaa?",
+      pronunciation: "tin-NAA-vaa?",
+      english: "Have you eaten?",
+      cueId: "have-you-eaten__primary",
+      sourceLanguage: "telugu",
+    },
+    replay: false,
+  });
+
+  assert.deepEqual(
+    createUnscoredLiveLearnerCaption(
+      "Keep the conversation going and try the next reply naturally.",
+      "incomplete-assessment",
+    ),
+    {
+      teluguInternal: "",
+      roman: "Reply received",
+      english: "Your reply was heard, but this turn was not scored.",
+      assessment: {
+        pronunciationScore: null,
+        accuracyScore: null,
+        languageScore: null,
+        confidence: "low",
+        ratings: {
+          intelligibility: null,
+          pronunciation: null,
+          meaning: null,
+          form: null,
+          teluguCoverage: null,
+        },
+        feedback:
+          "Keep the conversation going and try the next reply naturally.",
+      },
+    },
   );
 });
 
