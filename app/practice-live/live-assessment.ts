@@ -187,10 +187,13 @@ export function calibrateLiveLearnerAssessment({
     accuracyScore = Math.min(accuracyScore, coverageCap);
   }
 
+  // Accuracy (meaning and usable form) outweighs sound accuracy for
+  // beginners: communicating the right thing matters more than saying it
+  // with perfect phonetics, matching what the assessor prompt rewards.
   const rawLanguageScore = weightedScore(
     pronunciationScore,
     accuracyScore,
-    0.5,
+    0.4,
   );
   const languageScore =
     sourceLanguage === "english"

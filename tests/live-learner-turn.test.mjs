@@ -80,6 +80,23 @@ test("tool-before-final captions and counts one VAD epoch exactly once", () => {
   );
 });
 
+test("accumulates incremental final transcription segments within one epoch", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "final-transcription", text: "naaku aakaligaa" },
+    { type: "final-transcription", text: "undi" },
+  ]);
+
+  assert.equal(result.pendingRows, 1);
+  assert.equal(result.countedTurns, 1);
+  assert.equal(result.state.currentEpoch.id, 1);
+  assert.equal(
+    result.state.currentEpoch.finalText,
+    "naaku aakaligaa undi",
+    "a multi-segment utterance keeps every finalized segment",
+  );
+});
+
 test("final-before-tool fills the pending row without double-counting", () => {
   const result = run([
     { type: "activity-start" },

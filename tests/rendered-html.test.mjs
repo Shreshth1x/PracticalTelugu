@@ -242,20 +242,15 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   );
   assert.match(source, /Preparing the checked transcript…/);
   assert.match(source, /Reply heard — preparing the checked transcript…/);
-  assert.doesNotMatch(source, /provisionalRoman/);
-  assert.doesNotMatch(source, /Live draft/);
+  assert.match(
+    source,
+    /learnerDraftText[\s\S]*\(unchecked\)/,
+    "early ASR renders as an explicitly unchecked draft",
+  );
   assert.match(
     source.slice(liveDraftStart, source.indexOf("{turn ?", liveDraftStart)),
     /role="status"[\s\S]*aria-live="polite"/,
     "the main-card learner draft is announced as a polite status",
-  );
-
-  const voiceNoticeStart = source.indexOf('className="live-voice-notice"');
-  assert.ok(voiceNoticeStart >= 0, "the active voice notice is rendered near session setup");
-  assert.match(
-    source.slice(voiceNoticeStart, source.indexOf("</small>", voiceNoticeStart)),
-    /role="status"[\s\S]*aria-live="polite"/,
-    "voice fallback notices use a non-disruptive polite status",
   );
 
   const currentTurnStart = source.indexOf('className="live-follow-spoken"');
@@ -279,15 +274,11 @@ test("keeps Practice Live Telugu in English letters with English directly undern
   );
 });
 
-test("makes Live voice, register, time cap, and data handling explicit before start", async () => {
+test("makes Live register, time cap, and data handling explicit before start", async () => {
   const response = await render("/practice-live");
   const html = await response.text();
 
-  assert.match(html, /Practice voice/);
-  assert.equal(
-    html.match(/Private clone for authorized accounts/g)?.length,
-    2,
-  );
+  assert.doesNotMatch(html, /Private clone|backup voice|family voice/i);
   assert.match(html, /Who are you speaking with\?/);
   assert.match(html, /Someone close/);
   assert.match(html, /Elder or someone new/);
@@ -297,8 +288,6 @@ test("makes Live voice, register, time cap, and data handling explicit before st
   assert.match(html, /Full practice/);
   assert.match(html, />2:00</);
   assert.match(html, /audio is sent to Google Gemini/);
-  assert.match(html, /account can use a private family voice/);
-  assert.match(html, /otherwise Gemini&#x27;s backup voice is used/);
   assert.match(html, /PracticalTelugu does not save your audio/);
 });
 
@@ -340,7 +329,6 @@ test("keeps the completed Live session focused on an honest coaching dashboard",
     pageSource,
     /Response\s+time is shown[\s\S]*separately and does not change your language score/,
   );
-  assert.match(pageSource, /getLiveSessionVoiceLabel/);
   assert.ok(
     pageSource.indexOf("<SessionResults") <
       pageSource.indexOf('className="live-review"'),
@@ -398,9 +386,7 @@ test("keeps Live presentation fast and assessment off the conversation session",
     finalizeStart,
   );
   const finalizeSource = liveClientSource.slice(finalizeStart, finalizeEnd);
-  const playbackAt = finalizeSource.indexOf(
-    "playPresentedNativeAudio(encodedAudio);",
-  );
+  const playbackAt = finalizeSource.indexOf("playAudio(encodedAudio);");
   const assessmentAt = finalizeSource.indexOf(
     "() => requestLearnerAssessment(assessmentRequest)",
   );
@@ -417,7 +403,7 @@ test("keeps Live presentation fast and assessment off the conversation session",
   );
 });
 
-test("retries private voice authorization and renders early ASR safely", async () => {
+test("renders early ASR as an explicit unchecked draft", async () => {
   const liveClientSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
     "utf8",
@@ -425,36 +411,37 @@ test("retries private voice authorization and renders early ASR safely", async (
 
   assert.match(
     liveClientSource,
-    /accountSession\.status !== "authenticated"[\s\S]*ACCOUNT_SESSION_RETRY_TIMEOUT_MS/,
+    /interimInput[\s\S]*applyLearnerTranscriptDraft\(/,
   );
   assert.match(
     liveClientSource,
-    /tokenPayload\.familyVoice !== familyVoice/,
-    "a token response cannot silently switch the requested family voice",
-  );
-  assert.match(liveClientSource, /isLiveVoiceModeReason/);
-  assert.match(
-    liveClientSource,
-    /interimInput[\s\S]*applyLearnerTranscriptDraft\(interimInput\)/,
+    /finalInput\.finished !== false[\s\S]*applyLearnerTranscriptDraft\(/,
   );
   assert.match(
     liveClientSource,
-    /finalInput\.finished !== false[\s\S]*applyLearnerTranscriptDraft\(finalInput\.text\)/,
+    /setLearnerDraft\(pending\?\.provisionalRoman \?\? ""\)/,
+    "the sanitized draft must reach the learner-visible state",
+  );
+  assert.match(
+    liveClientSource,
+    /sessionResumption: \{\}/,
+    "connections must request resumption handles",
+  );
+  assert.match(
+    liveClientSource,
+    /sessionResumption: \{ handle \}/,
+    "an unexpected close must be able to resume with the stored handle",
   );
 });
 
-test("keeps permanent Gemini and Fish credentials on the server", async () => {
-  const [clientSource, routeSource, fishConfigSource] = await Promise.all([
+test("keeps the permanent Gemini credential on the server", async () => {
+  const [clientSource, routeSource] = await Promise.all([
     readFile(
       new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
       "utf8",
     ),
     readFile(
       new URL("../app/api/practice-live/token/route.ts", import.meta.url),
-      "utf8",
-    ),
-    readFile(
-      new URL("../app/api/practice-live/fish-config.ts", import.meta.url),
       "utf8",
     ),
   ]);
@@ -466,32 +453,24 @@ test("keeps permanent Gemini and Fish credentials on the server", async () => {
   assert.match(clientSource, /sessionLimitSeconds/);
   assert.match(clientSource, /durationSeconds/);
   assert.match(clientSource, /relationship/);
-  assert.match(clientSource, /familyVoice/);
-  assert.match(clientSource, /voiceAccessToken/);
-  assert.match(clientSource, /createFishSpeechController/);
-  assert.match(clientSource, /Authorization/);
-  assert.match(clientSource, /setUsedVoiceFallback\(true\)/);
   assert.doesNotMatch(
     clientSource,
-    /FISH_API_KEY|FISH_GRANDMA_VOICE_ID|FISH_GRANDPA_VOICE_ID/,
+    /familyVoice|voiceAccessToken|createFishSpeechController|FISH_API_KEY/,
+    "the removed cloned-voice plumbing must not reappear in the live hook",
   );
+  assert.match(clientSource, /Authorization/);
   assert.match(clientSource, /sendRealtimeInput\(\{\s*text:/);
   assert.doesNotMatch(clientSource, /sendClientContent\(/);
   assert.match(clientSource, /project has been denied access/);
-  assert.match(clientSource, /onclose:\s*\(event\)/);
+  assert.match(clientSource, /onclose:\s*\(event/);
   assert.match(routeSource, /process\.env\.GEMINI_API_KEY/);
   assert.doesNotMatch(routeSource, /NEXT_PUBLIC_/);
-  assert.match(routeSource, /uses:\s*1/);
-  assert.match(routeSource, /NEW_SESSION_WINDOW_SECONDS = 60/);
+  assert.match(routeSource, /uses:\s*2/);
   assert.match(routeSource, /SESSION_DRAIN_HEADROOM_SECONDS = 10/);
   assert.match(routeSource, /durationSeconds \+ TOKEN_EXPIRY_HEADROOM_SECONDS/);
   assert.match(routeSource, /SHORT_WINDOW_STARTS = 6/);
   assert.match(routeSource, /DAILY_STARTS = 20/);
   assert.match(routeSource, /"Retry-After"/);
-  assert.match(fishConfigSource, /process\.env\.FISH_API_KEY/);
-  assert.match(fishConfigSource, /process\.env\.FISH_GRANDMA_VOICE_ID/);
-  assert.match(fishConfigSource, /process\.env\.FISH_GRANDPA_VOICE_ID/);
-  assert.doesNotMatch(fishConfigSource, /NEXT_PUBLIC_/);
 });
 
 test("uses the approved peacock mark and Mayu favicon", async () => {
@@ -850,7 +829,7 @@ test("preserves additions and removals made while cloud progress is loading", ()
   });
 });
 
-test("a reset during cloud loading stays a reset", () => {
+test("a confirmed reset clears the path everywhere but keeps saved phrases", () => {
   const baseline = {
     state: {
       completed: ["hello-goodbye"],
@@ -868,6 +847,48 @@ test("a reset during cloud loading stays a reset", () => {
       showPronunciation: false,
       autoplay: false,
     },
+    savedWords: ["namaskaaram"],
+  };
+  const cloud = {
+    state: {
+      completed: ["hello-goodbye", "at-the-table"],
+      confidence: { namaskaaram: "ready", neellu: "learning" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: true,
+    },
+    savedWords: ["namaskaaram", "neellu"],
+  };
+
+  assert.deepEqual(
+    applySnapshotChanges(baseline, reset, cloud, { explicitReset: true }),
+    {
+      state: { completed: [], confidence: {} },
+      preferences: reset.preferences,
+      savedWords: ["namaskaaram", "neellu"],
+    },
+  );
+});
+
+test("an emptied snapshot without a confirmed reset cannot wipe the cloud", () => {
+  const baseline = {
+    state: {
+      completed: ["hello-goodbye"],
+      confidence: { namaskaaram: "ready" },
+    },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
+    savedWords: ["namaskaaram"],
+  };
+  const damaged = {
+    state: { completed: [], confidence: {} },
+    preferences: {
+      showPronunciation: true,
+      autoplay: false,
+    },
     savedWords: [],
   };
   const cloud = {
@@ -882,7 +903,7 @@ test("a reset during cloud loading stays a reset", () => {
     savedWords: ["namaskaaram", "neellu"],
   };
 
-  assert.deepEqual(applySnapshotChanges(baseline, reset, cloud), reset);
+  assert.deepEqual(applySnapshotChanges(baseline, damaged, cloud), cloud);
 });
 
 test("keeps account return paths on the current site", () => {
@@ -1497,8 +1518,8 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   assert.doesNotMatch(app, /const dailyWords/);
   assert.match(app, /type: "introduce"/);
   assert.match(app, /type: "matching"/);
-  assert.match(app, /tokens: phrase\.roman\.trim\(\)/);
-  assert.doesNotMatch(app, /tokens: phrase\.telugu\.trim\(\)/);
+  assert.match(app, /phrase\.roman\.trim\(\)\.split\(/);
+  assert.doesNotMatch(app, /phrase\.telugu\.trim\(\)\.split\([^)]*\)\.reverse/);
   assert.match(
     app,
     /normalize\(answer\) === normalize\(step\.word\.roman\)/,

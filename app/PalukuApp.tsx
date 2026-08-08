@@ -29,7 +29,6 @@ import {
   resolvePracticeRoadmap,
 } from "./practice-path.mjs";
 import {
-  defaultState,
   type Preferences,
   type SavedState,
 } from "./learning-state";
@@ -55,7 +54,7 @@ type Step =
       shownMeaning: string;
       answer: boolean;
     }
-  | { type: "matching"; words: TeluguWord[] }
+  | { type: "matching"; words: TeluguWord[]; rightOrder: number[] }
   | { type: "arrange"; word: TeluguWord; tokens: string[] };
 
 type ResultState = "idle" | "correct" | "wrong";
@@ -63,19 +62,41 @@ type WordTab = "today" | "all" | "saved";
 type MayuVariant = "guide" | "success";
 
 const phraseAudioCache = new Map<string, HTMLAudioElement>();
+const PHRASE_AUDIO_CACHE_LIMIT = 40;
 let activePhraseAudio: HTMLAudioElement | null = null;
 
 function preparePhraseAudio(audioSrc: string) {
   if (typeof Audio === "undefined") return null;
 
   const cachedAudio = phraseAudioCache.get(audioSrc);
-  if (cachedAudio) return cachedAudio;
+  if (cachedAudio) {
+    // Re-insert so the map keeps least-recently-used entries first.
+    phraseAudioCache.delete(audioSrc);
+    phraseAudioCache.set(audioSrc, cachedAudio);
+    return cachedAudio;
+  }
 
   const audio = new Audio(audioSrc);
   audio.preload = "auto";
   audio.load();
   phraseAudioCache.set(audioSrc, audio);
+
+  if (phraseAudioCache.size > PHRASE_AUDIO_CACHE_LIMIT) {
+    for (const [cachedSrc, cached] of phraseAudioCache) {
+      if (phraseAudioCache.size <= PHRASE_AUDIO_CACHE_LIMIT) break;
+      if (cached === activePhraseAudio || cached === audio) continue;
+      cached.pause();
+      cached.removeAttribute("src");
+      cached.load();
+      phraseAudioCache.delete(cachedSrc);
+    }
+  }
+
   return audio;
+}
+
+function pauseActivePhraseAudio() {
+  activePhraseAudio?.pause();
 }
 
 function startPhraseAudio(audioSrc: string) {
@@ -276,45 +297,102 @@ const libraryWords: LibraryWord[] = (() => {
   return words;
 })();
 
+function hashStringToSeed(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function createSeededRandom(seedText: string) {
+  let state = hashStringToSeed(seedText) || 1;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle<T>(items: readonly T[], random: () => number): T[] {
+  const shuffled = [...items];
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    const held = shuffled[index];
+    shuffled[index] = shuffled[swap];
+    shuffled[swap] = held;
+  }
+  return shuffled;
+}
+
+function seededOrder(length: number, random: () => number): number[] {
+  const order = seededShuffle(
+    Array.from({ length }, (_, index) => index),
+    random,
+  );
+  if (length > 1 && order.every((value, index) => value === index)) {
+    const first = order.shift();
+    if (first !== undefined) order.push(first);
+  }
+  return order;
+}
+
 function buildSteps(lesson: Lesson): Step[] {
   const steps: Step[] = [];
+  // Seeded per lesson: answer positions vary between exercises, but a
+  // re-render or retake keeps the same layout instead of reshuffling.
+  const random = createSeededRandom(`lesson-steps:${lesson.id}`);
 
   lesson.words.forEach((word, index) => {
-    const rotated = [
-      ...lesson.words.slice(index),
-      ...lesson.words.slice(0, index),
-    ];
-
     steps.push({ type: "introduce", word });
 
     if (index % 2 === 0 || index === lesson.words.length - 1) {
-      steps.push({ type: "choice", word, options: rotated });
+      steps.push({
+        type: "choice",
+        word,
+        options: seededShuffle(lesson.words, random),
+      });
       return;
     }
 
-    const isTrue = index % 4 === 1;
+    const otherWords = lesson.words.filter(
+      (candidate) => candidate.english !== word.english,
+    );
+    const isTrue = otherWords.length === 0 || random() < 0.5;
+    const wrongWord = otherWords.length
+      ? otherWords[Math.floor(random() * otherWords.length)]
+      : word;
     steps.push({
       type: "true-false",
       word,
-      shownMeaning: isTrue
-        ? word.english
-        : lesson.words[(index + 1) % lesson.words.length].english,
+      shownMeaning: isTrue ? word.english : wrongWord.english,
       answer: isTrue,
     });
   });
 
-  steps.push({ type: "matching", words: lesson.words.slice(0, 3) });
+  const matchingWords = lesson.words.slice(0, 3);
+  steps.push({
+    type: "matching",
+    words: matchingWords,
+    rightOrder: seededOrder(matchingWords.length, random),
+  });
 
   const phrase = lesson.words.find(
     (word) => word.telugu.trim().split(/\s+/).length > 1,
   );
 
   if (phrase) {
-    steps.push({
-      type: "arrange",
-      word: phrase,
-      tokens: phrase.roman.trim().split(/\s+/).reverse(),
-    });
+    const romanTokens = phrase.roman.trim().split(/\s+/);
+    let tokens = seededShuffle(romanTokens, random);
+    if (
+      romanTokens.length > 1 &&
+      tokens.join(" ") === romanTokens.join(" ")
+    ) {
+      tokens = [...tokens.slice(1), tokens[0]];
+    }
+    steps.push({ type: "arrange", word: phrase, tokens });
   }
 
   return steps;
@@ -984,10 +1062,18 @@ function WordRow({
   onOpen: (word: LibraryWord) => void;
   onSave: (word: LibraryWord) => void;
 }) {
-  usePhraseAudioPreload(item.audioSrc);
+  // Rows only fetch audio once the learner shows intent; mounting every
+  // library row must not fire hundreds of media requests.
+  const preloadRowAudio = () => {
+    if (item.audioSrc) preparePhraseAudio(item.audioSrc);
+  };
 
   return (
-    <article className="word-row">
+    <article
+      className="word-row"
+      onPointerEnter={preloadRowAudio}
+      onFocusCapture={preloadRowAudio}
+    >
       <button className="word-row-main" onClick={() => onOpen(item)}>
         <PhraseStack
           word={item}
@@ -1329,6 +1415,7 @@ function DailySession({
   preferences: Preferences;
   notify: (message: string) => void;
 }) {
+  const { cloudReady } = useLearning();
   const [position, setPosition] = useState(() => {
     const path = resolvePracticePath(practicePacks, state.confidence);
     return {
@@ -1338,9 +1425,29 @@ function DailySession({
     };
   });
   const [revealed, setRevealed] = useState(false);
+  const interactedRef = useRef(false);
+  const confidenceRef = useRef(state.confidence);
   const pack = practicePacks[position.packIndex];
   const finished = position.wordIndex >= pack.words.length;
   const current = finished ? null : pack.words[position.wordIndex];
+
+  useEffect(() => {
+    confidenceRef.current = state.confidence;
+  }, [state.confidence]);
+
+  useEffect(() => {
+    if (!cloudReady || interactedRef.current) return;
+
+    // Cloud progress restored after mount can move the practical path past
+    // phrases already practiced on another device; jump before practice starts.
+    const path = resolvePracticePath(practicePacks, confidenceRef.current);
+    setPosition({
+      packIndex: path.packIndex,
+      wordIndex: path.phraseIndex,
+      reviewing: path.allComplete,
+    });
+    setRevealed(false);
+  }, [cloudReady]);
 
   useEffect(() => {
     if (!preferences.autoplay || !current?.audioSrc) return;
@@ -1353,6 +1460,7 @@ function DailySession({
   }, [current?.audioSrc, preferences.autoplay]);
 
   const markWord = (result: "learning" | "ready") => {
+    interactedRef.current = true;
     if (current) {
       const key = phraseKey(current);
       setState((currentState) => ({
@@ -1589,11 +1697,9 @@ function SwitchRow({
 }
 
 function SettingsView({
-  setState,
   preferences,
   setPreferences,
 }: {
-  setState: React.Dispatch<React.SetStateAction<SavedState>>;
   preferences: Preferences;
   setPreferences: React.Dispatch<React.SetStateAction<Preferences>>;
 }) {
@@ -1604,6 +1710,7 @@ function SettingsView({
     syncMessage,
     retrySync,
     signOut,
+    resetProgress,
   } = useLearning();
   const [confirmReset, setConfirmReset] = useState(false);
   const [accountMessage, setAccountMessage] = useState("");
@@ -1754,7 +1861,7 @@ function SettingsView({
               <button
                 className="danger-button danger-button-solid"
                 onClick={() => {
-                  setState(defaultState);
+                  resetProgress();
                   setConfirmReset(false);
                 }}
               >
@@ -1779,8 +1886,10 @@ function MatchingExercise({
   mismatch,
   setMismatch,
   showPronunciation,
+  rightOrder,
 }: {
   words: TeluguWord[];
+  rightOrder: number[];
   matched: Set<number>;
   setMatched: React.Dispatch<React.SetStateAction<Set<number>>>;
   leftSelected: number | null;
@@ -1791,11 +1900,6 @@ function MatchingExercise({
   setMismatch: (value: string | null) => void;
   showPronunciation: boolean;
 }) {
-  const rightOrder =
-    words.length === 3
-      ? [1, 2, 0]
-      : words.map((_, index) => index).reverse();
-
   useEffect(() => {
     if (leftSelected === null || rightSelected === null) return;
 
@@ -2192,6 +2296,7 @@ function LessonView({
             <p>Choose an English meaning, then choose the phrase you would say.</p>
             <MatchingExercise
               words={step.words}
+              rightOrder={step.rightOrder}
               matched={matched}
               setMatched={setMatched}
               leftSelected={leftSelected}
@@ -2363,15 +2468,29 @@ export default function PalukuApp({
     setSavedWords,
     hydrated,
   } = useLearning();
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ message: string; id: number } | null>(
+    null,
+  );
   const activeLesson = findLesson(initialLessonId);
+
+  // Each notification gets a fresh id so repeating the same message still
+  // re-triggers (and re-times) the toast.
+  const notify = useCallback((message: string) => {
+    setToast({ message, id: Date.now() });
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
 
-    const timer = window.setTimeout(() => setToast(""), 2600);
+    const timer = window.setTimeout(() => setToast(null), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    return () => {
+      pauseActivePhraseAudio();
+    };
+  }, [screen]);
 
   const startLesson = (lesson: Lesson) => {
     router.push(`/lesson/${lesson.id}`);
@@ -2408,7 +2527,7 @@ export default function PalukuApp({
         lesson={activeLesson}
         onExit={goToSituations}
         onComplete={completeLesson}
-        notify={setToast}
+        notify={notify}
         preferences={preferences}
       />
     ) : (
@@ -2421,7 +2540,7 @@ export default function PalukuApp({
         state={state}
         setState={setState}
         preferences={preferences}
-        notify={setToast}
+        notify={notify}
       />
     );
   } else if (screen === "learn") {
@@ -2433,7 +2552,7 @@ export default function PalukuApp({
         preferences={preferences}
         savedWords={savedWords}
         setSavedWords={setSavedWords}
-        notify={setToast}
+        notify={notify}
       />
     );
   } else if (screen === "practice-live") {
@@ -2445,14 +2564,13 @@ export default function PalukuApp({
   } else if (screen === "settings") {
     content = (
       <SettingsView
-        setState={setState}
         preferences={preferences}
         setPreferences={setPreferences}
       />
     );
   } else {
     content = (
-      <TodayView state={state} notify={setToast} />
+      <TodayView state={state} notify={notify} />
     );
   }
 
@@ -2460,8 +2578,8 @@ export default function PalukuApp({
     <>
       {content}
       {toast ? (
-        <div className="toast" role="status">
-          {toast}
+        <div className="toast" role="status" key={toast.id}>
+          {toast.message}
         </div>
       ) : null}
     </>

@@ -6,6 +6,8 @@ export type LiveSessionGrade = {
   rubricVersion?: 2;
   averageResponseMs: number | null;
   assessedTurns: number;
+  /** Completed learner turns that produced no usable language score. */
+  unscoredTurns?: number;
   overallScore: number | null;
   pronunciationScore: number | null;
   accuracyScore: number | null;
@@ -27,16 +29,15 @@ type GradableLiveTranscriptTurn = LiveTranscriptTurn & {
   assessment?: LiveTurnAssessment;
 };
 
-const METRIC_WEIGHTS: Record<LiveScoreMetric, number> = {
-  pronunciation: 0.5,
-  accuracy: 0.5,
-  // Response time remains useful coaching context, but VAD, microphone, room,
-  // and accessibility differences make it too noisy to call language quality.
-  response: 0,
-};
+// Latencies past this are step-away pauses or measurement glitches, not a
+// timing signal about the learner's recall.
+const MAX_RESPONSE_LATENCY_MS = 30_000;
 
 const EMPTY_NEXT_STEP =
   "Complete a learner response in Practice Live to get a focused next step.";
+
+const UNSCORED_NEXT_STEP =
+  "Your replies could not be scored reliably. Try a quieter spot and speak close to the microphone.";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -64,6 +65,7 @@ export function isLiveSessionGrade(value: unknown): value is LiveSessionGrade {
   const {
     averageResponseMs,
     assessedTurns,
+    unscoredTurns,
     overallScore,
     pronunciationScore,
     accuracyScore,
@@ -84,6 +86,12 @@ export function isLiveSessionGrade(value: unknown): value is LiveSessionGrade {
     typeof assessedTurns !== "number" ||
     !Number.isInteger(assessedTurns) ||
     assessedTurns < 0 ||
+    !(
+      unscoredTurns === undefined ||
+      (typeof unscoredTurns === "number" &&
+        Number.isInteger(unscoredTurns) &&
+        unscoredTurns >= 0)
+    ) ||
     !isNullableScore(overallScore) ||
     !isNullableScore(pronunciationScore) ||
     !isNullableScore(accuracyScore) ||
@@ -140,18 +148,28 @@ function average(values: readonly number[]): number | null {
   return Math.round(values.reduce((total, value) => total + value, 0) / values.length);
 }
 
+function median(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return Math.round(
+    sorted.length % 2 === 1
+      ? sorted[middle]
+      : (sorted[middle - 1] + sorted[middle]) / 2,
+  );
+}
+
 function strongestMetricFor(
   scores: Record<LiveScoreMetric, number | null>,
 ): LiveScoreMetric | null {
   let strongest: LiveScoreMetric | null = null;
 
-  for (const metric of [
-    "pronunciation",
-    "accuracy",
-    "response",
-  ] as const) {
+  // Response time is deliberately excluded: VAD, microphone, room, and
+  // accessibility differences make it useful coaching context but too noisy
+  // to call a language strength.
+  for (const metric of ["pronunciation", "accuracy"] as const) {
     const score = scores[metric];
-    if (score === null || METRIC_WEIGHTS[metric] === 0) continue;
+    if (score === null) continue;
     if (strongest === null || score > scores[strongest]!) strongest = metric;
   }
 
@@ -197,8 +215,13 @@ function assessmentLanguageScore(assessment: LiveTurnAssessment) {
 
   if (pronunciation === null && accuracy === null) return null;
 
-  const calibrated = normalizedScore(assessment.languageScore ?? Number.NaN);
-  if (calibrated !== null) return calibrated;
+  // A present-but-null languageScore is a deliberate abstention from the
+  // calibration (for example a partial mixed reply whose Telugu-coverage cap
+  // could not be applied). Falling back to a derived score there would let
+  // the turn bypass that cap, so only a truly absent field is legacy data.
+  if (assessment.languageScore !== undefined) {
+    return normalizedScore(assessment.languageScore ?? Number.NaN);
+  }
 
   // Legacy and hand-built assessments predate per-turn languageScore. Derive
   // the same balanced score so saved sessions and focused tests remain valid.
@@ -233,18 +256,28 @@ export function gradeLiveSession(
     const score = normalizedScore(assessment.accuracyScore ?? Number.NaN);
     return score === null ? [] : [score];
   });
-  const responseTimes = learnerTurns.flatMap((turn) => {
-    if (turn.responseLatencyMs === undefined) return [];
-    return scoreLiveResponseTime(turn.responseLatencyMs) === null
+  // Score each turn's latency on the band scale first, then combine, so one
+  // step-away outlier cannot drag the whole session into a low band. The
+  // median keeps the displayed time representative for the same reason.
+  const timedTurns = learnerTurns.flatMap((turn) => {
+    if (
+      turn.responseLatencyMs === undefined ||
+      turn.responseLatencyMs > MAX_RESPONSE_LATENCY_MS
+    ) {
+      return [];
+    }
+    const score = scoreLiveResponseTime(turn.responseLatencyMs);
+    return score === null
       ? []
-      : [turn.responseLatencyMs];
+      : [{ milliseconds: turn.responseLatencyMs, score }];
   });
 
   const pronunciationScore = average(pronunciationScores);
   const accuracyScore = average(accuracyScores);
-  const averageResponseMs = average(responseTimes);
-  const responseScore =
-    averageResponseMs === null ? null : scoreLiveResponseTime(averageResponseMs);
+  const averageResponseMs = median(
+    timedTurns.map((turn) => turn.milliseconds),
+  );
+  const responseScore = average(timedTurns.map((turn) => turn.score));
   const metricScores: Record<LiveScoreMetric, number | null> = {
     pronunciation: pronunciationScore,
     accuracy: accuracyScore,
@@ -256,21 +289,27 @@ export function gradeLiveSession(
     ? strongestMetricFor(metricScores)
     : null;
 
+  // Per-turn feedback lines are mid-conversation coaching ("try that reply
+  // once more"), so they only make sense as a next step when at least one
+  // turn was actually scored.
   let nextStep = EMPTY_NEXT_STEP;
-  if (assessments.length > 0) {
-    const weakest = assessments.reduce((currentWeakest, assessment) =>
+  if (assessed.length > 0) {
+    const weakest = assessed.reduce((currentWeakest, assessment) =>
       assessmentStrength(assessment) < assessmentStrength(currentWeakest)
         ? assessment
         : currentWeakest,
     );
     const feedback = weakest.feedback.trim();
     if (feedback) nextStep = feedback;
+  } else if (assessments.length > 0) {
+    nextStep = UNSCORED_NEXT_STEP;
   }
 
   return {
     rubricVersion: 2,
     averageResponseMs,
     assessedTurns: assessed.length,
+    unscoredTurns: learnerTurns.length - assessed.length,
     overallScore,
     pronunciationScore,
     accuracyScore,

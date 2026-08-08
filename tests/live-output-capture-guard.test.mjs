@@ -33,22 +33,19 @@ function createFakeClock() {
   };
 }
 
-test("blocks microphone frames through playback and its acoustic tail", () => {
+test("sequences the reply window through playback and its short tail", () => {
   const clock = createFakeClock();
   const guard = createLiveOutputCaptureGuard(clock.dependencies);
   let readyCount = 0;
-  const shouldForward = () =>
-    shouldForwardLiveMicrophoneFrame({
-      isMuted: false,
-      sessionMatches: true,
-      outputBlocked: guard.isInputBlocked(),
-    });
 
   assert.equal(guard.isInputBlocked(), false);
-  assert.equal(shouldForward(), true);
   guard.beginOutput();
   assert.equal(guard.isInputBlocked(), true);
-  assert.equal(shouldForward(), false);
+  // Full-duplex: playback never blocks the microphone upload itself.
+  assert.equal(
+    shouldForwardLiveMicrophoneFrame({ isMuted: false, sessionMatches: true }),
+    true,
+  );
 
   guard.releaseAfterTail(() => {
     readyCount += 1;
@@ -56,13 +53,18 @@ test("blocks microphone frames through playback and its acoustic tail", () => {
   const [[handle, task]] = clock.scheduled;
   assert.equal(task.delayMs, LIVE_OUTPUT_ECHO_TAIL_MS);
   assert.equal(guard.isInputBlocked(), true);
-  assert.equal(shouldForward(), false);
   assert.equal(readyCount, 0);
 
   clock.run(handle);
   assert.equal(guard.isInputBlocked(), false);
-  assert.equal(shouldForward(), true);
   assert.equal(readyCount, 1);
+});
+
+test("keeps the reply-window debounce short enough for conversation", () => {
+  assert.ok(
+    LIVE_OUTPUT_ECHO_TAIL_MS <= 150,
+    "a long echo tail adds dead time to every turn boundary",
+  );
 });
 
 test("new output cancels a pending release and cancel clears the guard", () => {
@@ -125,12 +127,11 @@ test("interruption drops stale completion without extending the acoustic tail", 
   assert.equal(guard.isInputBlocked(), false);
 });
 
-test("forwards microphone frames only for the active unmuted session between turns", () => {
+test("forwards microphone frames for the active unmuted session, full duplex", () => {
   assert.equal(
     shouldForwardLiveMicrophoneFrame({
       isMuted: false,
       sessionMatches: true,
-      outputBlocked: false,
     }),
     true,
   );
@@ -138,7 +139,6 @@ test("forwards microphone frames only for the active unmuted session between tur
     shouldForwardLiveMicrophoneFrame({
       isMuted: true,
       sessionMatches: true,
-      outputBlocked: false,
     }),
     false,
   );
@@ -146,15 +146,6 @@ test("forwards microphone frames only for the active unmuted session between tur
     shouldForwardLiveMicrophoneFrame({
       isMuted: false,
       sessionMatches: false,
-      outputBlocked: false,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldForwardLiveMicrophoneFrame({
-      isMuted: false,
-      sessionMatches: true,
-      outputBlocked: true,
     }),
     false,
   );
@@ -175,20 +166,25 @@ test("wires the output guard into every local voice path and microphone upload",
   const playSamplesSource = hookSource.slice(playSamplesStart, playSamplesEnd);
   const startCaptureSource = hookSource.slice(startCaptureStart, startCaptureEnd);
 
-  assert.match(playSamplesSource, /endMicrophoneStream\(\);/);
+  assert.doesNotMatch(
+    playSamplesSource,
+    /endMicrophoneStream\(\);/,
+    "full-duplex playback must not close the microphone stream",
+  );
   assert.match(
     playSamplesSource,
     /getOutputCaptureGuard\(\)\.beginOutput\(\);/,
   );
-  assert.ok(
-    playSamplesSource.indexOf("endMicrophoneStream();") <
-      playSamplesSource.indexOf("getOutputCaptureGuard().beginOutput();"),
-    "Gemini must receive audioStreamEnd before the playback capture gap",
-  );
   assert.match(playSamplesSource, /source\.start\(startAt\);/);
-  assert.match(
+  assert.doesNotMatch(
     startCaptureSource,
-    /outputBlocked:\s*outputCaptureGuard\.isInputBlocked\(\)/,
+    /outputBlocked/,
+    "microphone forwarding must not be gated on playback output",
+  );
+  assert.doesNotMatch(
+    startCaptureSource,
+    /mayuPresentationReadyRef\.current \|\|\s*!shouldForwardLiveMicrophoneFrame/,
+    "a pending Mayu presentation must not mute the microphone upload",
   );
   assert.match(
     startCaptureSource,
@@ -211,11 +207,10 @@ test("wires the output guard into every local voice path and microphone upload",
     hookSource,
     /session\.sendRealtimeInput\(\{ audioStreamEnd: true \}\);/,
   );
-  assert.match(hookSource, /playFish:\s*playSamples/);
-  assert.match(hookSource, /playFallback:\s*playAudio/);
-  assert.match(
+  assert.doesNotMatch(
     hookSource,
-    /if \(!fishSpeechController\?\.bufferFallback\(encodedAudio\)\)\s*\{\s*playAudio\(encodedAudio\);/,
+    /fishSpeech|bufferFallback|playFish/,
+    "the removed cloned-voice path must not reappear in the live hook",
   );
 });
 
@@ -249,10 +244,10 @@ test("keeps checked captions independent and finalizes only the latest presentat
     /mayuPresentationReadyRef\.current &&[\s\S]*learnerReplyWindowOpenedAtRef\.current === null[\s\S]*FunctionResponseScheduling\.SILENT/,
     "post-audio continuation calls cannot create duplicate transcript turns",
   );
-  assert.match(
+  assert.doesNotMatch(
     hookSource,
-    /suppressNativeAudioUntilBoundaryRef\.current = true;[\s\S]*FunctionResponseScheduling\.SILENT/,
-    "audio following a duplicate post-playback tool call is suppressed to the turn boundary",
+    /suppressNativeAudioUntilBoundaryRef/,
+    "a duplicate tool call must not mute the accepted turn's remaining audio",
   );
   assert.doesNotMatch(
     hookSource,

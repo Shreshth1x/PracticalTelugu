@@ -286,23 +286,22 @@ export function advanceLearnerTurn(
     if (!text) return { state, effects };
 
     let epoch = state.currentEpoch;
-    if (
-      !epoch ||
-      (epoch.finalText !== null &&
-        epoch.finalText !== text &&
-        shouldStartTranscriptionFallbackEpoch(epoch))
-    ) {
+    if (!epoch || shouldStartTranscriptionFallbackEpoch(epoch)) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
     }
 
-    if (epoch.finalText === text) return { state, effects };
+    // Gemini Live emits final transcription as incremental segments. Segments
+    // accumulate within one learner epoch so a multi-part utterance keeps all
+    // of its words; a settled epoch above starts the next utterance fresh.
+    const accumulatedText =
+      epoch.finalText === null ? text : `${epoch.finalText} ${text}`;
 
     const observed = beginObservedEpoch(state, {
       ...epoch,
       activityActive: false,
-      finalText: text,
+      finalText: accumulatedText,
     });
     state = observed.state;
     effects.beginPendingCaption = observed.shouldBeginPending;

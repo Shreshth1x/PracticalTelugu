@@ -87,46 +87,43 @@ GEMINI_API_KEY=your_key_here
 
 Restart `npm run dev` after changing the environment file. Do not prefix this
 variable with `NEXT_PUBLIC_`: the permanent key is read only by the server-side
-token route. The browser receives a one-use, short-lived credential for each
+token route. The browser receives a short-lived credential for each
 conversation instead.
 
-Practice Live uses Gemini's prebuilt Aoede voice by default. A private clone is
-enabled only when `FISH_API_KEY`, the selected `FISH_GRANDMA_VOICE_ID` or
-`FISH_GRANDPA_VOICE_ID`, and `FISH_ALLOWED_EMAIL_SHA256` are present on the
-server, and the learner is signed into a matching Supabase account. Generate
-the allowlist value from the lowercase account email with
-`printf %s 'owner@example.com' | shasum -a 256`; separate multiple hashes with
-commas. Public or unauthorized sessions stay on Gemini and do not send response
-text to Fish Audio.
-
-The learner chooses Grandma or Grandpa independently from the Telugu
-relationship register. The permanent Fish credential and voice IDs never enter
-the browser. An authorized session receives only a short-lived capability bound
-to its client address, selected voice, and session expiry; the voice route
-returns bounded 24 kHz PCM audio. If Fish rejects a turn or is unavailable, the
-live session releases the buffered Gemini audio as a clearly labeled fallback
-rather than dropping the response.
-
-The Fish model defaults to the current `s2-pro` model. A legacy
-`FISH_TTS_MODEL=s2.1-pro-free` value is normalized to `s2-pro` so an older
-deployment setting cannot route a cloned turn to a retired model. Keep the
-cloned voice private with the provider and retain explicit speaker consent for
-cloned, interactive use.
+Practice Live speaks with Gemini's prebuilt Aoede voice. The conversation is
+full duplex: microphone audio keeps streaming while Mayu speaks, so the
+learner can interrupt naturally and Gemini's server-side voice activity
+detection handles the barge-in.
 
 Before starting, the learner chooses the listener relationship and a fixed
 one- or two-minute session. Respectful Telugu is the safe default for an elder
 or anyone new; familiar Telugu is reserved for someone the learner genuinely
-knows well. The server validates both choices, provisions a one-use token only
-after microphone permission succeeds, and gives that token a short expiry tied
-to the selected session. A token allows 60 seconds to establish its one Live
-connection, then enough total lifetime for the selected practice plus a
-10-second closing margin. The learner's one- or two-minute limit begins only
-after the browser connects, so setup time cannot consume practice time.
+knows well. The server validates both choices, provisions a token only after
+microphone permission succeeds, and gives that token a short expiry tied to
+the selected session: enough lifetime for setup, the selected practice, and a
+10-second closing margin. The token permits its one live connection plus a
+single session-resumption reconnect, so a transient network drop resumes the
+same conversation instead of ending it. The learner's one- or two-minute limit
+begins only after the browser connects, so setup time cannot consume practice
+time.
 
 The token route includes same-origin, request-size, and per-instance rate-limit
-guards. For an open public launch, add a durable platform rate limit or require
-sign-in; an in-memory edge-instance limit is defense-in-depth, not a complete
-abuse or spend control.
+guards (the in-memory IP trackers are capped so spoofed addresses cannot grow
+them without bound). For an open public launch, add a durable platform rate
+limit or require sign-in; an in-memory edge-instance limit is defense-in-depth,
+not a complete abuse or spend control.
+
+Two optional server environment variables harden Practice Live further.
+`PRACTICE_LIVE_SIGNING_SECRET` (generate with `openssl rand -base64 32`)
+signs the assessment capability tokens; without it the server falls back to
+signing with `GEMINI_API_KEY`, which works but ties token validity to a
+vendor-shared key. `TRUST_FORWARDED_IP=1` opts in to honoring
+`x-forwarded-for`/`x-real-ip` for rate limiting and token IP binding; leave it
+unset except behind a proxy that overwrites those headers (Cloudflare's own
+`cf-connecting-ip` is always trusted). Every response also carries security
+headers from `security-headers.ts`; its Content-Security-Policy ships as
+Report-Only until a real browser session verifies sign-in and the live
+conversation produce no violations.
 
 The language policy and its source trail live in
 `docs/research/telugu-conversation-register.md` and the adjacent provenance

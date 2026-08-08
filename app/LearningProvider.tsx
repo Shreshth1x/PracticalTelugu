@@ -29,6 +29,7 @@ import {
   parsePreferences,
   parseSavedWords,
   snapshotAdditionsSince,
+  type Confidence,
   type LearningSnapshot,
   type Preferences,
   type SavedState,
@@ -74,6 +75,7 @@ type LearningContextValue = {
   updatePassword: (password: string) => Promise<AuthResult>;
   signOut: () => Promise<AuthResult>;
   retrySync: () => void;
+  resetProgress: () => void;
 };
 
 const LearningContext = createContext<LearningContextValue | null>(null);
@@ -140,17 +142,34 @@ function readAnonymousSnapshot(): LearningSnapshot {
 function readUserSnapshot(userId: string): LearningSnapshot {
   const keys = userStorageKeys(userId);
 
+  // Each key is parsed independently so one damaged entry cannot collapse the
+  // whole snapshot to defaults and later read as an intentional wipe.
+  let state: SavedState | null = null;
   try {
-    return {
-      state:
-        parseCurrentProgress(readJson(keys.progress)) ??
-        cloneSnapshot(defaultSnapshot).state,
-      preferences: parsePreferences(readJson(keys.preferences)),
-      savedWords: parseSavedWords(readJson(keys.savedWords)),
-    };
+    state = parseCurrentProgress(readJson(keys.progress));
   } catch {
-    return cloneSnapshot(defaultSnapshot);
+    state = null;
   }
+
+  let preferences = { ...defaultPreferences };
+  try {
+    preferences = parsePreferences(readJson(keys.preferences));
+  } catch {
+    preferences = { ...defaultPreferences };
+  }
+
+  let savedWords: string[] = [];
+  try {
+    savedWords = parseSavedWords(readJson(keys.savedWords));
+  } catch {
+    savedWords = [];
+  }
+
+  return {
+    state: state ?? { completed: [], confidence: {} },
+    preferences,
+    savedWords,
+  };
 }
 
 function writeSnapshot(snapshot: LearningSnapshot, userId?: string) {
@@ -175,7 +194,20 @@ function writeSnapshot(snapshot: LearningSnapshot, userId?: string) {
 }
 
 function serializeSnapshot(snapshot: LearningSnapshot) {
-  return JSON.stringify(normalizeLearningSnapshot(snapshot));
+  const normalized = normalizeLearningSnapshot(snapshot);
+  // Confidence keys are sorted so snapshots built in different orders compare
+  // equal instead of triggering spurious sync cycles.
+  const confidence: Record<string, Confidence> = {};
+  Object.keys(normalized.state.confidence)
+    .sort()
+    .forEach((key) => {
+      confidence[key] = normalized.state.confidence[key];
+    });
+
+  return JSON.stringify({
+    ...normalized,
+    state: { ...normalized.state, confidence },
+  });
 }
 
 export function LearningProvider({ children }: { children: React.ReactNode }) {
@@ -211,6 +243,9 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
   const pendingReconcileSnapshotRef = useRef<LearningSnapshot | null>(null);
   const cloudBaselinesRef = useRef(new Map<string, CloudBaseline>());
   const syncQueueRef = useRef(Promise.resolve());
+  const resetPendingRef = useRef(false);
+  const reconcileAttemptsRef = useRef(0);
+  const reconcileRetryTimerRef = useRef<number | null>(null);
 
   const snapshot = useMemo<LearningSnapshot>(
     () => ({ state, preferences, savedWords }),
@@ -293,6 +328,10 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       setSyncMessage("Backing up your progress…");
 
       syncQueueRef.current = syncQueueRef.current.then(async () => {
+        // A newer snapshot is already queued behind this task, so this write
+        // would only be overwritten again; let the newest version sync alone.
+        if (version !== syncVersionRef.current) return;
+
         const fail = () => {
           if (version === syncVersionRef.current) {
             setSyncStatus("error");
@@ -305,6 +344,14 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
           snapshot: cloneSnapshot(defaultSnapshot),
           revision: null,
         };
+        let explicitReset = resetPendingRef.current;
+        try {
+          explicitReset =
+            explicitReset ||
+            window.localStorage.getItem(keys.resetPending) === "true";
+        } catch {
+          // The in-memory flag still records a reset from this session.
+        }
 
         for (let attempt = 0; attempt < 4; attempt += 1) {
           const { data: latestRow, error: readError } =
@@ -336,6 +383,7 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
             baseline.snapshot,
             normalizedNext,
             latestSnapshot,
+            { explicitReset },
           );
           const normalizedMerged = normalizeLearningSnapshot(merged);
           const nextRevision =
@@ -375,17 +423,43 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
             }
           }
 
+          // When the cloud held newer progress from another device, the merged
+          // result is what actually synced; adopt it locally so the other
+          // device's additions appear without waiting for a reload.
+          const localUpToDate = version === syncVersionRef.current;
+          const mergedDiffers =
+            serializeSnapshot(normalizedMerged) !==
+            serializeSnapshot(normalizedNext);
+          const baselineSnapshot =
+            localUpToDate && mergedDiffers ? normalizedMerged : normalizedNext;
+
           cloudBaselinesRef.current.set(targetUser.id, {
-            snapshot: cloneSnapshot(normalizedNext),
+            snapshot: cloneSnapshot(baselineSnapshot),
             revision: nextRevision,
           });
           try {
             window.localStorage.setItem(
               keys.cloudBaseline,
-              serializeSnapshot(normalizedNext),
+              serializeSnapshot(baselineSnapshot),
             );
           } catch {
             // Cloud remains authoritative when browser storage is unavailable.
+          }
+
+          resetPendingRef.current = false;
+          try {
+            window.localStorage.removeItem(keys.resetPending);
+          } catch {
+            // The reset already reached the cloud; the flag is only a retry aid.
+          }
+
+          if (localUpToDate && mergedDiffers) {
+            applySnapshot(normalizedMerged);
+            try {
+              writeSnapshot(normalizedMerged, targetUser.id);
+            } catch {
+              // The merged snapshot still lives in memory and in the cloud.
+            }
           }
 
           if (version === syncVersionRef.current) {
@@ -403,7 +477,7 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
         fail();
       });
     },
-    [],
+    [applySnapshot],
   );
 
   useEffect(() => {
@@ -447,12 +521,20 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       let userCacheBaseline: LearningSnapshot | null = null;
       let claimedBy: string | null = null;
       let claimedBaseline: LearningSnapshot | null = null;
+      let resetPending = resetPendingRef.current;
 
       try {
         userCacheIsDirty =
           window.localStorage.getItem(keys.dirty) === "true";
       } catch {
         userCacheIsDirty = false;
+      }
+      try {
+        resetPending =
+          resetPending ||
+          window.localStorage.getItem(keys.resetPending) === "true";
+      } catch {
+        // The in-memory flag still records a reset from this session.
       }
       try {
         userCacheBaseline = parseLearningSnapshot(
@@ -503,6 +585,7 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
                 userCacheBaseline,
                 userSnapshot,
                 cloudSnapshot,
+                { explicitReset: resetPending },
               )
             : mergeSnapshots(userSnapshot, cloudSnapshot)
           : userSnapshot;
@@ -519,13 +602,20 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
             : cloneSnapshot(defaultSnapshot)
           : anonymousClaimSnapshot;
       if (shouldClaimAnonymous) {
-        next = mergeSnapshots(anonymousForMerge, next);
+        // The anonymous claim contributes learning additions. Preferences come
+        // from the device only on the very first claim of a fresh account;
+        // afterwards the signed-in account stays authoritative so the frozen
+        // anonymous snapshot cannot keep reverting settings changes.
+        next = mergeSnapshots(anonymousForMerge, next, {
+          preferences: !claimedBy && !cloudSnapshot ? "local" : "cloud",
+        });
       }
       if (pendingDuringRead) {
         next = applySnapshotChanges(
           reconciliationBaseline,
           pendingDuringRead,
           next,
+          { explicitReset: resetPending },
         );
       }
 
@@ -550,15 +640,23 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
         setSyncMessage(
           "You’re signed in, but your progress is only on this device right now.",
         );
+        scheduleReconcileRetry();
         return;
       }
 
       reconciliationFailedRef.current = false;
+      reconcileAttemptsRef.current = 0;
       cloudBaselinesRef.current.set(user.id, {
         snapshot: cloudSnapshot ?? cloneSnapshot(defaultSnapshot),
         revision: typeof cloudRevision === "number" ? cloudRevision : null,
       });
       const version = ++syncVersionRef.current;
+      // A reload that changed nothing has nothing to push; skipping the write
+      // avoids a pointless revision bump (and CAS contention) on every visit.
+      const cloudUnchanged =
+        !resetPending &&
+        serializeSnapshot(next) ===
+          serializeSnapshot(cloudSnapshot ?? cloneSnapshot(defaultSnapshot));
       try {
         window.localStorage.setItem(
           keys.cloudBaseline,
@@ -566,7 +664,10 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
             cloudSnapshot ?? cloneSnapshot(defaultSnapshot),
           ),
         );
-        window.localStorage.setItem(keys.dirty, "true");
+        window.localStorage.setItem(
+          keys.dirty,
+          cloudUnchanged ? "false" : "true",
+        );
         if (shouldClaimAnonymous) {
           window.localStorage.setItem(ANONYMOUS_CLAIM_KEY, user.id);
           window.localStorage.setItem(
@@ -577,10 +678,45 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // The snapshot still remains available in memory for this session.
       }
+      if (cloudUnchanged) {
+        setSyncStatus("synced");
+        setSyncMessage("Progress backed up.");
+        return;
+      }
       syncSnapshot(next, user, version);
     };
 
-    void reconcile();
+    const scheduleReconcileRetry = () => {
+      const attempt = reconcileAttemptsRef.current;
+      reconcileAttemptsRef.current = Math.min(attempt + 1, 6);
+      const delay = Math.min(30_000, 2_000 * 2 ** attempt);
+      if (reconcileRetryTimerRef.current) {
+        window.clearTimeout(reconcileRetryTimerRef.current);
+      }
+      reconcileRetryTimerRef.current = window.setTimeout(() => {
+        reconcileRetryTimerRef.current = null;
+        if (reconciliationId === reconciliationRef.current) {
+          setReconcileRetry((current) => current + 1);
+        }
+      }, delay);
+    };
+
+    reconcile().catch(() => {
+      if (reconciliationId !== reconciliationRef.current) return;
+      reconciliationFailedRef.current = true;
+      setSyncStatus("error");
+      setSyncMessage(
+        "You’re signed in, but your progress is only on this device right now.",
+      );
+      scheduleReconcileRetry();
+    });
+
+    return () => {
+      if (reconcileRetryTimerRef.current) {
+        window.clearTimeout(reconcileRetryTimerRef.current);
+        reconcileRetryTimerRef.current = null;
+      }
+    };
   }, [
     applySnapshot,
     authReady,
@@ -607,6 +743,18 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
     if (!cloudReady) {
       if (serialized !== lastSerializedRef.current) {
         pendingReconcileSnapshotRef.current = cloneSnapshot(snapshot);
+        // Persist edits made while the cloud read is still in flight so a
+        // closed tab cannot lose them; the dirty flag lets the next reconcile
+        // merge them via the cached baseline.
+        try {
+          writeSnapshot(snapshot, user.id);
+          window.localStorage.setItem(
+            userStorageKeys(user.id).dirty,
+            "true",
+          );
+        } catch {
+          // The pending snapshot remains available in memory.
+        }
       }
       return;
     }
@@ -633,8 +781,8 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
     if (syncTimerRef.current) {
       window.clearTimeout(syncTimerRef.current);
     }
-    setSyncStatus("saving");
-    setSyncMessage("Backing up your progress…");
+    // The "saving" status is set by syncSnapshot when the debounce fires, so
+    // a cleared timer cannot leave the UI stuck on "Backing up…".
     syncTimerRef.current = window.setTimeout(() => {
       syncSnapshot(snapshot, user, version);
     }, 650);
@@ -648,14 +796,107 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
   }, [cloudReady, hydrated, snapshot, syncSnapshot, user]);
 
   const retrySync = useCallback(() => {
-    if (!user || !cloudReady) return;
+    if (!user) return;
     if (reconciliationFailedRef.current) {
+      setReconcileRetry((current) => current + 1);
+      return;
+    }
+    if (!cloudReady) {
       setReconcileRetry((current) => current + 1);
       return;
     }
     const version = ++syncVersionRef.current;
     syncSnapshot(currentSnapshotRef.current, user, version);
   }, [cloudReady, syncSnapshot, user]);
+
+  const resetProgress = useCallback(() => {
+    // Reset intent is recorded explicitly so sync can distinguish a confirmed
+    // reset from a snapshot that merely lost its data.
+    resetPendingRef.current = true;
+    if (user) {
+      try {
+        window.localStorage.setItem(
+          userStorageKeys(user.id).resetPending,
+          "true",
+        );
+      } catch {
+        // The in-memory flag still covers this session.
+      }
+    }
+    setState({ completed: [], confidence: {} });
+  }, [user]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (reconciliationFailedRef.current) {
+        setReconcileRetry((current) => current + 1);
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    return () => window.removeEventListener("online", handleOnline);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+
+    const anonymousKeys = new Set<string>([
+      STORAGE_KEY,
+      LEGACY_STORAGE_KEY,
+      PREFERENCES_KEY,
+      SAVED_WORDS_KEY,
+    ]);
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key) return;
+
+      if (!user) {
+        if (!anonymousKeys.has(event.key)) return;
+        let stored: LearningSnapshot;
+        try {
+          stored = readAnonymousSnapshot();
+        } catch {
+          return;
+        }
+        // Another tab wrote the shared anonymous keys; merge instead of
+        // letting the tabs clobber each other last-writer-wins.
+        const merged = mergeSnapshots(currentSnapshotRef.current, stored, {
+          preferences: "cloud",
+        });
+        if (
+          serializeSnapshot(merged) ===
+          serializeSnapshot(currentSnapshotRef.current)
+        ) {
+          return;
+        }
+        anonymousSnapshotRef.current = merged;
+        applySnapshot(merged);
+        return;
+      }
+
+      if (!cloudReady) return;
+      const keys = userStorageKeys(user.id);
+      if (
+        event.key !== keys.progress &&
+        event.key !== keys.preferences &&
+        event.key !== keys.savedWords
+      ) {
+        return;
+      }
+      const stored = readUserSnapshot(user.id);
+      const merged = mergeSnapshots(currentSnapshotRef.current, stored, {
+        preferences: "cloud",
+      });
+      if (
+        serializeSnapshot(merged) !==
+        serializeSnapshot(currentSnapshotRef.current)
+      ) {
+        applySnapshot(merged);
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [applySnapshot, cloudReady, hydrated, user]);
 
   const signInWithPassword = useCallback(
     async (email: string, password: string): Promise<AuthResult> => {
@@ -746,12 +987,14 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       updatePassword,
       signOut,
       retrySync,
+      resetProgress,
     }),
     [
       authReady,
       cloudReady,
       hydrated,
       preferences,
+      resetProgress,
       retrySync,
       savedWords,
       sendPasswordReset,

@@ -109,9 +109,13 @@ async function withGeminiEnvironment(run) {
   const originalFishApiKey = process.env.FISH_API_KEY;
   const originalGrandmaVoiceId = process.env.FISH_GRANDMA_VOICE_ID;
   const originalGrandpaVoiceId = process.env.FISH_GRANDPA_VOICE_ID;
+  const originalTrustForwardedIp = process.env.TRUST_FORWARDED_IP;
   const originalFetch = globalThis.fetch;
 
   process.env.GEMINI_API_KEY = "assessment-test-secret";
+  // These tests simulate clients through x-forwarded-for, which the routes
+  // only honor behind this explicit proxy opt-in.
+  process.env.TRUST_FORWARDED_IP = "1";
   delete process.env.FISH_API_KEY;
   delete process.env.FISH_GRANDMA_VOICE_ID;
   delete process.env.FISH_GRANDPA_VOICE_ID;
@@ -130,6 +134,9 @@ async function withGeminiEnvironment(run) {
     if (originalGrandpaVoiceId === undefined)
       delete process.env.FISH_GRANDPA_VOICE_ID;
     else process.env.FISH_GRANDPA_VOICE_ID = originalGrandpaVoiceId;
+    if (originalTrustForwardedIp === undefined)
+      delete process.env.TRUST_FORWARDED_IP;
+    else process.env.TRUST_FORWARDED_IP = originalTrustForwardedIp;
   }
 }
 
@@ -234,7 +241,6 @@ test("the Live token route mints an assessment capability with matching expiry",
           },
           body: JSON.stringify({
             scenarioId: "family-check-in",
-            familyVoice: "grandma",
             relationship: "respectful",
             durationSeconds: 60,
           }),
@@ -616,6 +622,107 @@ test("rejects malformed or source-invalid model JSON without leaking model text"
       const responseText = await response.text();
       assert.match(responseText, /invalid_assessment/u);
       assert.doesNotMatch(responseText, /model-secret|hidden notes/iu);
+    }
+  });
+});
+
+test("repairs recoverable model field slips instead of discarding the turn", async () => {
+  await withGeminiEnvironment(async () => {
+    // Each case is a prompt-contract slip the model actually makes; a hard
+    // reject would permanently unscore the turn (the route never retries).
+    const cases = [
+      {
+        // Low confidence must abstain even when the model filled fields in.
+        output: {
+          learnerAssessmentConfidence: "low",
+          learnerSourceLanguage: "telugu",
+          learnerIntelligibilityRating: 3,
+          learnerPronunciationRating: 3,
+          learnerMeaningRating: 3,
+          learnerFormRating: 3,
+          learnerTeluguCoverageRating: null,
+          learnerFeedback: "Could you say that once more?",
+        },
+        expected: {
+          pronunciationScore: null,
+          accuracyScore: null,
+          languageScore: null,
+          confidence: "low",
+          ratings: {
+            intelligibility: null,
+            pronunciation: null,
+            meaning: null,
+            form: null,
+            teluguCoverage: null,
+          },
+          feedback: "Could you say that once more?",
+        },
+      },
+      {
+        // Coverage only applies to mixed replies; a stray value is dropped.
+        output: {
+          ...COMPLETE_TELUGU_ASSESSMENT,
+          learnerTeluguCoverageRating: 2,
+        },
+        expected: {
+          pronunciationScore: 94,
+          accuracyScore: 94,
+          languageScore: 94,
+          confidence: "high",
+          ratings: {
+            intelligibility: 4,
+            pronunciation: 3,
+            meaning: 4,
+            form: 3,
+            teluguCoverage: null,
+          },
+          feedback: "Keep the long aa clear in tinnaanu.",
+        },
+      },
+      {
+        // The prompt itself says coverage-0 speech is english, not mixed.
+        output: {
+          learnerAssessmentConfidence: "medium",
+          learnerSourceLanguage: "mixed",
+          learnerIntelligibilityRating: 3,
+          learnerPronunciationRating: 3,
+          learnerMeaningRating: 3,
+          learnerFormRating: 3,
+          learnerTeluguCoverageRating: 0,
+          learnerFeedback: "Try the whole reply in Telugu next time.",
+        },
+        expected: {
+          pronunciationScore: null,
+          accuracyScore: 50,
+          languageScore: 50,
+          confidence: "medium",
+          ratings: {
+            intelligibility: null,
+            pronunciation: null,
+            meaning: 3,
+            form: null,
+            teluguCoverage: null,
+          },
+          feedback: "Try the whole reply in Telugu next time.",
+        },
+      },
+    ];
+
+    for (const [index, { output, expected }] of cases.entries()) {
+      const ip = `192.0.2.${180 + index}`;
+      const token = await createLiveAssessmentAccessToken(
+        "family-check-in",
+        "respectful",
+        ip,
+        Date.now() + 60_000,
+      );
+      globalThis.fetch = async () => interactionResponse(output);
+
+      const response = await assessLearner(
+        assessmentRequest(validAssessmentBody(), { token, ip }),
+      );
+      assert.equal(response.status, 200, `case ${index}`);
+      assert.deepEqual(await response.json(), expected, `case ${index}`);
     }
   });
 });

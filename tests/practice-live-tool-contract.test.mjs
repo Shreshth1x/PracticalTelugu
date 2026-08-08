@@ -79,7 +79,7 @@ test("retains native Telugu for internal validation without adding it to visible
   assert.deepEqual(assessment, {
     pronunciationScore: 94,
     accuracyScore: 100,
-    languageScore: 97,
+    languageScore: 98,
     confidence: "high",
     ratings: {
       intelligibility: 4,
@@ -270,7 +270,7 @@ test("keeps transcript and scores when the optional pronunciation guide is missi
   );
   assert.equal(
     parseLiveLearnerAssessment(completeAssessmentCall)?.languageScore,
-    97,
+    98,
   );
 
   const mayuTurn = parseLiveMayuTurnToolCall({
@@ -367,7 +367,7 @@ test("accepts all four ratings with medium-confidence Telugu audio", () => {
   assert.equal(parsed?.confidence, "medium");
   assert.equal(parsed?.pronunciationScore, 94);
   assert.equal(parsed?.accuracyScore, 100);
-  assert.equal(parsed?.languageScore, 97);
+  assert.equal(parsed?.languageScore, 98);
 });
 
 test("keeps valid ratings scored when learner feedback is explicitly null", () => {
@@ -378,7 +378,7 @@ test("keeps valid ratings scored when learner feedback is explicitly null", () =
 
   assert.equal(parsed?.pronunciationScore, 94);
   assert.equal(parsed?.accuracyScore, 100);
-  assert.equal(parsed?.languageScore, 97);
+  assert.equal(parsed?.languageScore, 98);
   assert.equal(
     parsed?.feedback,
     "Keep the conversation going and try the next reply naturally.",

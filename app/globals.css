@@ -3599,10 +3599,6 @@ svg {
   margin: 24px 0 0;
 }
 
-.live-family-voice-setting {
-  grid-column: 1 / -1;
-}
-
 .live-session-settings fieldset {
   min-width: 0;
   margin: 0;
@@ -3766,16 +3762,6 @@ svg {
   letter-spacing: 0.025em;
 }
 
-.live-voice-notice {
-  display: block;
-  max-width: 520px;
-  margin-top: 7px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.45;
-  text-wrap: pretty;
-}
 
 .live-practice-details {
   grid-area: details;
@@ -5019,6 +5005,20 @@ svg {
 .live-follow-learner-draft[data-has-preview="true"] > p {
   color: var(--ink-strong);
   font-size: 17px;
+}
+
+/* Sanitized provider ASR shown live while the checked caption is prepared. */
+.live-draft-text {
+  font-style: italic;
+}
+
+.live-draft-text > small {
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 10px;
+  opacity: 0.75;
 }
 
 .live-follow-learner-draft + .live-follow-phrase {

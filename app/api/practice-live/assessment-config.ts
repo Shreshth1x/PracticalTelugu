@@ -118,6 +118,16 @@ function geminiApiKey() {
   return process.env.GEMINI_API_KEY?.trim() ?? "";
 }
 
+/**
+ * HMAC secret for the assessment capability token. A dedicated secret keeps
+ * token forgery independent of the Gemini API key, which is by definition
+ * shared with the upstream vendor on every request. The Gemini key remains a
+ * fallback so existing deployments keep working until the secret is set.
+ */
+function assessmentSigningSecret() {
+  return process.env.PRACTICE_LIVE_SIGNING_SECRET?.trim() || geminiApiKey();
+}
+
 function bytesToBase64Url(bytes: Uint8Array) {
   return bytesToBase64(bytes)
     .replace(/\+/g, "-")
@@ -180,7 +190,7 @@ export async function createLiveAssessmentAccessToken(
   ip: string,
   expiresAt: number,
 ) {
-  const secret = geminiApiKey();
+  const secret = assessmentSigningSecret();
   if (!secret) throw new Error("Gemini is not configured.");
 
   const payload: AssessmentCapabilityPayload = [
@@ -208,7 +218,7 @@ export async function verifyLiveAssessmentAccessToken(
   ip: string,
   now = Date.now(),
 ): Promise<LiveAssessmentAccessVerification> {
-  const secret = geminiApiKey();
+  const secret = assessmentSigningSecret();
   if (!secret || !token || token.length > MAX_ASSESSMENT_CAPABILITY_LENGTH) {
     return { valid: false, reason: "invalid" };
   }

@@ -1,5 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
-import { getPracticeLiveClientIp } from "../fish-config.ts";
+import { getPracticeLiveClientIp } from "../client-ip.ts";
 import {
   decodeLiveAssessmentPcm16,
   LIVE_ASSESSMENT_MODEL,
@@ -212,13 +212,64 @@ function consumeAssessment(ip: string, now: number) {
   }
 
   if (retryAt) {
-    assessmentsByForwardedIp.set(ip, recent);
+    trackAssessmentIp(ip, recent);
     return Math.max(1, Math.ceil((retryAt - now) / 1_000));
   }
 
   recent.push(now);
-  assessmentsByForwardedIp.set(ip, recent);
+  trackAssessmentIp(ip, recent);
   return 0;
+}
+
+// A spoofed-IP flood must not grow this instance's memory without bound, so
+// the tracker keeps at most this many addresses, evicting the least recently
+// seen. A durable platform rate limit is still required at public scale.
+const MAX_TRACKED_IPS = 10_000;
+
+function trackAssessmentIp(ip: string, recent: number[]) {
+  assessmentsByForwardedIp.delete(ip);
+  assessmentsByForwardedIp.set(ip, recent);
+  while (assessmentsByForwardedIp.size > MAX_TRACKED_IPS) {
+    const oldest = assessmentsByForwardedIp.keys().next().value;
+    if (oldest === undefined) break;
+    assessmentsByForwardedIp.delete(oldest);
+  }
+}
+
+/**
+ * Repairs recoverable field-hygiene slips in an otherwise valid assessment so
+ * a stray non-null field does not discard a scored turn (each rejection is a
+ * lost data point — the interaction runs with maxRetries 0). Out-of-range
+ * values and unknown fields still hard-fail in parseLiveLearnerAssessment.
+ */
+function coerceRecoverableAssessment(rawAssessment: Record<string, unknown>) {
+  const coerced = { ...rawAssessment };
+
+  if (coerced.learnerAssessmentConfidence === "low") {
+    // Low confidence is a complete abstention; the prompt asks for nulls but
+    // the model sometimes fills fields anyway.
+    coerced.learnerSourceLanguage = null;
+    coerced.learnerIntelligibilityRating = null;
+    coerced.learnerPronunciationRating = null;
+    coerced.learnerMeaningRating = null;
+    coerced.learnerFormRating = null;
+    coerced.learnerTeluguCoverageRating = null;
+  } else if (coerced.learnerSourceLanguage === "telugu") {
+    // Coverage only applies to mixed replies.
+    coerced.learnerTeluguCoverageRating = null;
+  } else if (
+    coerced.learnerSourceLanguage === "mixed" &&
+    coerced.learnerTeluguCoverageRating === 0
+  ) {
+    // The prompt itself says coverage-0 speech is english, not mixed.
+    coerced.learnerSourceLanguage = "english";
+    coerced.learnerIntelligibilityRating = null;
+    coerced.learnerPronunciationRating = null;
+    coerced.learnerFormRating = null;
+    coerced.learnerTeluguCoverageRating = null;
+  }
+
+  return coerced;
 }
 
 function parseModelAssessment(outputText: unknown) {
@@ -238,7 +289,9 @@ function parseModelAssessment(outputText: unknown) {
       return null;
     }
 
-    return parseLiveLearnerAssessment(rawAssessment);
+    return parseLiveLearnerAssessment(
+      coerceRecoverableAssessment(rawAssessment),
+    );
   } catch {
     return null;
   }
@@ -453,6 +506,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // Trust boundary: priorMayu and checkedCaption are client-supplied free
+  // text. A dishonest client can only inflate its own self-study score with
+  // them — the grade is computed and stored client-side anyway. If grades
+  // ever feed leaderboards, streaks, or rewards, grading must move fully
+  // server-side first.
   const contextText = JSON.stringify({
     scenario: {
       id: scenario.id,
@@ -491,6 +549,10 @@ export async function POST(request: Request) {
         generation_config: {
           max_output_tokens: 384,
           thinking_level: "low",
+          // The ordinal rubric only stays repeatable if sampling is pinned.
+          // The interactions API has no temperature field; a fixed decoding
+          // seed is its reproducibility control.
+          seed: 0,
         },
       },
       {

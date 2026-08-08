@@ -191,7 +191,7 @@ test("accepts complete English-letter captions and blocks Telugu script", () => 
   assert.equal(parsed?.learner?.assessment.confidence, "high");
   assert.equal(parsed?.learner?.assessment.pronunciationScore, 94);
   assert.equal(parsed?.learner?.assessment.accuracyScore, 100);
-  assert.equal(parsed?.learner?.assessment.languageScore, 97);
+  assert.equal(parsed?.learner?.assessment.languageScore, 98);
   assert.equal(parsed?.replay, false);
 
   assert.equal(

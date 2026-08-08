@@ -10,8 +10,6 @@ function session(overrides = {}) {
   return {
     id: "current",
     scenarioId: "family-check-in",
-    familyVoice: "grandma",
-    voiceMode: "gemini",
     relationship: "respectful",
     sessionLimitSeconds: 60,
     grade: { rubricVersion: 2, overallScore: 80 },

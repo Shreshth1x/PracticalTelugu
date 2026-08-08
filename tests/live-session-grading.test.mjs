@@ -25,6 +25,7 @@ test("returns an honest, actionable empty grade when there are no turns", () => 
     rubricVersion: 2,
     averageResponseMs: null,
     assessedTurns: 0,
+    unscoredTurns: 0,
     overallScore: null,
     pronunciationScore: null,
     accuracyScore: null,
@@ -85,7 +86,9 @@ test("grades only final learner turns and gives response timing zero overall wei
   assert.equal(grade.pronunciationScore, 70);
   assert.equal(grade.accuracyScore, 80);
   assert.equal(grade.averageResponseMs, 4_000);
-  assert.equal(grade.responseScore, 92);
+  // Each turn is banded first (92 and 82), then averaged, so one slow
+  // outlier can no longer drag the whole session into a low band.
+  assert.equal(grade.responseScore, 87);
   assert.equal(grade.overallScore, 75);
   assert.equal(grade.strongestMetric, "accuracy");
   assert.equal(grade.rubricVersion, 2);
@@ -244,7 +247,7 @@ test("keeps response-only data but does not invent an overall grade", () => {
   assert.equal(isLiveSessionGrade(grade), true);
 });
 
-test("keeps a low-confidence repeat unscored while preserving its next step", () => {
+test("keeps a low-confidence repeat unscored and gives a session-level next step", () => {
   const grade = gradeLiveSession([
     learnerTurn({
       responseLatencyMs: 3_000,
@@ -270,7 +273,54 @@ test("keeps a low-confidence repeat unscored while preserving its next step", ()
   assert.equal(grade.accuracyScore, null);
   assert.equal(grade.responseScore, 92);
   assert.equal(grade.overallScore, null);
-  assert.equal(grade.nextStep, "Please repeat once at a comfortable volume.");
+  assert.equal(grade.unscoredTurns, 1);
+  // A per-turn "repeat that" line is mid-conversation coaching; after the
+  // session the learner needs an actionable environment fix instead.
+  assert.match(grade.nextStep, /could not be scored reliably/);
+});
+
+test("excludes a deliberately null language score instead of deriving one", () => {
+  const grade = gradeLiveSession([
+    learnerTurn({
+      id: "partial-mixed",
+      assessment: {
+        // Calibration abstained (languageScore present but null); deriving a
+        // pronunciation-only score here would bypass the coverage cap.
+        pronunciationScore: 95,
+        accuracyScore: null,
+        languageScore: null,
+        feedback: "Say the full phrase in Telugu.",
+      },
+    }),
+    learnerTurn({
+      id: "scored",
+      assessment: {
+        pronunciationScore: 60,
+        accuracyScore: 70,
+        languageScore: 66,
+        feedback: "Keep the vowel long.",
+      },
+    }),
+  ]);
+
+  assert.equal(grade.assessedTurns, 1);
+  assert.equal(grade.unscoredTurns, 1);
+  assert.equal(grade.overallScore, 66);
+  // The abstained turn's pronunciation must not leak into the averages.
+  assert.equal(grade.pronunciationScore, 60);
+});
+
+test("ignores step-away latencies instead of letting them sink the timing score", () => {
+  const grade = gradeLiveSession([
+    learnerTurn({ id: "quick-one", responseLatencyMs: 2_000 }),
+    learnerTurn({ id: "quick-two", responseLatencyMs: 3_000 }),
+    learnerTurn({ id: "walked-away", responseLatencyMs: 60_000 }),
+  ]);
+
+  // The 60s outlier is a pause, not a timing signal: the median of the
+  // remaining turns is displayed and their band scores are averaged.
+  assert.equal(grade.averageResponseMs, 2_500);
+  assert.equal(grade.responseScore, 96);
 });
 
 test("rounds and clamps all aggregated metric scores to integer 0-100", () => {

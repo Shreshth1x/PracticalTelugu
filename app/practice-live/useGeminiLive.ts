@@ -13,14 +13,11 @@ import {
   type LivePhraseCue,
 } from "./live-follow-along";
 import {
-  DEFAULT_LIVE_FAMILY_VOICE,
   DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   DEFAULT_LIVE_SESSION_DURATION,
-  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
   PRESENT_TURN_TOOL_NAME,
-  type LiveFamilyVoice,
   type LiveListenerRelationship,
   type LiveSessionDurationSeconds,
 } from "./live-config";
@@ -31,11 +28,6 @@ import {
   learnerCaptionRequired,
   type LearnerTurnEvent,
 } from "./live-learner-turn";
-import {
-  createFishSpeechController,
-  FISH_SPEECH_CLIENT_TIMEOUT_MS,
-  type FishSpeechController,
-} from "./live-fish-speech";
 import {
   createLiveOutputCaptureGuard,
   shouldForwardLiveMicrophoneFrame,
@@ -68,17 +60,11 @@ import {
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
   parseLivePresentedTurnToolCall,
+  sanitizeLiveProvisionalTranscript,
   type ParsedLiveCaptionTurn,
   type ParsedLivePresentedTurnToolCall,
   type LiveTranscriptTurn,
 } from "./live-transcript";
-import {
-  getLiveVoiceFallbackNotice,
-  getLiveVoiceModeNotice,
-  isLiveVoiceModeReason,
-  type LiveVoiceModeReason,
-} from "./live-voice-status";
-import { getSupabaseBrowserClient } from "../supabase-client";
 
 export type { LiveTranscriptTurn } from "./live-transcript";
 
@@ -94,14 +80,9 @@ export type LivePhase =
   | "setup"
   | "error";
 
-export type LiveVoiceMode = "gemini" | "fish";
-
 export type CompletedLiveSession = {
   id: string;
   scenarioId: LiveScenarioId;
-  familyVoice?: LiveFamilyVoice;
-  voiceMode?: LiveVoiceMode;
-  usedVoiceFallback?: boolean;
   relationship: LiveListenerRelationship;
   sessionLimitSeconds: LiveSessionDurationSeconds;
   completionReason: "manual" | "limit";
@@ -116,11 +97,7 @@ type TokenResponse = {
   token?: string;
   model?: string;
   config?: LiveConnectConfig;
-  voiceMode?: LiveVoiceMode;
-  voiceModeReason?: LiveVoiceModeReason;
-  voiceAccessToken?: string;
   assessmentAccessToken?: string;
-  familyVoice?: LiveFamilyVoice;
   openingCue?: string;
   relationship?: LiveListenerRelationship;
   sessionLimitSeconds?: LiveSessionDurationSeconds;
@@ -139,8 +116,17 @@ const OUTPUT_SAMPLE_RATE = 24_000;
 const PCM_WORKLET_NAME = "practicaltelugu-live-pcm";
 const PCM_WORKLET_URL = "/live-pcm-worklet.js";
 const LAST_EXCHANGE_SECONDS = 15;
-const ACCOUNT_SESSION_TIMEOUT_MS = 1_500;
-const ACCOUNT_SESSION_RETRY_TIMEOUT_MS = 3_000;
+// A watchdog frees the conversation when Gemini's audio and its accepted
+// presentation ever arrive out of contract instead of stalling silently.
+const PENDING_AUDIO_WATCHDOG_MS = 1_500;
+const STUCK_PRESENTATION_WATCHDOG_MS = 5_000;
+// A short first-chunk lead absorbs network jitter between audio chunks; the
+// drain grace keeps a momentary gap from resetting playback mid-sentence.
+const INITIAL_PLAYBACK_LEAD_SECONDS = 0.12;
+const CHUNK_PLAYBACK_LEAD_SECONDS = 0.025;
+const PLAYBACK_DRAIN_GRACE_MS = 250;
+const CLOSING_CONTROL_TEXT =
+  "Practice control: this is the last exchange. Give one short, natural Telugu closing in the locked relationship register. Call present_turn before speaking, then wait.";
 
 type CompletionReason = CompletedLiveSession["completionReason"];
 
@@ -169,38 +155,6 @@ let genAILibraryPromise: Promise<typeof import("@google/genai")> | null = null;
 function loadGenAILibrary() {
   genAILibraryPromise ??= import("@google/genai");
   return genAILibraryPromise;
-}
-
-type AccountAccessTokenResult =
-  | { status: "authenticated"; accessToken: string }
-  | { status: "signed_out" | "unavailable" | "timed_out" };
-
-async function loadAccountAccessToken(
-  timeoutMs = ACCOUNT_SESSION_TIMEOUT_MS,
-): Promise<AccountAccessTokenResult> {
-  let timeoutId: number | null = null;
-
-  try {
-    return await Promise.race([
-      getSupabaseBrowserClient()
-        .auth.getSession()
-        .then(({ data }) => {
-          const accessToken = data.session?.access_token?.trim() ?? "";
-          return accessToken
-            ? ({ status: "authenticated", accessToken } as const)
-            : ({ status: "signed_out" } as const);
-        })
-        .catch(() => ({ status: "unavailable" }) as const),
-      new Promise<AccountAccessTokenResult>((resolve) => {
-        timeoutId = window.setTimeout(
-          () => resolve({ status: "timed_out" }),
-          timeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeoutId !== null) window.clearTimeout(timeoutId);
-  }
 }
 
 function getAudioContextConstructor() {
@@ -275,18 +229,6 @@ function base64ToFloat32(value: string) {
   return output;
 }
 
-function pcmBytesToFloat32(bytes: Uint8Array) {
-  const byteLength = bytes.byteLength - (bytes.byteLength % 2);
-  const view = new DataView(bytes.buffer, bytes.byteOffset, byteLength);
-  const output = new Float32Array(byteLength / 2);
-
-  for (let index = 0; index < output.length; index += 1) {
-    output[index] = view.getInt16(index * 2, true) / 0x8000;
-  }
-
-  return output;
-}
-
 function rmsLevel(samples: Float32Array) {
   if (!samples.length) return 0;
 
@@ -339,7 +281,6 @@ export function useGeminiLive(
   relationship: LiveListenerRelationship =
     DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   durationSeconds: LiveSessionDurationSeconds = DEFAULT_LIVE_SESSION_DURATION,
-  familyVoice: LiveFamilyVoice = DEFAULT_LIVE_FAMILY_VOICE,
 ) {
   const scenario =
     liveScenarios.find((candidate) => candidate.id === scenarioId) ??
@@ -357,10 +298,9 @@ export function useGeminiLive(
   const [activeTurn, setActiveTurn] = useState<LiveTranscriptTurn | null>(null);
   const [completedSession, setCompletedSession] =
     useState<CompletedLiveSession | null>(null);
-  const [activeVoiceMode, setActiveVoiceMode] =
-    useState<LiveVoiceMode | null>(null);
-  const [usedVoiceFallback, setUsedVoiceFallback] = useState(false);
-  const [voiceNotice, setVoiceNotice] = useState("");
+  // Sanitized provider ASR for the in-flight learner reply, rendered as an
+  // explicitly unchecked draft so the learner sees what was heard right away.
+  const [learnerDraft, setLearnerDraft] = useState("");
   const [latestTurnLatencyMs, setLatestTurnLatencyMs] = useState<number | null>(
     null,
   );
@@ -392,19 +332,13 @@ export function useGeminiLive(
   const tokenRequestRef = useRef<AbortController | null>(null);
   const assessmentAccessTokenRef = useRef<string | null>(null);
   const assessmentRequestControllersRef = useRef(new Set<AbortController>());
-  const voiceModeRef = useRef<LiveVoiceMode>("gemini");
-  const voiceAccessTokenRef = useRef<string | null>(null);
-  const usedVoiceFallbackRef = useRef(false);
-  const fishSpeechControllerRef = useRef<
-    FishSpeechController<Float32Array, string> | null
-  >(null);
   const connectionAttemptRef = useRef(0);
   const ignoreConnectionEventsRef = useRef(false);
   const mutedRef = useRef(false);
   const closingRequestedRef = useRef(false);
+  const closingQueuedRef = useRef(false);
   const goAwayReceivedRef = useRef(false);
   const activeRelationshipRef = useRef<LiveListenerRelationship>(relationship);
-  const activeFamilyVoiceRef = useRef<LiveFamilyVoice>(familyVoice);
   const activeSessionLimitRef = useRef<LiveSessionDurationSeconds>(
     durationSeconds,
   );
@@ -422,9 +356,27 @@ export function useGeminiLive(
   const activeTurnRef = useRef<LiveTranscriptTurn | null>(null);
   const toolTurnIdsRef = useRef(new Map<string, string>());
   const mayuPresentationReadyRef = useRef(false);
-  const suppressNativeAudioUntilBoundaryRef = useRef(false);
   const pendingNativeAudioRef = useRef<string[]>([]);
   const pendingPresentedTurnRef = useRef<PendingPresentedTurn | null>(null);
+  const pendingAudioWatchdogRef = useRef<number | null>(null);
+  const stuckPresentationWatchdogRef = useRef<number | null>(null);
+  const drainGraceTimerRef = useRef<number | null>(null);
+  const releaseStalledPresentationRef = useRef<() => void>(() => undefined);
+  const outputTranscriptionTextRef = useRef("");
+  const resumeHandleRef = useRef<string | null>(null);
+  const resumeAttemptedRef = useRef(false);
+  const workletReadyResolvedRef = useRef(false);
+  const liveConnectionRef = useRef<{
+    apiToken: string;
+    model: string;
+    config: LiveConnectConfig;
+    callbacks: {
+      onopen: () => void;
+      onmessage: (message: LiveServerMessage) => void;
+      onerror: () => void;
+      onclose: (event: CloseEvent) => void;
+    };
+  } | null>(null);
   const learnerAssessmentAudioRef = useRef(
     createLiveAssessmentAudioCapture(),
   );
@@ -436,6 +388,43 @@ export function useGeminiLive(
     phaseRef.current = nextPhase;
     setPhase(nextPhase);
   }, []);
+
+  const clearPendingAudioWatchdog = useCallback(() => {
+    if (pendingAudioWatchdogRef.current !== null) {
+      window.clearTimeout(pendingAudioWatchdogRef.current);
+      pendingAudioWatchdogRef.current = null;
+    }
+  }, []);
+
+  const clearStuckPresentationWatchdog = useCallback(() => {
+    if (stuckPresentationWatchdogRef.current !== null) {
+      window.clearTimeout(stuckPresentationWatchdogRef.current);
+      stuckPresentationWatchdogRef.current = null;
+    }
+  }, []);
+
+  const clearDrainGraceTimer = useCallback(() => {
+    if (drainGraceTimerRef.current !== null) {
+      window.clearTimeout(drainGraceTimerRef.current);
+      drainGraceTimerRef.current = null;
+    }
+  }, []);
+
+  const armPendingAudioWatchdog = useCallback(() => {
+    if (pendingAudioWatchdogRef.current !== null) return;
+    pendingAudioWatchdogRef.current = window.setTimeout(() => {
+      pendingAudioWatchdogRef.current = null;
+      releaseStalledPresentationRef.current();
+    }, PENDING_AUDIO_WATCHDOG_MS);
+  }, []);
+
+  const armStuckPresentationWatchdog = useCallback(() => {
+    clearStuckPresentationWatchdog();
+    stuckPresentationWatchdogRef.current = window.setTimeout(() => {
+      stuckPresentationWatchdogRef.current = null;
+      releaseStalledPresentationRef.current();
+    }, STUCK_PRESENTATION_WATCHDOG_MS);
+  }, [clearStuckPresentationWatchdog]);
 
   const getOutputCaptureGuard = useCallback(() => {
     outputCaptureGuardRef.current ??= createLiveOutputCaptureGuard({
@@ -494,9 +483,7 @@ export function useGeminiLive(
   }, []);
 
   const stopPlayback = useCallback(() => {
-    fishSpeechControllerRef.current?.cancel();
-    fishSpeechControllerRef.current = null;
-
+    clearDrainGraceTimer();
     const hadActiveOutput = activeSourcesRef.current.size > 0;
     for (const source of activeSourcesRef.current) {
       source.onended = null;
@@ -509,23 +496,23 @@ export function useGeminiLive(
 
     activeSourcesRef.current.clear();
     nextPlaybackTimeRef.current = 0;
-    const outputCaptureGuard = getOutputCaptureGuard();
-    if (hadActiveOutput) {
-      outputCaptureGuard.beginOutput();
-      outputCaptureGuard.releaseAfterTail();
-      setMicLevel(0);
-    } else if (outputCaptureGuard.isInputBlocked()) {
-      outputCaptureGuard.discardReleaseCallback();
-    }
+    // A stop here is an interruption or teardown: release the guard right
+    // away instead of re-arming an echo tail, so the learner's barge-in is
+    // heard without a dead-microphone-meter gap.
+    getOutputCaptureGuard().cancel();
+    if (hadActiveOutput) setMicLevel(0);
     setAssistantLevel(0);
-    return hadActiveOutput || outputCaptureGuard.isInputBlocked();
-  }, [getOutputCaptureGuard]);
+    return hadActiveOutput;
+  }, [clearDrainGraceTimer, getOutputCaptureGuard]);
 
   const releaseHardware = useCallback(() => {
     connectionAttemptRef.current += 1;
     tokenRequestRef.current?.abort();
     tokenRequestRef.current = null;
-    voiceAccessTokenRef.current = null;
+    liveConnectionRef.current = null;
+    resumeHandleRef.current = null;
+    clearPendingAudioWatchdog();
+    clearStuckPresentationWatchdog();
 
     stopPlayback();
     getOutputCaptureGuard().cancel();
@@ -558,6 +545,7 @@ export function useGeminiLive(
 
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
+    workletReadyResolvedRef.current = false;
 
     const inputContext = inputContextRef.current;
     const outputContext = outputContextRef.current;
@@ -568,7 +556,12 @@ export function useGeminiLive(
 
     setMicLevel(0);
     setAssistantLevel(0);
-  }, [getOutputCaptureGuard, stopPlayback]);
+  }, [
+    clearPendingAudioWatchdog,
+    clearStuckPresentationWatchdog,
+    getOutputCaptureGuard,
+    stopPlayback,
+  ]);
 
   const failSession = useCallback(
     (message: string) => {
@@ -704,7 +697,10 @@ export function useGeminiLive(
     mayuPresentationReadyRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
-  }, []);
+    outputTranscriptionTextRef.current = "";
+    clearPendingAudioWatchdog();
+    clearStuckPresentationWatchdog();
+  }, [clearPendingAudioWatchdog, clearStuckPresentationWatchdog]);
 
   const beginLearnerCaption = useCallback(() => {
     const next = beginPendingLearnerTurn(
@@ -724,10 +720,16 @@ export function useGeminiLive(
         value,
       );
       if (next === transcriptRef.current) return;
-      // Provider ASR has no stability/finality guarantee. Keep it privately as
-      // an end-of-session fallback, but do not flash an unverified guess in the
-      // learner-facing transcript before the checked caption arrives.
+      // Provider ASR has no stability/finality guarantee, so it never becomes
+      // an authoritative transcript row. It is kept privately as the
+      // end-of-session fallback, and the sanitized text is surfaced as a
+      // lightweight draft state so the learner immediately sees what was
+      // heard, clearly marked unchecked, until the checked caption arrives.
       transcriptRef.current = next;
+      const pending = next.findLast(
+        (turn) => turn.speaker === "you" && !turn.final,
+      );
+      setLearnerDraft(pending?.provisionalRoman ?? "");
     },
     [],
   );
@@ -797,6 +799,17 @@ export function useGeminiLive(
     setActiveTurn(turn);
   }, []);
 
+  const sendQueuedClosingControl = useCallback(() => {
+    if (!closingQueuedRef.current || !sessionRef.current) return false;
+
+    closingQueuedRef.current = false;
+    applyLearnerTurnEvent({ type: "control-turn-requested" });
+    prepareMayuResponse();
+    updatePhase("thinking");
+    sessionRef.current.sendRealtimeInput({ text: CLOSING_CONTROL_TEXT });
+    return true;
+  }, [applyLearnerTurnEvent, prepareMayuResponse, updatePhase]);
+
   const settleAssistantPlayback = useCallback(() => {
     if (activeSourcesRef.current.size) return;
 
@@ -809,17 +822,29 @@ export function useGeminiLive(
         return;
       }
 
+      if (pendingPresentedTurnRef.current) {
+        // turnComplete can precede the continuation turn's first audio chunk.
+        // Keep the validated presentation pending instead of erasing it; the
+        // buffered-audio path or its watchdog finalizes and plays it.
+        armStuckPresentationWatchdog();
+        if (phaseRef.current === "speaking") updatePhase("thinking");
+        return;
+      }
+
       mayuAudioEndedAtRef.current = performance.now();
       prepareMayuResponse();
       openLearnerReplyWindow();
+      if (sendQueuedClosingControl()) return;
       if (isSessionPhase(phaseRef.current)) {
         updatePhase(mutedRef.current ? "muted" : "listening");
       }
     });
   }, [
+    armStuckPresentationWatchdog,
     getOutputCaptureGuard,
     openLearnerReplyWindow,
     prepareMayuResponse,
+    sendQueuedClosingControl,
     updatePhase,
   ]);
 
@@ -829,10 +854,12 @@ export function useGeminiLive(
       if (!context || context.state === "closed") return;
       if (!samples.length) return;
 
-      // Playback pauses microphone uploads for longer than a second. Close the
-      // current Live audio stream before that gap so Gemini flushes any cached
-      // input; a later PCM frame starts a fresh stream automatically.
-      endMicrophoneStream();
+      // Full-duplex playback: microphone frames keep streaming while Mayu
+      // speaks so Gemini's server VAD hears a barge-in and interrupts. The
+      // guard below only quiets the local mic meter and times the reply
+      // window; hardware echo cancellation covers speaker bleed.
+      clearDrainGraceTimer();
+      clearStuckPresentationWatchdog();
       getOutputCaptureGuard().beginOutput();
       setMicLevel(0);
 
@@ -853,8 +880,12 @@ export function useGeminiLive(
       source.buffer = buffer;
       source.connect(context.destination);
 
+      const lead =
+        nextPlaybackTimeRef.current === 0
+          ? INITIAL_PLAYBACK_LEAD_SECONDS
+          : CHUNK_PLAYBACK_LEAD_SECONDS;
       const startAt = Math.max(
-        context.currentTime + 0.025,
+        context.currentTime + lead,
         nextPlaybackTimeRef.current,
       );
       nextPlaybackTimeRef.current = startAt + buffer.duration;
@@ -868,17 +899,25 @@ export function useGeminiLive(
 
       source.onended = () => {
         activeSourcesRef.current.delete(source);
-        if (!activeSourcesRef.current.size) {
+        if (activeSourcesRef.current.size) return;
+
+        // A momentary network gap between chunks must not reset scheduling or
+        // flash the phase mid-sentence; settle only after a short drain grace.
+        clearDrainGraceTimer();
+        drainGraceTimerRef.current = window.setTimeout(() => {
+          drainGraceTimerRef.current = null;
+          if (activeSourcesRef.current.size) return;
           nextPlaybackTimeRef.current = 0;
           settleAssistantPlayback();
-        }
+        }, PLAYBACK_DRAIN_GRACE_MS);
       };
 
       void context.resume();
       source.start(startAt);
     },
     [
-      endMicrophoneStream,
+      clearDrainGraceTimer,
+      clearStuckPresentationWatchdog,
       getOutputCaptureGuard,
       settleAssistantPlayback,
       updatePhase,
@@ -890,92 +929,6 @@ export function useGeminiLive(
       playSamples(base64ToFloat32(encodedAudio));
     },
     [playSamples],
-  );
-
-  const requestFishSpeech = useCallback(
-    (text: string) => {
-      if (voiceModeRef.current !== "fish") return;
-      let fallbackCode: unknown;
-
-      const controller =
-        fishSpeechControllerRef.current ??
-        createFishSpeechController<Float32Array, string>(
-          {
-            scheduleTimeout: (callback, delayMs) =>
-              window.setTimeout(callback, delayMs),
-            cancelTimeout: (handle) => window.clearTimeout(handle as number),
-            createAbortController: () => new AbortController(),
-          },
-          FISH_SPEECH_CLIENT_TIMEOUT_MS,
-        );
-      fishSpeechControllerRef.current = controller;
-
-      controller.start({
-        request: async (signal) => {
-          const response = await fetch("/api/practice-live/voice", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text,
-              familyVoice: activeFamilyVoiceRef.current,
-              voiceAccessToken: voiceAccessTokenRef.current,
-            }),
-            cache: "no-store",
-            credentials: "same-origin",
-            signal,
-          });
-          if (!response.ok) {
-            const payload = await response.json().catch(() => null) as {
-              code?: unknown;
-            } | null;
-            fallbackCode = payload?.code;
-            throw new Error("Fish Audio rejected the turn.");
-          }
-
-          const samples = pcmBytesToFloat32(
-            new Uint8Array(await response.arrayBuffer()),
-          );
-          if (!samples.length) throw new Error("Fish Audio returned empty audio.");
-          return samples;
-        },
-        playFish: playSamples,
-        playFallback: playAudio,
-        onFallback: () => {
-          usedVoiceFallbackRef.current = true;
-          if (mountedRef.current) {
-            setUsedVoiceFallback(true);
-            setVoiceNotice(
-              getLiveVoiceFallbackNotice(
-                activeFamilyVoiceRef.current,
-                fallbackCode,
-              ),
-            );
-          }
-        },
-        onFallbackReleased: () => {
-          if (
-            !activeSourcesRef.current.size &&
-            mayuTurnCompleteRef.current
-          ) {
-            settleAssistantPlayback();
-          }
-        },
-      });
-    },
-    [playAudio, playSamples, settleAssistantPlayback],
-  );
-
-  const playPresentedNativeAudio = useCallback(
-    (encodedAudio: string) => {
-      const fishSpeechController =
-        voiceModeRef.current === "fish"
-          ? fishSpeechControllerRef.current
-          : null;
-      if (!fishSpeechController?.bufferFallback(encodedAudio)) {
-        playAudio(encodedAudio);
-      }
-    },
-    [playAudio],
   );
 
   const finalizePendingPresentation = useCallback(() => {
@@ -1000,6 +953,7 @@ export function useGeminiLive(
           sourceLanguage: pending.learnerCaption.sourceLanguage,
           responseLatencyMs: pending.learnerResponseLatencyMs,
         });
+        setLearnerDraft("");
         const pcm = takeLiveAssessmentAudio(learnerAssessmentAudioRef.current);
         if (pcm && priorMayu?.speaker === "mayu") {
           assessmentRequest = {
@@ -1040,14 +994,17 @@ export function useGeminiLive(
 
     activateTurn(mayuTurn);
     if (pending.cue) activateCue(pending.cue);
-    requestFishSpeech(pending.parsed.mayu.teluguInternal);
 
     mayuPresentationReadyRef.current = true;
+    clearPendingAudioWatchdog();
     const pendingAudio = pendingNativeAudioRef.current;
     pendingNativeAudioRef.current = [];
     for (const encodedAudio of pendingAudio) {
-      playPresentedNativeAudio(encodedAudio);
+      playAudio(encodedAudio);
     }
+    // A finalized presentation with no audio yet must not stall the session
+    // if Gemini never speaks; the watchdog settles the turn with its caption.
+    if (!pendingAudio.length) armStuckPresentationWatchdog();
     if (assessmentRequest) {
       window.setTimeout(
         () => requestLearnerAssessment(assessmentRequest),
@@ -1059,16 +1016,75 @@ export function useGeminiLive(
     activateCue,
     activateTurn,
     applyLearnerTurnEvent,
+    armStuckPresentationWatchdog,
+    clearPendingAudioWatchdog,
     commitTranscript,
-    playPresentedNativeAudio,
-    requestFishSpeech,
+    playAudio,
     requestLearnerAssessment,
+  ]);
+
+  useEffect(() => {
+    // Watchdog recovery shared by both stall shapes: audio buffered without an
+    // accepted presentation, and an accepted presentation whose audio never
+    // arrived. Either way the conversation continues instead of hanging.
+    releaseStalledPresentationRef.current = () => {
+      if (!mountedRef.current) return;
+
+      if (pendingPresentedTurnRef.current) {
+        finalizePendingPresentation();
+        return;
+      }
+
+      const buffered = pendingNativeAudioRef.current;
+      if (buffered.length && !mayuPresentationReadyRef.current) {
+        // Mayu spoke without an accepted present_turn call. Release the audio
+        // with a transliterated output-transcription caption fallback.
+        const roman = sanitizeLiveProvisionalTranscript(
+          outputTranscriptionTextRef.current,
+        );
+        const fallbackTurn: LiveTranscriptTurn = {
+          id: `mayu-uncaptioned-${Date.now()}`,
+          speaker: "mayu",
+          roman: roman || "(Telugu caption unavailable)",
+          english: "Live caption unavailable for this turn.",
+          final: true,
+          sourceLanguage: "telugu",
+        };
+        commitTranscript(
+          applyLiveCaptionTurn(transcriptRef.current, fallbackTurn),
+        );
+        activateTurn(fallbackTurn);
+        mayuPresentationReadyRef.current = true;
+        pendingNativeAudioRef.current = [];
+        for (const encodedAudio of buffered) playAudio(encodedAudio);
+        return;
+      }
+
+      if (
+        !activeSourcesRef.current.size &&
+        mayuPresentationReadyRef.current
+      ) {
+        mayuTurnCompleteRef.current = true;
+        settleAssistantPlayback();
+      }
+    };
+  }, [
+    activateTurn,
+    commitTranscript,
+    finalizePendingPresentation,
+    playAudio,
+    settleAssistantPlayback,
   ]);
 
   const handleServerMessage = useCallback(
     (message: LiveServerMessage) => {
       if (message.usageMetadata) {
         latestUsageMetadataRef.current = message.usageMetadata;
+      }
+
+      if (message.sessionResumptionUpdate) {
+        const { resumable, newHandle } = message.sessionResumptionUpdate;
+        if (resumable && newHandle) resumeHandleRef.current = newHandle;
       }
 
       if (message.goAway) {
@@ -1171,7 +1187,9 @@ export function useGeminiLive(
             mayuPresentationReadyRef.current &&
             learnerReplyWindowOpenedAtRef.current === null
           ) {
-            suppressNativeAudioUntilBoundaryRef.current = true;
+            // Reject the duplicate call silently but keep playing the already
+            // accepted turn's audio: suppressing to the next boundary cut Mayu
+            // off mid-sentence and hid the model-output turn boundary.
             return {
               id: call.id,
               name: call.name,
@@ -1335,40 +1353,40 @@ export function useGeminiLive(
       const content = message.serverContent;
       if (!content) return;
 
-      const receivedAudioParts = (content.modelTurn?.parts ?? []).filter(
-        (part) => Boolean(part.inlineData?.data),
-      );
-      const audioParts =
-        suppressNativeAudioUntilBoundaryRef.current
-        ? []
-        : receivedAudioParts;
-      const hasModelOutput = Boolean(audioParts.length);
-
+      // Interruption is processed before audio parts so a message carrying
+      // both an interruption and new-turn audio never drops that audio.
       if (content.interrupted) {
-        suppressNativeAudioUntilBoundaryRef.current = false;
         prepareMayuResponse();
         markLearnerResponseStarted();
-        const captureReleasePending = stopPlayback();
-        if (captureReleasePending) {
-          updatePhase(mutedRef.current ? "muted" : "thinking");
-          getOutputCaptureGuard().releaseAfterTail(() => {
-            if (
-              mountedRef.current &&
-              isSessionPhase(phaseRef.current)
-            ) {
-              updatePhase(mutedRef.current ? "muted" : "listening");
-            }
-          });
-        } else {
-          updatePhase(mutedRef.current ? "muted" : "listening");
-        }
+        stopPlayback();
+        updatePhase(mutedRef.current ? "muted" : "listening");
+      }
+
+      const audioParts = (content.modelTurn?.parts ?? []).filter(
+        (part) => Boolean(part.inlineData?.data),
+      );
+      const hasModelOutput = Boolean(audioParts.length);
+
+      const outputTranscription = content.outputTranscription?.text;
+      if (outputTranscription) {
+        // Kept only as the caption fallback for watchdog-released audio.
+        outputTranscriptionTextRef.current =
+          `${outputTranscriptionTextRef.current} ${outputTranscription}`
+            .trim()
+            .slice(-500);
       }
 
       const interimInput = content.interimInputTranscription?.text;
       if (interimInput) {
         markLearnerResponseStarted();
         applyLearnerTurnEvent({ type: "interim-transcription" });
-        applyLearnerTranscriptDraft(interimInput);
+        // Final transcription arrives in accumulating segments; the interim
+        // hypothesis extends what has already been finalized for this epoch.
+        const finalizedBase =
+          learnerTurnStateRef.current.currentEpoch?.finalText;
+        applyLearnerTranscriptDraft(
+          finalizedBase ? `${finalizedBase} ${interimInput}` : interimInput,
+        );
         if (
           !mutedRef.current &&
           !mayuPresentationReadyRef.current &&
@@ -1390,11 +1408,22 @@ export function useGeminiLive(
             type: "final-transcription",
             text: finalInput.text,
           });
-          applyLearnerTranscriptDraft(finalInput.text);
+          // The learner-turn state accumulates final segments; render the
+          // whole utterance so earlier segments are not overwritten.
+          applyLearnerTranscriptDraft(
+            learnerTurnStateRef.current.currentEpoch?.finalText ??
+              finalInput.text,
+          );
           updatePhase("thinking");
         } else {
           applyLearnerTurnEvent({ type: "interim-transcription" });
-          applyLearnerTranscriptDraft(finalInput.text);
+          const finalizedBase =
+            learnerTurnStateRef.current.currentEpoch?.finalText;
+          applyLearnerTranscriptDraft(
+            finalizedBase
+              ? `${finalizedBase} ${finalInput.text}`
+              : finalInput.text,
+          );
           if (
             !mutedRef.current &&
             !mayuPresentationReadyRef.current &&
@@ -1419,25 +1448,21 @@ export function useGeminiLive(
         const encodedAudio = part.inlineData?.data;
         if (!encodedAudio) continue;
         if (mayuPresentationReadyRef.current) {
-          playPresentedNativeAudio(encodedAudio);
+          playAudio(encodedAudio);
         } else {
-          pendingNativeAudioRef.current = [
-            ...pendingNativeAudioRef.current,
-            encodedAudio,
-          ];
+          pendingNativeAudioRef.current.push(encodedAudio);
+          // Audio without an accepted presentation must not buffer forever.
+          armPendingAudioWatchdog();
         }
       }
 
       if (content.turnComplete || content.waitingForInput) {
-        suppressNativeAudioUntilBoundaryRef.current = false;
         mayuTurnCompleteRef.current = true;
         applyLearnerTurnEvent({ type: "model-turn-complete" });
-        const fishSpeechPending =
-          fishSpeechControllerRef.current?.isPending() === true;
-        if (
-          !activeSourcesRef.current.size &&
-          !fishSpeechPending
-        ) {
+        clearStuckPresentationWatchdog();
+        if (!activeSourcesRef.current.size) {
+          clearDrainGraceTimer();
+          nextPlaybackTimeRef.current = 0;
           settleAssistantPlayback();
         }
       }
@@ -1445,11 +1470,14 @@ export function useGeminiLive(
     [
       applyLearnerTurnEvent,
       applyLearnerTranscriptDraft,
+      armPendingAudioWatchdog,
+      clearDrainGraceTimer,
+      clearStuckPresentationWatchdog,
       commitTranscript,
       finalizePendingPresentation,
       getOutputCaptureGuard,
       markLearnerResponseStarted,
-      playPresentedNativeAudio,
+      playAudio,
       prepareMayuResponse,
       scenario.words,
       settleAssistantPlayback,
@@ -1468,31 +1496,42 @@ export function useGeminiLive(
       const outputCaptureGuard = getOutputCaptureGuard();
       silentGain.gain.value = 0;
 
-      const sendPcm = (pcm: Int16Array, level: number) => {
+      const sendPcm = (
+        pcm: Int16Array,
+        level: number,
+        sampleRateHz = INPUT_SAMPLE_RATE,
+      ) => {
+        // Full-duplex: frames keep flowing while Mayu speaks so server VAD can
+        // hear an interruption; hardware echo cancellation covers speaker
+        // bleed. The output guard only quiets the local mic level meter.
         if (
-          mayuPresentationReadyRef.current ||
           !shouldForwardLiveMicrophoneFrame({
             isMuted: mutedRef.current,
             sessionMatches: sessionRef.current === session,
-            outputBlocked: outputCaptureGuard.isInputBlocked(),
           })
         ) {
           return;
         }
 
-        const now = performance.now();
-        if (now - levelUpdatedAtRef.current > 55) {
-          levelUpdatedAtRef.current = now;
-          setMicLevel(level);
+        if (
+          !outputCaptureGuard.isInputBlocked() &&
+          !mayuPresentationReadyRef.current
+        ) {
+          const now = performance.now();
+          if (now - levelUpdatedAtRef.current > 55) {
+            levelUpdatedAtRef.current = now;
+            setMicLevel(level);
+          }
         }
 
         session.sendRealtimeInput({
           audio: {
             data: pcm16ToBase64(pcm),
-            mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
+            mimeType: `audio/pcm;rate=${Math.round(sampleRateHz)}`,
           },
         });
         if (
+          sampleRateHz === INPUT_SAMPLE_RATE &&
           learnerReplyWindowOpenedAtRef.current !== null &&
           learnerTurnStateRef.current.expectsLearnerResponse
         ) {
@@ -1509,11 +1548,18 @@ export function useGeminiLive(
           outputChannelCount: [1],
         });
         worklet.port.onmessage = (event: MessageEvent<unknown>) => {
-          const message = event.data as { level?: unknown; pcm?: unknown };
+          const message = event.data as {
+            level?: unknown;
+            pcm?: unknown;
+            sampleRate?: unknown;
+          };
           if (!(message.pcm instanceof ArrayBuffer)) return;
           sendPcm(
             new Int16Array(message.pcm),
             typeof message.level === "number" ? message.level : 0,
+            typeof message.sampleRate === "number"
+              ? message.sampleRate
+              : INPUT_SAMPLE_RATE,
           );
         };
         processor = worklet;
@@ -1524,6 +1570,9 @@ export function useGeminiLive(
           sendPcm(
             downsampleToPcm16(input, inputContext.sampleRate),
             rmsLevel(input),
+            // Below the target rate the samples pass through unresampled, so
+            // the upload must be labeled with the context's true rate.
+            Math.min(inputContext.sampleRate, INPUT_SAMPLE_RATE),
           );
         };
         processor = scriptProcessor;
@@ -1541,6 +1590,110 @@ export function useGeminiLive(
     [getOutputCaptureGuard],
   );
 
+  const rewireCaptureForSession = useCallback(
+    (session: Session) => {
+      const inputProcessor = inputProcessorRef.current;
+      if (inputProcessor && "port" in inputProcessor) {
+        (inputProcessor as AudioWorkletNode).port.onmessage = null;
+      }
+      if (inputProcessor && "onaudioprocess" in inputProcessor) {
+        (inputProcessor as ScriptProcessorNode).onaudioprocess = null;
+      }
+      inputProcessor?.disconnect();
+      inputSourceRef.current?.disconnect();
+      silentGainRef.current?.disconnect();
+      inputProcessorRef.current = null;
+      inputSourceRef.current = null;
+      silentGainRef.current = null;
+
+      const stream = streamRef.current;
+      if (!stream) throw new Error("Audio input is not available.");
+      startCapture(stream, session, workletReadyResolvedRef.current);
+    },
+    [startCapture],
+  );
+
+  const attemptResume = useCallback(
+    (failureMessage: string) => {
+      const connection = liveConnectionRef.current;
+      const handle = resumeHandleRef.current;
+      if (
+        !connection ||
+        !handle ||
+        resumeAttemptedRef.current ||
+        !streamRef.current ||
+        !isSessionPhase(phaseRef.current)
+      ) {
+        return false;
+      }
+
+      // One guarded reconnect with the last resumption handle preserves the
+      // transcript, timers, and grading refs across a transient network drop
+      // instead of hard-failing the whole practice.
+      resumeAttemptedRef.current = true;
+      const attemptId = connectionAttemptRef.current;
+      sessionRef.current = null;
+      microphoneStreamOpenRef.current = false;
+      updatePhase("connecting");
+
+      void (async () => {
+        try {
+          const { GoogleGenAI } = await loadGenAILibrary();
+          if (
+            attemptId !== connectionAttemptRef.current ||
+            !mountedRef.current ||
+            ignoreConnectionEventsRef.current
+          ) {
+            return;
+          }
+
+          const ai = new GoogleGenAI({
+            apiKey: connection.apiToken,
+            httpOptions: { apiVersion: "v1alpha" },
+          });
+          const session = await ai.live.connect({
+            model: connection.model,
+            config: {
+              ...connection.config,
+              sessionResumption: { handle },
+            },
+            callbacks: connection.callbacks,
+          });
+
+          if (
+            attemptId !== connectionAttemptRef.current ||
+            !mountedRef.current ||
+            ignoreConnectionEventsRef.current
+          ) {
+            try {
+              session.close();
+            } catch {
+              // The replacement connection may already be gone.
+            }
+            return;
+          }
+
+          sessionRef.current = session;
+          rewireCaptureForSession(session);
+          if (isSessionPhase(phaseRef.current)) {
+            updatePhase(mutedRef.current ? "muted" : "listening");
+          }
+        } catch {
+          if (
+            attemptId === connectionAttemptRef.current &&
+            mountedRef.current &&
+            !ignoreConnectionEventsRef.current
+          ) {
+            failSession(failureMessage);
+          }
+        }
+      })();
+
+      return true;
+    },
+    [failSession, rewireCaptureForSession, updatePhase],
+  );
+
   const start = useCallback(async () => {
     if (isSessionPhase(phaseRef.current)) return;
 
@@ -1553,20 +1706,18 @@ export function useGeminiLive(
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
     mayuPresentationReadyRef.current = false;
-    suppressNativeAudioUntilBoundaryRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
+    outputTranscriptionTextRef.current = "";
+    resumeHandleRef.current = null;
+    resumeAttemptedRef.current = false;
+    liveConnectionRef.current = null;
     usedCueIdsRef.current = [];
-    voiceModeRef.current = "gemini";
-    voiceAccessTokenRef.current = null;
     assessmentAccessTokenRef.current = null;
-    usedVoiceFallbackRef.current = false;
     setTranscript([]);
     setActiveTurn(null);
     setCompletedSession(null);
-    setActiveVoiceMode(null);
-    setUsedVoiceFallback(false);
-    setVoiceNotice("");
+    setLearnerDraft("");
     setErrorMessage("");
     setElapsedSeconds(0);
     setRemainingSeconds(durationSeconds);
@@ -1578,6 +1729,7 @@ export function useGeminiLive(
     mutedRef.current = false;
     setIsMuted(false);
     closingRequestedRef.current = false;
+    closingQueuedRef.current = false;
     goAwayReceivedRef.current = false;
     latestUsageMetadataRef.current = undefined;
     learnerTurnFinishedAtRef.current = null;
@@ -1620,7 +1772,6 @@ export function useGeminiLive(
 
       updatePhase("requesting");
       const genAIPromise = loadGenAILibrary();
-      const accountAccessTokenPromise = loadAccountAccessToken();
       const inputContext = inputContextRef.current;
       inputWorkletReadyRef.current =
         inputContext.audioWorklet && typeof AudioWorkletNode !== "undefined"
@@ -1658,37 +1809,13 @@ export function useGeminiLive(
       }
       streamRef.current = stream;
 
-      let accountSession = await accountAccessTokenPromise;
-      if (accountSession.status !== "authenticated") {
-        // Permission prompts and an expired session refresh can outlast the
-        // first bounded lookup. Recheck once after microphone access so the
-        // authorized owner is not silently routed to the public backup voice.
-        accountSession = await loadAccountAccessToken(
-          ACCOUNT_SESSION_RETRY_TIMEOUT_MS,
-        );
-      }
-      const accountAccessToken =
-        accountSession.status === "authenticated"
-          ? accountSession.accessToken
-          : "";
-      if (attemptId !== connectionAttemptRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-
       const requestController = new AbortController();
       tokenRequestRef.current = requestController;
       const tokenPromise = fetch("/api/practice-live/token", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(accountAccessToken
-            ? { Authorization: `Bearer ${accountAccessToken}` }
-            : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scenarioId,
-          familyVoice,
           relationship,
           durationSeconds,
         }),
@@ -1726,18 +1853,8 @@ export function useGeminiLive(
         !tokenPayload.token ||
         !tokenPayload.model ||
         !tokenPayload.config ||
-        (tokenPayload.voiceMode !== "gemini" &&
-          tokenPayload.voiceMode !== "fish") ||
-        !isLiveVoiceModeReason(tokenPayload.voiceModeReason) ||
-        ((tokenPayload.voiceMode === "fish") !==
-          (tokenPayload.voiceModeReason === "authorized")) ||
-        (tokenPayload.voiceMode === "fish" &&
-          (typeof tokenPayload.voiceAccessToken !== "string" ||
-            !tokenPayload.voiceAccessToken)) ||
         typeof tokenPayload.assessmentAccessToken !== "string" ||
         !tokenPayload.assessmentAccessToken ||
-        !isLiveFamilyVoice(tokenPayload.familyVoice) ||
-        tokenPayload.familyVoice !== familyVoice ||
         !isLiveListenerRelationship(tokenPayload.relationship) ||
         !isLiveSessionDuration(tokenPayload.sessionLimitSeconds) ||
         !Number.isFinite(parsedTokenExpiry) ||
@@ -1746,26 +1863,69 @@ export function useGeminiLive(
         throw new Error("The live session was not configured correctly.");
       }
       activeRelationshipRef.current = tokenPayload.relationship;
-      activeFamilyVoiceRef.current = tokenPayload.familyVoice;
-      voiceModeRef.current = tokenPayload.voiceMode;
-      voiceAccessTokenRef.current =
-        tokenPayload.voiceMode === "fish"
-          ? tokenPayload.voiceAccessToken ?? null
-          : null;
       assessmentAccessTokenRef.current = tokenPayload.assessmentAccessToken;
-      setActiveVoiceMode(tokenPayload.voiceMode);
-      setVoiceNotice(
-        getLiveVoiceModeNotice({
-          familyVoice: tokenPayload.familyVoice,
-          voiceMode: tokenPayload.voiceMode,
-          reason: tokenPayload.voiceModeReason,
-        }),
-      );
       activeSessionLimitRef.current = tokenPayload.sessionLimitSeconds;
       tokenExpiresAtRef.current = parsedTokenExpiry;
       setRemainingSeconds(tokenPayload.sessionLimitSeconds);
       updatePhase("connecting");
       ignoreConnectionEventsRef.current = false;
+
+      // sessionResumption and outputAudioTranscription are client-side
+      // additions: resumption hands out reconnect handles, and the output
+      // transcription is the caption fallback for watchdog-released audio.
+      const connectConfig: LiveConnectConfig = {
+        ...tokenPayload.config,
+        sessionResumption: {},
+        outputAudioTranscription: {},
+      };
+      const callbacks = {
+        onopen: () => {
+          if (
+            attemptId === connectionAttemptRef.current &&
+            !ignoreConnectionEventsRef.current &&
+            mountedRef.current
+          ) {
+            updatePhase("connecting");
+          }
+        },
+        onmessage: (message: LiveServerMessage) => {
+          if (
+            attemptId === connectionAttemptRef.current &&
+            !ignoreConnectionEventsRef.current
+          ) {
+            handleServerMessage(message);
+          }
+        },
+        onerror: () => {
+          if (
+            attemptId === connectionAttemptRef.current &&
+            !ignoreConnectionEventsRef.current &&
+            mountedRef.current
+          ) {
+            if (shouldCompleteNormally()) {
+              endSessionRef.current("limit");
+            } else {
+              const message =
+                "The live connection was interrupted. Try once more.";
+              if (!attemptResume(message)) failSession(message);
+            }
+          }
+        },
+        onclose: (event: CloseEvent) => {
+          if (
+            attemptId === connectionAttemptRef.current &&
+            !ignoreConnectionEventsRef.current &&
+            mountedRef.current
+          ) {
+            if (shouldCompleteNormally()) {
+              endSessionRef.current("limit");
+            } else {
+              const message = describeLiveClose(event);
+              if (!attemptResume(message)) failSession(message);
+            }
+          }
+        },
+      };
 
       const ai = new GoogleGenAI({
         apiKey: tokenPayload.token,
@@ -1773,54 +1933,8 @@ export function useGeminiLive(
       });
       const session = await ai.live.connect({
         model: tokenPayload.model,
-        config: tokenPayload.config,
-        callbacks: {
-          onopen: () => {
-            if (
-              attemptId === connectionAttemptRef.current &&
-              !ignoreConnectionEventsRef.current &&
-              mountedRef.current
-            ) {
-              updatePhase("connecting");
-            }
-          },
-          onmessage: (message) => {
-            if (
-              attemptId === connectionAttemptRef.current &&
-              !ignoreConnectionEventsRef.current
-            ) {
-              handleServerMessage(message);
-            }
-          },
-          onerror: () => {
-            if (
-              attemptId === connectionAttemptRef.current &&
-              !ignoreConnectionEventsRef.current &&
-              mountedRef.current
-            ) {
-              if (shouldCompleteNormally()) {
-                endSessionRef.current("limit");
-              } else {
-                failSession(
-                  "The live connection was interrupted. Try once more.",
-                );
-              }
-            }
-          },
-          onclose: (event) => {
-            if (
-              attemptId === connectionAttemptRef.current &&
-              !ignoreConnectionEventsRef.current &&
-              mountedRef.current
-            ) {
-              if (shouldCompleteNormally()) {
-                endSessionRef.current("limit");
-              } else {
-                failSession(describeLiveClose(event));
-              }
-            }
-          },
-        },
+        config: connectConfig,
+        callbacks,
       });
 
       if (
@@ -1833,7 +1947,14 @@ export function useGeminiLive(
         return;
       }
 
+      liveConnectionRef.current = {
+        apiToken: tokenPayload.token,
+        model: tokenPayload.model,
+        config: connectConfig,
+        callbacks,
+      };
       sessionRef.current = session;
+      workletReadyResolvedRef.current = workletReady;
       startCapture(stream, session, workletReady);
       const startedAt = Date.now();
       startedAtRef.current = startedAt;
@@ -1865,17 +1986,25 @@ export function useGeminiLive(
           remaining > 0 &&
           remaining <= LAST_EXCHANGE_SECONDS &&
           !closingRequestedRef.current &&
-          phaseRef.current === "listening" &&
-          sessionRef.current
+          sessionRef.current &&
+          isSessionPhase(phaseRef.current)
         ) {
           closingRequestedRef.current = true;
-          applyLearnerTurnEvent({ type: "control-turn-requested" });
-          prepareMayuResponse();
-          updatePhase("thinking");
-          sessionRef.current.sendRealtimeInput({
-            text:
-              "Practice control: this is the last exchange. Give one short, natural Telugu closing in the locked relationship register. Call present_turn before speaking, then wait.",
-          });
+          if (
+            phaseRef.current === "listening" ||
+            phaseRef.current === "muted"
+          ) {
+            applyLearnerTurnEvent({ type: "control-turn-requested" });
+            prepareMayuResponse();
+            updatePhase("thinking");
+            sessionRef.current.sendRealtimeInput({
+              text: CLOSING_CONTROL_TEXT,
+            });
+          } else {
+            // Mid-turn: queue the closing request; it is sent at the next
+            // turn boundary so the session never hard-cuts without a goodbye.
+            closingQueuedRef.current = true;
+          }
         }
 
         if (now >= deadline) endSessionRef.current("limit");
@@ -1906,12 +2035,12 @@ export function useGeminiLive(
     }
   }, [
     applyLearnerTurnEvent,
+    attemptResume,
     cancelPendingAssessmentRequests,
     clearTimer,
     failSession,
     handleServerMessage,
     durationSeconds,
-    familyVoice,
     prepareMayuResponse,
     relationship,
     releaseHardware,
@@ -2003,6 +2132,7 @@ export function useGeminiLive(
     );
     const grade = gradeLiveSession(completedTranscript);
     commitTranscript(completedTranscript);
+    setLearnerDraft("");
     elapsedRef.current = actualDurationSeconds;
     setElapsedSeconds(actualDurationSeconds);
     if (completionReason === "limit") setRemainingSeconds(0);
@@ -2013,9 +2143,6 @@ export function useGeminiLive(
           ? crypto.randomUUID()
           : `live-${Date.now()}`,
       scenarioId,
-      familyVoice: activeFamilyVoiceRef.current,
-      voiceMode: voiceModeRef.current,
-      usedVoiceFallback: usedVoiceFallbackRef.current,
       relationship: activeRelationshipRef.current,
       sessionLimitSeconds: activeSessionLimitRef.current,
       completionReason,
@@ -2035,6 +2162,7 @@ export function useGeminiLive(
     mutedRef.current = false;
     setIsMuted(false);
     closingRequestedRef.current = false;
+    closingQueuedRef.current = false;
     goAwayReceivedRef.current = false;
     latestUsageMetadataRef.current = undefined;
     learnerTurnFinishedAtRef.current = null;
@@ -2050,22 +2178,20 @@ export function useGeminiLive(
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
     mayuPresentationReadyRef.current = false;
-    suppressNativeAudioUntilBoundaryRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
+    outputTranscriptionTextRef.current = "";
+    resumeHandleRef.current = null;
+    resumeAttemptedRef.current = false;
+    liveConnectionRef.current = null;
     usedCueIdsRef.current = [];
-    voiceModeRef.current = "gemini";
-    voiceAccessTokenRef.current = null;
-    usedVoiceFallbackRef.current = false;
     setElapsedSeconds(0);
     setRemainingSeconds(durationSeconds);
     setLatestTurnLatencyMs(null);
     setTranscript([]);
     setActiveTurn(null);
     setCompletedSession(null);
-    setActiveVoiceMode(null);
-    setUsedVoiceFallback(false);
-    setVoiceNotice("");
+    setLearnerDraft("");
     setErrorMessage("");
     updatePhase("idle");
   }, [
@@ -2131,10 +2257,8 @@ export function useGeminiLive(
     latestTurnLatencyMs,
     transcript,
     activeTurn,
+    learnerDraft,
     completedSession,
-    activeVoiceMode,
-    usedVoiceFallback,
-    voiceNotice,
     canRepeatTurn:
       !isMuted &&
       (phase === "listening" ||

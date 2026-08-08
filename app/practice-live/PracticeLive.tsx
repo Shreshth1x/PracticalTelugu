@@ -14,15 +14,10 @@ import {
   type LiveScenarioId,
 } from "./live-scenarios";
 import {
-  DEFAULT_LIVE_FAMILY_VOICE,
   DEFAULT_LIVE_LISTENER_RELATIONSHIP,
   DEFAULT_LIVE_SESSION_DURATION,
-  getLiveFamilyVoiceLabel,
-  getLiveSessionVoiceLabel,
-  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
-  type LiveFamilyVoice,
   type LiveListenerRelationship,
   type LiveSessionDurationSeconds,
 } from "./live-config";
@@ -107,13 +102,6 @@ function readHistory() {
         typeof session.durationSeconds === "number" &&
         typeof session.learnerTurns === "number" &&
         typeof session.completedAt === "string" &&
-        (session.familyVoice === undefined ||
-          isLiveFamilyVoice(session.familyVoice)) &&
-        (session.voiceMode === undefined ||
-          session.voiceMode === "gemini" ||
-          session.voiceMode === "fish") &&
-        (session.usedVoiceFallback === undefined ||
-          typeof session.usedVoiceFallback === "boolean") &&
         (session.relationship === undefined ||
           isLiveListenerRelationship(session.relationship)) &&
         (session.sessionLimitSeconds === undefined ||
@@ -194,7 +182,6 @@ function SessionResults({
   session,
   previousSession,
   scenarioTitle,
-  familyVoiceLabel,
   relationshipLabel,
   resultsRef,
   onRestart,
@@ -203,7 +190,6 @@ function SessionResults({
   session: CompletedLiveSession;
   previousSession: CompletedLiveSession | null;
   scenarioTitle: string;
-  familyVoiceLabel: string;
   relationshipLabel: string;
   resultsRef: RefObject<HTMLElement | null>;
   onRestart: () => void;
@@ -276,13 +262,18 @@ function SessionResults({
               <dt>Replies</dt>
               <dd>{session.learnerTurns}</dd>
             </div>
+            {grade.unscoredTurns !== undefined && grade.unscoredTurns > 0 ? (
+              <div>
+                <dt>Scored</dt>
+                <dd>
+                  {grade.assessedTurns} of{" "}
+                  {grade.assessedTurns + grade.unscoredTurns}
+                </dd>
+              </div>
+            ) : null}
             <div>
               <dt>Register</dt>
               <dd>{relationshipLabel}</dd>
-            </div>
-            <div>
-              <dt>Voice</dt>
-              <dd>{familyVoiceLabel}</dd>
             </div>
           </dl>
         </div>
@@ -422,6 +413,7 @@ function turnDisplayLabel(
 function CurrentTurnCard({
   turn,
   learnerDraft,
+  learnerDraftText,
   phase,
   hasLearnerTurn,
   canRepeatTurn,
@@ -429,6 +421,7 @@ function CurrentTurnCard({
 }: {
   turn: LiveTranscriptTurn | null;
   learnerDraft: LiveTranscriptTurn | null;
+  learnerDraftText: string;
   phase: LivePhase;
   hasLearnerTurn: boolean;
   canRepeatTurn: boolean;
@@ -463,7 +456,13 @@ function CurrentTurnCard({
           aria-atomic="true"
         >
           <span>Reply heard</span>
-          <p lang="en">Preparing the checked transcript…</p>
+          {learnerDraftText ? (
+            <p className="live-draft-text" lang="te-Latn">
+              “{learnerDraftText}” <small lang="en">(unchecked)</small>
+            </p>
+          ) : (
+            <p lang="en">Preparing the checked transcript…</p>
+          )}
         </div>
       ) : null}
 
@@ -514,12 +513,14 @@ function ConversationTranscript({
   transcriptRef,
   canRepeatTurn,
   showRepeatActions = true,
+  pendingDraftText = "",
   onRepeatTurn,
 }: {
   turns: LiveTranscriptTurn[];
   transcriptRef: RefObject<HTMLOListElement | null>;
   canRepeatTurn: boolean;
   showRepeatActions?: boolean;
+  pendingDraftText?: string;
   onRepeatTurn: (turnId: string, options?: { slow?: boolean }) => void;
 }) {
   return (
@@ -593,7 +594,14 @@ function ConversationTranscript({
                 <div className="live-transcript-pending">
                   <span aria-hidden="true" />
                   <div>
-                    <p>Reply heard — preparing the checked transcript…</p>
+                    {turn.speaker === "you" && pendingDraftText ? (
+                      <p className="live-draft-text" lang="te-Latn">
+                        “{pendingDraftText}”{" "}
+                        <small lang="en">(unchecked)</small>
+                      </p>
+                    ) : (
+                      <p>Reply heard — preparing the checked transcript…</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -687,21 +695,14 @@ export default function PracticeLive() {
     useState<LiveScenarioId>("family-check-in");
   const [relationship, setRelationship] =
     useState<LiveListenerRelationship>(DEFAULT_LIVE_LISTENER_RELATIONSHIP);
-  const [familyVoice, setFamilyVoice] = useState<LiveFamilyVoice>(
-    DEFAULT_LIVE_FAMILY_VOICE,
-  );
   const [sessionDuration, setSessionDuration] =
     useState<LiveSessionDurationSeconds>(DEFAULT_LIVE_SESSION_DURATION);
   const [isPracticeSettingsOpen, setIsPracticeSettingsOpen] = useState(false);
   const [history, setHistory] = useState<CompletedLiveSession[]>([]);
   const transcriptRef = useRef<HTMLOListElement | null>(null);
+  const transcriptNearBottomRef = useRef(true);
   const resultsRef = useRef<HTMLElement | null>(null);
-  const live = useGeminiLive(
-    scenarioId,
-    relationship,
-    sessionDuration,
-    familyVoice,
-  );
+  const live = useGeminiLive(scenarioId, relationship, sessionDuration);
   const scenario =
     liveScenarios.find((candidate) => candidate.id === scenarioId) ??
     liveScenarios[0];
@@ -763,7 +764,22 @@ export default function PracticeLive() {
 
   useEffect(() => {
     const element = transcriptRef.current;
+    if (!element) return;
+
+    // Track where the user has scrolled to so a transcript update never yanks
+    // them back down while they review earlier turns.
+    const trackScrollPosition = () => {
+      transcriptNearBottomRef.current =
+        element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+    };
+    element.addEventListener("scroll", trackScrollPosition, { passive: true });
+    return () => element.removeEventListener("scroll", trackScrollPosition);
+  }, [live.phase]);
+
+  useEffect(() => {
+    const element = transcriptRef.current;
     if (!element || !live.transcript.length) return;
+    if (!transcriptNearBottomRef.current) return;
 
     element.scrollTop = element.scrollHeight;
   }, [live.transcript]);
@@ -785,12 +801,6 @@ export default function PracticeLive() {
     if (isBusy || nextRelationship === relationship) return;
     live.reset();
     setRelationship(nextRelationship);
-  };
-
-  const chooseFamilyVoice = (nextFamilyVoice: LiveFamilyVoice) => {
-    if (isBusy || nextFamilyVoice === familyVoice) return;
-    live.reset();
-    setFamilyVoice(nextFamilyVoice);
   };
 
   const chooseDuration = (nextDuration: LiveSessionDurationSeconds) => {
@@ -817,26 +827,10 @@ export default function PracticeLive() {
     : statusCopy[live.phase];
   const relationshipLabel =
     relationship === "close" ? "Someone close" : "Elder or someone new";
-  const familyVoiceLabel = getLiveFamilyVoiceLabel(familyVoice);
-  const activeVoiceLabel = live.activeVoiceMode
-    ? getLiveSessionVoiceLabel({
-        familyVoice,
-        voiceMode: live.activeVoiceMode,
-        usedVoiceFallback: live.usedVoiceFallback,
-      })
-    : familyVoiceLabel;
   const pendingLearnerTurn =
     [...live.transcript]
       .reverse()
       .find((turn) => turn.speaker === "you" && !turn.final) ?? null;
-  const completedSessionVoiceLabel = live.completedSession
-    ? getLiveSessionVoiceLabel({
-        familyVoice:
-          live.completedSession.familyVoice ?? DEFAULT_LIVE_FAMILY_VOICE,
-        voiceMode: live.completedSession.voiceMode,
-        usedVoiceFallback: live.completedSession.usedVoiceFallback,
-      })
-    : familyVoiceLabel;
   const durationMinutes = sessionDuration / 60;
   const startActionLabel = ["setup", "error"].includes(live.phase)
     ? "Try again"
@@ -853,9 +847,8 @@ export default function PracticeLive() {
         </span>
         <h1>Practice Telugu out loud.</h1>
         <p>
-          Choose a private family voice when your account is authorized, or use
-          Mayu&apos;s backup voice. Telugu stays in English letters, with the meaning
-          directly underneath.
+          Have a real spoken conversation with Mayu. Telugu stays in English
+          letters, with the meaning directly underneath.
         </p>
       </header>
 
@@ -869,23 +862,10 @@ export default function PracticeLive() {
           <strong>{scenario.title}</strong>
           <p>{scenario.description}</p>
           {isBusy ? (
-            <>
-              <small className="live-session-lock">
-                {activeVoiceLabel}
-                {` · ${relationshipLabel}`}
-                {` · ${formatDuration(sessionDuration)} practice`}
-              </small>
-              {live.voiceNotice ? (
-                <small
-                  className="live-voice-notice"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                >
-                  {live.voiceNotice}
-                </small>
-              ) : null}
-            </>
+            <small className="live-session-lock">
+              {relationshipLabel}
+              {` · ${formatDuration(sessionDuration)} practice`}
+            </small>
           ) : null}
         </div>
 
@@ -901,7 +881,7 @@ export default function PracticeLive() {
               <span>
                 <small>Practice setup</small>
                 <strong>
-                  {familyVoiceLabel} · {relationshipLabel} · {durationMinutes} min
+                  {relationshipLabel} · {durationMinutes} min
                 </strong>
               </span>
               <span className="live-practice-details-action">
@@ -940,42 +920,6 @@ export default function PracticeLive() {
                 className="live-session-settings"
                 aria-label="Live practice settings"
               >
-                <fieldset className="live-family-voice-setting" disabled={isBusy}>
-                  <legend>Practice voice</legend>
-                  <div className="live-setting-options">
-                    <label
-                      className={familyVoice === "grandma" ? "is-selected" : ""}
-                    >
-                      <input
-                        type="radio"
-                        name="live-family-voice"
-                        value="grandma"
-                        checked={familyVoice === "grandma"}
-                        onChange={() => chooseFamilyVoice("grandma")}
-                      />
-                      <span>
-                        <strong>Grandma</strong>
-                        <small>Private clone for authorized accounts</small>
-                      </span>
-                    </label>
-                    <label
-                      className={familyVoice === "grandpa" ? "is-selected" : ""}
-                    >
-                      <input
-                        type="radio"
-                        name="live-family-voice"
-                        value="grandpa"
-                        checked={familyVoice === "grandpa"}
-                        onChange={() => chooseFamilyVoice("grandpa")}
-                      />
-                      <span>
-                        <strong>Grandpa</strong>
-                        <small>Private clone for authorized accounts</small>
-                      </span>
-                    </label>
-                  </div>
-                </fieldset>
-
                 <fieldset disabled={isBusy}>
                   <legend>Who are you speaking with?</legend>
                   <div className="live-setting-options">
@@ -1094,10 +1038,8 @@ export default function PracticeLive() {
               {live.errorMessage || "Mayu speaks first, then listens for your reply."}
             </p>
             <p className="live-privacy-note">
-              Your microphone audio is sent to Google Gemini. When your account
-              can use a private family voice, Mayu&apos;s Telugu response text is sent
-              to Fish Audio; otherwise Gemini&apos;s backup voice is used.
-              PracticalTelugu does not save your audio.
+              Your microphone audio is sent to Google Gemini only while a
+              session is active. PracticalTelugu does not save your audio.
             </p>
           </div>
         ) : null}
@@ -1190,6 +1132,7 @@ export default function PracticeLive() {
             <CurrentTurnCard
               turn={live.activeTurn}
               learnerDraft={pendingLearnerTurn}
+              learnerDraftText={live.learnerDraft}
               phase={live.phase}
               hasLearnerTurn={live.transcript.some(
                 (turn) => turn.speaker === "you",
@@ -1201,6 +1144,7 @@ export default function PracticeLive() {
               turns={live.transcript}
               transcriptRef={transcriptRef}
               canRepeatTurn={live.canRepeatTurn}
+              pendingDraftText={live.learnerDraft}
               onRepeatTurn={live.repeatTurn}
             />
           </>
@@ -1212,7 +1156,6 @@ export default function PracticeLive() {
               session={live.completedSession}
               previousSession={previousComparableSession}
               scenarioTitle={scenario.title}
-              familyVoiceLabel={completedSessionVoiceLabel}
               relationshipLabel={relationshipLabel}
               resultsRef={resultsRef}
               onRestart={startPractice}

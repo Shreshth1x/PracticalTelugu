@@ -87,8 +87,8 @@ test("calibrates intelligibility and Telugu sound accuracy separately", () => {
   assert.equal(hardToUnderstandWithAccurateSounds.pronunciationScore, 35);
   assert.equal(clearWithInaccurateSounds.accuracyScore, 100);
   assert.equal(hardToUnderstandWithAccurateSounds.accuracyScore, 100);
-  assert.equal(clearWithInaccurateSounds.languageScore, 85);
-  assert.equal(hardToUnderstandWithAccurateSounds.languageScore, 68);
+  assert.equal(clearWithInaccurateSounds.languageScore, 88);
+  assert.equal(hardToUnderstandWithAccurateSounds.languageScore, 74);
 });
 
 test("lowers accuracy for broken form without confusing form with meaning", () => {
@@ -103,8 +103,8 @@ test("lowers accuracy for broken form without confusing form with meaning", () =
   assert.equal(polishedButOnlyPartlyCorrect.accuracyScore, 72);
   assert.equal(brokenButCorrect.pronunciationScore, 100);
   assert.equal(polishedButOnlyPartlyCorrect.pronunciationScore, 100);
-  assert.equal(brokenButCorrect.languageScore, 83);
-  assert.equal(polishedButOnlyPartlyCorrect.languageScore, 86);
+  assert.equal(brokenButCorrect.languageScore, 79);
+  assert.equal(polishedButOnlyPartlyCorrect.languageScore, 83);
 });
 
 test("keeps one localized sound or form issue below a perfect score", () => {

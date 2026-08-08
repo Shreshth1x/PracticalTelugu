@@ -220,6 +220,7 @@ export function parseCloudSnapshot(value: unknown): LearningSnapshot | null {
 export function mergeSnapshots(
   local: LearningSnapshot,
   cloud: LearningSnapshot,
+  options?: { preferences?: "local" | "cloud" },
 ): LearningSnapshot {
   const confidenceKeys = new Set([
     ...Object.keys(cloud.state.confidence),
@@ -246,7 +247,10 @@ export function mergeSnapshots(
       ]),
       confidence,
     },
-    preferences: { ...local.preferences },
+    preferences:
+      options?.preferences === "cloud"
+        ? { ...cloud.preferences }
+        : { ...local.preferences },
     savedWords: uniqueStrings([...cloud.savedWords, ...local.savedWords]),
   };
 }
@@ -299,15 +303,35 @@ export function applySnapshotChanges(
   baseline: LearningSnapshot,
   current: LearningSnapshot,
   target: LearningSnapshot,
+  options?: { explicitReset?: boolean },
 ): LearningSnapshot {
-  if (hasLearningData(baseline) && !hasLearningData(current)) {
+  if (options?.explicitReset) {
+    // A confirmed reset clears the learning path everywhere while keeping
+    // saved phrases, exactly as the reset dialog promises.
     return {
       state: {
         completed: [],
         confidence: {},
       },
       preferences: { ...current.preferences },
-      savedWords: [],
+      savedWords: applyListChanges(
+        baseline.savedWords,
+        current.savedWords,
+        target.savedWords,
+      ),
+    };
+  }
+
+  if (hasLearningData(baseline) && !hasLearningData(current)) {
+    // Losing every learning item without a confirmed reset means the local
+    // snapshot is missing or damaged, so the target must not be wiped.
+    return {
+      state: {
+        completed: [...target.state.completed],
+        confidence: { ...target.state.confidence },
+      },
+      preferences: { ...target.preferences },
+      savedWords: [...target.savedWords],
     };
   }
 
@@ -364,5 +388,6 @@ export function userStorageKeys(userId: string) {
     dirty: `${prefix}.dirty.v1`,
     cloudBaseline: `${prefix}.cloud-baseline.v1`,
     anonymousBaseline: `${prefix}.anonymous-baseline.v1`,
+    resetPending: `${prefix}.reset-pending.v1`,
   };
 }

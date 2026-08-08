@@ -2,20 +2,11 @@ import { GoogleGenAI } from "@google/genai";
 import {
   buildLiveConnectConfig,
   buildLiveTokenConstraintConfig,
-  isLiveFamilyVoice,
   isLiveListenerRelationship,
   isLiveSessionDuration,
   LIVE_MODEL,
 } from "../../../practice-live/live-config.ts";
-import {
-  createFishVoiceAccessToken,
-  getPracticeLiveClientIp,
-  hasFishVoice,
-} from "../fish-config.ts";
-import {
-  getPrivateFishVoiceAuthorization,
-  type FishVoiceAuthorization,
-} from "../fish-authorization.ts";
+import { getPracticeLiveClientIp } from "../client-ip.ts";
 import {
   getLiveOpeningCue,
   getLiveScenario,
@@ -104,13 +95,28 @@ function consumeStart(ip: string, now: number) {
   }
 
   if (retryAt) {
-    startsByForwardedIp.set(ip, recent);
+    trackStartIp(ip, recent);
     return Math.max(1, Math.ceil((retryAt - now) / 1_000));
   }
 
   recent.push(now);
-  startsByForwardedIp.set(ip, recent);
+  trackStartIp(ip, recent);
   return 0;
+}
+
+// A spoofed-IP flood must not grow this instance's memory without bound, so
+// the tracker keeps at most this many addresses, evicting the least recently
+// seen. A durable platform rate limit is still required at public scale.
+const MAX_TRACKED_IPS = 10_000;
+
+function trackStartIp(ip: string, recent: number[]) {
+  startsByForwardedIp.delete(ip);
+  startsByForwardedIp.set(ip, recent);
+  while (startsByForwardedIp.size > MAX_TRACKED_IPS) {
+    const oldest = startsByForwardedIp.keys().next().value;
+    if (oldest === undefined) break;
+    startsByForwardedIp.delete(oldest);
+  }
 }
 
 function isSameOriginRequest(request: Request) {
@@ -206,7 +212,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const { scenarioId, familyVoice, relationship, durationSeconds } =
+  const { scenarioId, relationship, durationSeconds } =
     payload as Record<string, unknown>;
 
   const scenario = getLiveScenario(scenarioId);
@@ -225,16 +231,6 @@ export async function POST(request: Request) {
       {
         code: "invalid_relationship",
         message: "Choose who you are speaking with and try again.",
-      },
-      400,
-    );
-  }
-
-  if (!isLiveFamilyVoice(familyVoice)) {
-    return json(
-      {
-        code: "invalid_family_voice",
-        message: "Choose Grandma or Grandpa's voice and try again.",
       },
       400,
     );
@@ -281,72 +277,48 @@ export async function POST(request: Request) {
   const options = { relationship, durationSeconds };
   const config = buildLiveConnectConfig(scenario, options);
   const tokenConstraintConfig = buildLiveTokenConstraintConfig(config);
-  const privateVoiceAuthorization: Promise<FishVoiceAuthorization> =
-    hasFishVoice(familyVoice)
-      ? getPrivateFishVoiceAuthorization(request)
-      : Promise.resolve({
-          authorized: false,
-          reason: "not_configured",
-        });
 
   try {
     const tokenExpiresAt = new Date(
       now +
         (durationSeconds + TOKEN_EXPIRY_HEADROOM_SECONDS) * 1_000,
     ).toISOString();
-    const newSessionExpiresAt = new Date(
-      now + NEW_SESSION_WINDOW_SECONDS * 1_000,
-    ).toISOString();
     const ai = new GoogleGenAI({
       apiKey,
       httpOptions: { apiVersion: "v1alpha" },
     });
-    const [authToken, voiceAuthorization] = await Promise.all([
-      ai.authTokens.create({
-        config: {
-          uses: 1,
-          expireTime: tokenExpiresAt,
-          newSessionExpireTime: newSessionExpiresAt,
-          liveConnectConstraints: {
-            model: LIVE_MODEL,
-            config: tokenConstraintConfig,
-          },
-          lockAdditionalFields: [],
+    // uses: 2 with a full-lifetime new-session window lets the browser make
+    // one session-resumption reconnect after a transient network drop. The
+    // token still expires with the selected practice plus its drain margin.
+    const authToken = await ai.authTokens.create({
+      config: {
+        uses: 2,
+        expireTime: tokenExpiresAt,
+        newSessionExpireTime: tokenExpiresAt,
+        liveConnectConstraints: {
+          model: LIVE_MODEL,
+          config: tokenConstraintConfig,
         },
-      }),
-      privateVoiceAuthorization,
-    ]);
+        lockAdditionalFields: [],
+      },
+    });
 
     if (!authToken.name) {
       throw new Error("Gemini returned an empty ephemeral token.");
     }
 
-    const voiceMode = voiceAuthorization.authorized ? "fish" : "gemini";
-    const [voiceAccessToken, assessmentAccessToken] = await Promise.all([
-      voiceMode === "fish"
-        ? createFishVoiceAccessToken(
-            familyVoice,
-            clientIp,
-            Date.parse(tokenExpiresAt),
-          )
-        : Promise.resolve(undefined),
-      createLiveAssessmentAccessToken(
-        scenario.id,
-        relationship,
-        clientIp,
-        Date.parse(tokenExpiresAt),
-      ),
-    ]);
+    const assessmentAccessToken = await createLiveAssessmentAccessToken(
+      scenario.id,
+      relationship,
+      clientIp,
+      Date.parse(tokenExpiresAt),
+    );
 
     return json({
       token: authToken.name,
       assessmentAccessToken,
       model: LIVE_MODEL,
       config,
-      voiceMode,
-      voiceModeReason: voiceAuthorization.reason,
-      familyVoice,
-      ...(voiceAccessToken ? { voiceAccessToken } : {}),
       openingCue: getLiveOpeningCue(scenario, relationship),
       relationship,
       sessionLimitSeconds: durationSeconds,
