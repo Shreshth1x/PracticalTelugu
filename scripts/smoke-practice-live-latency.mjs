@@ -17,7 +17,13 @@ import {
   isLiveSessionDuration,
 } from "../app/practice-live/live-config.ts";
 import { findLivePhraseCue } from "../app/practice-live/live-follow-along.ts";
+import { applyLiveConversationPolicy } from "../app/practice-live/live-conversation-policy.ts";
 import {
+  applyOutputTranscriptionUpdate,
+  isOutputTranscriptionReady,
+} from "./live-output-transcription.mjs";
+import {
+  getLiveFamilyAteFollowup,
   getLiveOpeningGreeting,
   getLiveScenario,
 } from "../app/practice-live/live-scenarios.ts";
@@ -26,6 +32,7 @@ import {
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
+  matchesPresentedTeluguAudio,
   matchesReviewedLiveCue,
   parseLivePresentedTurnToolCall,
   repairLivePresentedTurnToolCall,
@@ -82,6 +89,7 @@ const TOKEN_EXPIRY_HEADROOM_SECONDS = 70;
 const PRE_LEARNER_SILENCE_WINDOW_MS = 1_200;
 const POST_TURN_STABILITY_WINDOW_MS = 300;
 const RESPONSE_TIMEOUT_MS = 20_000;
+const OUTPUT_TRANSCRIPTION_SETTLE_MS = 1_000;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -108,24 +116,39 @@ async function inspectOpeningAudio(greeting) {
   };
 }
 
-function validateFirstGeneratedTurn(parsed, relationship) {
+function validateGeneratedTurn(parsed, relationship, turnNumber) {
   if (!parsed?.learner) {
-    return "The first generated turn did not caption the learner's reply.";
+    return "The generated turn did not caption the learner's reply.";
   }
   if (parsed.learner.sourceLanguage !== "english") {
     return "The learner source language was not preserved as English.";
   }
   if (hasForbiddenAudibleEnglish(parsed.mayu)) {
-    return "Mayu's first generated turn contains audible English.";
+    return "Mayu's generated turn contains audible English.";
   }
   if (hasKnownLearnerMeaningMismatch(parsed.learner)) {
     return "The learner caption has a known meaning mismatch.";
   }
   if (hasKnownMayuMeaningMismatch(parsed.mayu)) {
-    return "Mayu's first generated turn has a known meaning mismatch.";
+    return "Mayu's generated turn has a known meaning mismatch.";
   }
   if (hasKnownMayuRelationshipMismatch(parsed.mayu, relationship)) {
-    return "Mayu's first generated turn uses the wrong relationship register.";
+    return "Mayu's generated turn uses the wrong relationship register.";
+  }
+
+  const expectedTurn =
+    turnNumber === 1
+      ? findLivePhraseCue(
+          scenario.words,
+          relationship === "close"
+            ? "have-you-eaten__primary"
+            : "have-you-eaten__alt_0",
+        )
+      : getLiveFamilyAteFollowup(relationship);
+  if (!expectedTurn || !matchesReviewedLiveCue(parsed.mayu, expectedTurn)) {
+    return turnNumber === 1
+      ? "After the learner says they are well, ask exactly whether they have eaten in the locked relationship."
+      : `After the learner says they ate, ask exactly "${getLiveFamilyAteFollowup(relationship).telugu}" with matching Roman, pronunciation, and English fields.`;
   }
 
   if (parsed.mayu.cueId) {
@@ -180,6 +203,14 @@ async function runSmoke(relationship, durationSeconds) {
   let secondToolResponseSentAt = 0;
   let firstAudiblePcmAt = 0;
   let secondAudiblePcmAt = 0;
+  let firstOutputTranscriptionAt = 0;
+  let secondOutputTranscriptionAt = 0;
+  let firstOutputTranscriptionFinished = false;
+  let secondOutputTranscriptionFinished = false;
+  let firstOutputTranscriptionSettled = false;
+  let secondOutputTranscriptionSettled = false;
+  let firstOutputTranscriptionTimer;
+  let secondOutputTranscriptionTimer;
   let serverTurnCompleteAt = 0;
   let secondServerTurnCompleteAt = 0;
   let acceptedTurn = null;
@@ -192,6 +223,8 @@ async function runSmoke(relationship, durationSeconds) {
   let secondAudiblePcmParts = 0;
   let audiblePcmPeak = 0;
   let secondAudiblePcmPeak = 0;
+  let outputTranscription = "";
+  let secondOutputTranscription = "";
   const rejectedToolCalls = [];
 
   let resolveFirstTurn;
@@ -230,6 +263,10 @@ async function runSmoke(relationship, durationSeconds) {
             secondAudiblePcmPeak,
             serverTurnComplete: Boolean(serverTurnCompleteAt),
             secondServerTurnComplete: Boolean(secondServerTurnCompleteAt),
+            firstOutputTranscriptionFinished,
+            secondOutputTranscriptionFinished,
+            firstOutputTranscriptionSettled,
+            secondOutputTranscriptionSettled,
           },
         )}`,
       ),
@@ -238,14 +275,68 @@ async function runSmoke(relationship, durationSeconds) {
 
   const resolveCompletedTurn = () => {
     if (activeTurnNumber === 1) {
+      const transcriptionReady = isOutputTranscriptionReady(
+        {
+          text: outputTranscription,
+          finished: firstOutputTranscriptionFinished,
+        },
+        {
+          turnComplete: Boolean(serverTurnCompleteAt),
+          settleElapsed: firstOutputTranscriptionSettled,
+        },
+      );
+      if (
+        acceptedTurn &&
+        transcriptionReady &&
+        !matchesPresentedTeluguAudio(acceptedTurn.mayu, outputTranscription)
+      ) {
+        rejectSmoke(
+          new Error(
+            `First-turn audio transcript did not match the accepted Telugu: ${JSON.stringify({
+              accepted: acceptedTurn.mayu.teluguInternal,
+              spoken: outputTranscription,
+            })}`,
+          ),
+        );
+        return;
+      }
       if (
         acceptedTurn &&
         audiblePcmBytes > 0 &&
         audiblePcmPeak > 0 &&
-        serverTurnCompleteAt
+        transcriptionReady
       ) {
         resolveFirstTurn(acceptedTurn);
       }
+      return;
+    }
+
+    const transcriptionReady = isOutputTranscriptionReady(
+      {
+        text: secondOutputTranscription,
+        finished: secondOutputTranscriptionFinished,
+      },
+      {
+        turnComplete: Boolean(secondServerTurnCompleteAt),
+        settleElapsed: secondOutputTranscriptionSettled,
+      },
+    );
+    if (
+      secondAcceptedTurn &&
+      transcriptionReady &&
+      !matchesPresentedTeluguAudio(
+        secondAcceptedTurn.mayu,
+        secondOutputTranscription,
+      )
+    ) {
+      rejectSmoke(
+        new Error(
+          `Second-turn audio transcript did not match the accepted Telugu: ${JSON.stringify({
+            accepted: secondAcceptedTurn.mayu.teluguInternal,
+            spoken: secondOutputTranscription,
+          })}`,
+        ),
+      );
       return;
     }
 
@@ -253,9 +344,52 @@ async function runSmoke(relationship, durationSeconds) {
       secondAcceptedTurn &&
       secondAudiblePcmBytes > 0 &&
       secondAudiblePcmPeak > 0 &&
-      secondServerTurnCompleteAt
+      transcriptionReady
     ) {
       resolveSecondTurn(secondAcceptedTurn);
+    }
+  };
+
+  const armOutputTranscriptionSettle = () => {
+    const isFirstTurn = activeTurnNumber === 1;
+    const text = isFirstTurn
+      ? outputTranscription
+      : secondOutputTranscription;
+    const finished = isFirstTurn
+      ? firstOutputTranscriptionFinished
+      : secondOutputTranscriptionFinished;
+    const turnComplete = isFirstTurn
+      ? Boolean(serverTurnCompleteAt)
+      : Boolean(secondServerTurnCompleteAt);
+    if (!text || !turnComplete) return;
+
+    const currentTimer = isFirstTurn
+      ? firstOutputTranscriptionTimer
+      : secondOutputTranscriptionTimer;
+    clearTimeout(currentTimer);
+
+    if (finished) {
+      if (isFirstTurn) {
+        firstOutputTranscriptionSettled = true;
+      } else {
+        secondOutputTranscriptionSettled = true;
+      }
+      resolveCompletedTurn();
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (isFirstTurn) {
+        firstOutputTranscriptionSettled = true;
+      } else {
+        secondOutputTranscriptionSettled = true;
+      }
+      resolveCompletedTurn();
+    }, OUTPUT_TRANSCRIPTION_SETTLE_MS);
+    if (isFirstTurn) {
+      firstOutputTranscriptionTimer = timer;
+    } else {
+      secondOutputTranscriptionTimer = timer;
     }
   };
 
@@ -306,6 +440,39 @@ async function runSmoke(relationship, durationSeconds) {
           const functionCalls = message.toolCall?.functionCalls ?? [];
           const content = message.serverContent;
           const modelParts = content?.modelTurn?.parts ?? [];
+          const outputTranscriptionUpdate = content?.outputTranscription;
+          const spokenTranscription = outputTranscriptionUpdate?.text;
+          if (outputTranscriptionUpdate) {
+            if (activeTurnNumber === 1) {
+              if (spokenTranscription) {
+                firstOutputTranscriptionAt ||= performance.now();
+              }
+              const updated = applyOutputTranscriptionUpdate(
+                {
+                  text: outputTranscription,
+                  finished: firstOutputTranscriptionFinished,
+                },
+                outputTranscriptionUpdate,
+              );
+              outputTranscription = updated.text;
+              firstOutputTranscriptionFinished = updated.finished;
+              firstOutputTranscriptionSettled = false;
+            } else {
+              if (spokenTranscription) {
+                secondOutputTranscriptionAt ||= performance.now();
+              }
+              const updated = applyOutputTranscriptionUpdate(
+                {
+                  text: secondOutputTranscription,
+                  finished: secondOutputTranscriptionFinished,
+                },
+                outputTranscriptionUpdate,
+              );
+              secondOutputTranscription = updated.text;
+              secondOutputTranscriptionFinished = updated.finished;
+              secondOutputTranscriptionSettled = false;
+            }
+          }
           const hasPrematureModelTurn = Boolean(
             modelParts.length ||
               content?.outputTranscription?.text ||
@@ -368,12 +535,20 @@ async function runSmoke(relationship, durationSeconds) {
               return;
             }
 
-            const parsed =
+            let parsed =
               parseLivePresentedTurnToolCall(call.args) ??
               repairLivePresentedTurnToolCall(call.args);
-            const validationError = validateFirstGeneratedTurn(
+            if (parsed) {
+              parsed = applyLiveConversationPolicy({
+                scenarioId: scenario.id,
+                relationship,
+                turn: parsed,
+              });
+            }
+            const validationError = validateGeneratedTurn(
               parsed,
               relationship,
+              activeTurnNumber,
             );
             if (validationError) {
               rejectedToolCalls.push({
@@ -491,6 +666,9 @@ async function runSmoke(relationship, durationSeconds) {
               secondServerTurnCompleteAt ||= performance.now();
             }
           }
+          if (outputTranscriptionUpdate || content?.turnComplete) {
+            armOutputTranscriptionSettle();
+          }
           resolveCompletedTurn();
         },
         onerror(error) {
@@ -541,7 +719,7 @@ async function runSmoke(relationship, durationSeconds) {
     activeTurnNumber = 2;
     secondLearnerSentAt = performance.now();
     session.sendRealtimeInput({
-      text: "Practice smoke input: the learner spoke entirely in English and said, 'Yes, I have eaten.'",
+      text: "Practice smoke input: the learner spoke entirely in English and said, 'I ate.'",
     });
     const secondParsed = await secondTurn;
 
@@ -568,6 +746,9 @@ async function runSmoke(relationship, durationSeconds) {
       connectMs: Math.round(connectedAt - startedAt),
       firstGeneratedTurnMs: Math.round(firstGeneratedTurnAt - learnerSentAt),
       firstAudiblePcmMs: Math.round(firstAudiblePcmAt - learnerSentAt),
+      firstOutputTranscriptionMs: Math.round(
+        firstOutputTranscriptionAt - learnerSentAt,
+      ),
       serverTurnCompleteMs: Math.round(
         serverTurnCompleteAt - learnerSentAt,
       ),
@@ -578,6 +759,9 @@ async function runSmoke(relationship, durationSeconds) {
       ),
       secondAudiblePcmMs: Math.round(
         secondAudiblePcmAt - secondLearnerSentAt,
+      ),
+      secondOutputTranscriptionMs: Math.round(
+        secondOutputTranscriptionAt - secondLearnerSentAt,
       ),
       secondServerTurnCompleteMs: Math.round(
         secondServerTurnCompleteAt - secondLearnerSentAt,
@@ -598,11 +782,19 @@ async function runSmoke(relationship, durationSeconds) {
         peak: secondAudiblePcmPeak,
       },
       firstGeneratedTurn: parsed,
+      outputTranscription,
+      firstOutputTranscriptionFinished,
+      firstOutputTranscriptionSettled,
       secondGeneratedTurn: secondParsed,
+      secondOutputTranscription,
+      secondOutputTranscriptionFinished,
+      secondOutputTranscriptionSettled,
       rejectedToolCalls,
     };
   } finally {
     clearTimeout(timeout);
+    clearTimeout(firstOutputTranscriptionTimer);
+    clearTimeout(secondOutputTranscriptionTimer);
     expectedClose = true;
     session?.close();
   }

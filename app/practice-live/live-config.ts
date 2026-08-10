@@ -10,6 +10,7 @@ import {
 import type { TeluguWord } from "../course-data";
 import { getLivePhraseCues } from "./live-follow-along.ts";
 import {
+  getLiveFamilyAteFollowup,
   getLiveOpeningGreeting,
   type LiveScenario,
 } from "./live-scenarios.ts";
@@ -89,10 +90,17 @@ function buildCueIds(scenario: LiveScenario) {
   ]);
 }
 
-function conversationGuidance(scenario: LiveScenario) {
+function conversationGuidance(
+  scenario: LiveScenario,
+  relationship: LiveListenerRelationship,
+) {
   if (scenario.id === "family-check-in") {
+    const ateFollowup = getLiveFamilyAteFollowup(relationship);
     return `
 Natural family flow:
+- If the learner says only "I ate" or "I have eaten" and does not name a food, Mayu's entire next turn must be exactly mayuTeluguInternal "${ateFollowup.telugu}", mayuRoman "${ateFollowup.roman}", mayuPronunciation "${ateFollowup.pronunciation}", and mayuEnglish "${ateFollowup.english}".
+- Ask that direct question with no avunaa, oh, acknowledgment, wellbeing question, fullness question, or offer of more food before it.
+- If the learner names what they ate, respond to that specific food and move only one natural step forward. Never fall back to a stock check-in they already answered.
 - If the learner has eaten but is still hungry, offer more food or ask what they would like to eat.
 - For "I am still hungry," use naaku inkaa aakaligaa undi (నాకు ఇంకా ఆకలిగా ఉంది). Never use pasi/pasigaa for hunger.
 - Use avunaa? inkaa emainaa tintaavaa? (అవునా? ఇంకా ఏమైనా తింటావా?) for close speech, or avunaa? inkaa emainaa tintaaraa? (అవునా? ఇంకా ఏమైనా తింటారా?) for respectful speech.
@@ -161,7 +169,7 @@ Give an English-speaking learner a warm, natural Telugu conversation, not a less
 Current situation: ${scenario.title}
 Situation goal: ${scenario.description}
 Session length: ${options.durationSeconds} seconds.
-${conversationGuidance(scenario)}
+${conversationGuidance(scenario, options.relationship)}
 
 New-session sequence:
 - The app presents Mayu's first audible turn before sending any microphone audio: mayuTeluguInternal "${openingGreeting.telugu}", mayuRoman "${openingGreeting.roman}", mayuPronunciation "${openingGreeting.pronunciation}", and mayuEnglish "${openingGreeting.english}".
@@ -176,6 +184,7 @@ Reviewed phrase and register anchors (other simple natural Telugu is allowed):
 ${phraseReference}
 
 Spoken conversation rules:
+- Build the next turn from the learner's latest meaning. Never ask a question they just answered, jump back to an earlier check-in, or choose a reviewed phrase merely because it is available.
 - Every Mayu turn is spoken entirely in natural Telugu. Do not say English translations, English connective words, labels, praise, or scene-setting aloud.
 - NEVER use English interjections such as “oh,” “okay,” “yes,” or “great,” even when they are commonly borrowed. Use a natural Telugu response instead.
 - The learner may answer in Telugu, English, or a mix. Understand English silently and keep Mayu's spoken reply in simple Telugu.

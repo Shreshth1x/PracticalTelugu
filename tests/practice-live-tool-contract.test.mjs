@@ -10,6 +10,8 @@ import {
   hasKnownLearnerMeaningMismatch,
   hasKnownMayuMeaningMismatch,
   hasKnownMayuRelationshipMismatch,
+  isPlainAteReply,
+  matchesPresentedTeluguAudio,
   matchesReviewedLiveCue,
   parseLiveLearnerAssessment,
   parseLiveLearnerCaption,
@@ -860,6 +862,49 @@ test("accepts a cueId only when all four normalized reviewed fields match exactl
       { ...parsed.mayu, roman: "tinnaavaa ippudu?" },
       reviewedCue,
     ),
+    false,
+  );
+});
+
+test("recognizes only a bare completed-meal reply", () => {
+  for (const english of [
+    "I ate.",
+    "I already ate.",
+    "I have eaten.",
+    "Yes, I have already eaten.",
+  ]) {
+    assert.equal(isPlainAteReply({ english, roman: "reply" }), true);
+  }
+
+  for (const english of [
+    "I ate dosa.",
+    "I am full.",
+    "I am hungry.",
+    "I did not eat.",
+  ]) {
+    assert.equal(isPlainAteReply({ english, roman: "reply" }), false);
+  }
+
+  assert.equal(isPlainAteReply({ english: "Meal complete" }), false);
+});
+
+test("compares the accepted Telugu turn with Gemini's audio transcript", () => {
+  assert.equal(
+    matchesPresentedTeluguAudio(
+      { teluguInternal: "ఏం తిన్నారు?" },
+      "  ఏం తిన్నారు! ",
+    ),
+    true,
+  );
+  assert.equal(
+    matchesPresentedTeluguAudio(
+      { teluguInternal: "ఏం తిన్నారు?" },
+      "బాగున్నారా?",
+    ),
+    false,
+  );
+  assert.equal(
+    matchesPresentedTeluguAudio({ teluguInternal: "ఏం తిన్నారు?" }, ""),
     false,
   );
 });

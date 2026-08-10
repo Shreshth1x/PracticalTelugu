@@ -105,6 +105,24 @@ export function getLiveOpeningGreeting(
       };
 }
 
+export function getLiveFamilyAteFollowup(
+  relationship: LiveListenerRelationship,
+) {
+  return relationship === "close"
+    ? {
+        telugu: "ఏం తిన్నావు?",
+        roman: "em tinnaavu?",
+        pronunciation: "AYM tin-NAA-voo?",
+        english: "What did you eat?",
+      }
+    : {
+        telugu: "ఏం తిన్నారు?",
+        roman: "em tinnaaru?",
+        pronunciation: "AYM tin-NAA-roo?",
+        english: "What did you eat?",
+      };
+}
+
 export function getLiveOpeningCue(
   _scenario: LiveScenario,
   relationship: LiveListenerRelationship,

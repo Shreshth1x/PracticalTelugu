@@ -10,6 +10,7 @@ import {
   isLiveSessionDuration,
 } from "../app/practice-live/live-config.ts";
 import {
+  getLiveFamilyAteFollowup,
   getLiveOpeningCue,
   getLiveOpeningGreeting,
   getLiveScenario,
@@ -47,6 +48,30 @@ test("locks each Live prompt and reviewed family opener to one relationship", ()
   assert.match(respectful, /Session length: 120 seconds/);
   assert.match(close, /have-you-eaten__primary/);
   assert.match(respectful, /have-you-eaten__alt_0/);
+  const closeAteFollowup = getLiveFamilyAteFollowup("close");
+  const respectfulAteFollowup = getLiveFamilyAteFollowup("respectful");
+  assert.deepEqual(closeAteFollowup, {
+    telugu: "ఏం తిన్నావు?",
+    roman: "em tinnaavu?",
+    pronunciation: "AYM tin-NAA-voo?",
+    english: "What did you eat?",
+  });
+  assert.deepEqual(respectfulAteFollowup, {
+    telugu: "ఏం తిన్నారు?",
+    roman: "em tinnaaru?",
+    pronunciation: "AYM tin-NAA-roo?",
+    english: "What did you eat?",
+  });
+  assert.match(close, /entire next turn must be exactly[^\n]+ఏం తిన్నావు\?/);
+  assert.doesNotMatch(close, /entire next turn must be exactly[^\n]+ఏం తిన్నారు\?/);
+  assert.match(
+    respectful,
+    /entire next turn must be exactly[^\n]+ఏం తిన్నారు\?/,
+  );
+  assert.doesNotMatch(
+    respectful,
+    /entire next turn must be exactly[^\n]+ఏం తిన్నావు\?/,
+  );
   const closeOpening = getLiveOpeningCue(familyScenario, "close");
   const respectfulOpening = getLiveOpeningCue(
     familyScenario,

@@ -259,7 +259,12 @@ test("keeps checked captions independent and finalizes only the latest presentat
 
   assert.match(
     hookSource,
-    /const parsed =\s*parseLivePresentedTurnToolCall\(call\.args\) \?\?\s*repairLivePresentedTurnToolCall\(call\.args\);/,
+    /let parsed =\s*parseLivePresentedTurnToolCall\(call\.args\) \?\?\s*repairLivePresentedTurnToolCall\(call\.args\);/,
+  );
+  assert.match(
+    hookSource,
+    /parsed = applyLiveConversationPolicy\(\{[\s\S]*scenarioId: scenario\.id,[\s\S]*relationship: activeRelationshipRef\.current,[\s\S]*turn: parsed,[\s\S]*\}\);/,
+    "validated turns pass through the deterministic conversation policy before presentation",
   );
   assert.match(
     hookSource,

@@ -394,6 +394,41 @@ export function matchesReviewedLiveCue(
   );
 }
 
+const PLAIN_ATE_ENGLISH_REPLIES = new Set([
+  "i ate",
+  "i already ate",
+  "i have eaten",
+  "i have already eaten",
+  "yes i ate",
+  "yes i already ate",
+  "yes i have eaten",
+  "yes i have already eaten",
+]);
+
+/**
+ * Identifies only a bare completed-meal answer. Naming a food, saying the
+ * learner is full or hungry, or saying they did not eat must follow a
+ * different conversational branch.
+ */
+export function isPlainAteReply(
+  turn: Pick<ParsedLiveCaptionTurn, "english">,
+) {
+  const english = normalizeReviewedCaption(turn.english);
+  return PLAIN_ATE_ENGLISH_REPLIES.has(english);
+}
+
+/** Confirms that Gemini's audio transcript is the accepted Telugu turn. */
+export function matchesPresentedTeluguAudio(
+  turn: Pick<ParsedLiveCaptionTurn, "teluguInternal">,
+  outputTranscription: unknown,
+) {
+  return (
+    typeof outputTranscription === "string" &&
+    normalizeReviewedCaption(outputTranscription) ===
+      normalizeReviewedCaption(turn.teluguInternal)
+  );
+}
+
 /** Blocks the copied-English fillers Mayu is explicitly told not to speak. */
 export function hasForbiddenAudibleEnglish(
   turn: Pick<ParsedLiveCaptionTurn, "teluguInternal" | "roman">,

@@ -47,6 +47,7 @@ import {
   liveScenarios,
   type LiveScenarioId,
 } from "./live-scenarios";
+import { applyLiveConversationPolicy } from "./live-conversation-policy";
 import {
   gradeLiveSession,
   type LiveSessionGrade,
@@ -1262,7 +1263,7 @@ export function useGeminiLive(
             };
           }
 
-          const parsed =
+          let parsed =
             parseLivePresentedTurnToolCall(call.args) ??
             repairLivePresentedTurnToolCall(call.args);
           if (!parsed) {
@@ -1270,6 +1271,15 @@ export function useGeminiLive(
               "Provide every complete Mayu caption field and only present_turn fields. Use cueId, never sourceCueId or reviewedCueId, and use a lowercase learnerSourceLanguage. Include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage on every call: fill all four after learner input, or set all four to null for a control turn. For English input, learnerRoman must be a natural Telugu display in Latin letters, not copied English. Keep Telugu script out of learner-facing fields.",
             );
           }
+
+          // High-confidence conversational transitions are normalized before
+          // acceptance so the caption and blocking audio continuation receive
+          // the same direct relationship-aware turn.
+          parsed = applyLiveConversationPolicy({
+            scenarioId: scenario.id,
+            relationship: activeRelationshipRef.current,
+            turn: parsed,
+          });
           const isOpeningPresentation =
             transcriptRef.current.length === 0 &&
             !mayuPresentationReadyRef.current &&
@@ -1563,6 +1573,7 @@ export function useGeminiLive(
       markLearnerResponseStarted,
       playAudio,
       prepareMayuResponse,
+      scenario.id,
       scenario.words,
       settleAssistantPlayback,
       stopPlayback,
