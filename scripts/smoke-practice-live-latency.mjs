@@ -1,9 +1,8 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import {
-  FunctionResponseScheduling,
-  GoogleGenAI,
-} from "@google/genai";
+import { FunctionResponseScheduling, GoogleGenAI } from "@google/genai";
 
 import {
   DEFAULT_LIVE_LISTENER_RELATIONSHIP,
@@ -19,7 +18,7 @@ import {
 } from "../app/practice-live/live-config.ts";
 import { findLivePhraseCue } from "../app/practice-live/live-follow-along.ts";
 import {
-  getLiveOpeningCue,
+  getLiveOpeningGreeting,
   getLiveScenario,
 } from "../app/practice-live/live-scenarios.ts";
 import {
@@ -29,6 +28,7 @@ import {
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
   parseLivePresentedTurnToolCall,
+  repairLivePresentedTurnToolCall,
 } from "../app/practice-live/live-transcript.ts";
 
 const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -49,6 +49,7 @@ for (let index = 0; index < args.length; index += 1) {
     break;
   }
 }
+
 const scenario = getLiveScenario(positionalScenario ?? "family-check-in");
 if (!scenario) {
   throw new Error("Choose family-check-in, at-the-table, or when-stuck.");
@@ -75,143 +76,196 @@ if (!isLiveSessionDuration(requestedDuration)) {
   throw new Error("--duration must be 60 or 120.");
 }
 
-// `--conversation` remains accepted for existing command lines. The smoke now
-// always verifies the same fast two-turn exchange and has no private Live turn.
 const runMatrix = args.includes("--matrix");
 const NEW_SESSION_WINDOW_SECONDS = 60;
 const TOKEN_EXPIRY_HEADROOM_SECONDS = 70;
+const PRE_LEARNER_SILENCE_WINDOW_MS = 1_200;
+const POST_TURN_STABILITY_WINDOW_MS = 300;
+const RESPONSE_TIMEOUT_MS = 20_000;
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function inspectOpeningAudio(greeting) {
+  const filePath = path.join(process.cwd(), "public", greeting.audioSrc);
+  const bytes = await readFile(filePath);
+  if (!bytes.length || bytes.length % 2 !== 0) {
+    throw new Error(`Invalid opening PCM asset: ${greeting.audioSrc}`);
+  }
+
+  const durationSeconds = bytes.length / 2 / 24_000;
+  if (durationSeconds < 1 || durationSeconds > 3) {
+    throw new Error(
+      `Opening PCM duration is outside the expected range: ${durationSeconds.toFixed(2)}s.`,
+    );
+  }
+
+  return {
+    src: greeting.audioSrc,
+    bytes: bytes.length,
+    durationMs: Math.round(durationSeconds * 1_000),
+  };
+}
+
+function validateFirstGeneratedTurn(parsed, relationship) {
+  if (!parsed?.learner) {
+    return "The first generated turn did not caption the learner's reply.";
+  }
+  if (parsed.learner.sourceLanguage !== "english") {
+    return "The learner source language was not preserved as English.";
+  }
+  if (hasForbiddenAudibleEnglish(parsed.mayu)) {
+    return "Mayu's first generated turn contains audible English.";
+  }
+  if (hasKnownLearnerMeaningMismatch(parsed.learner)) {
+    return "The learner caption has a known meaning mismatch.";
+  }
+  if (hasKnownMayuMeaningMismatch(parsed.mayu)) {
+    return "Mayu's first generated turn has a known meaning mismatch.";
+  }
+  if (hasKnownMayuRelationshipMismatch(parsed.mayu, relationship)) {
+    return "Mayu's first generated turn uses the wrong relationship register.";
+  }
+
+  if (parsed.mayu.cueId) {
+    const cue = findLivePhraseCue(scenario.words, parsed.mayu.cueId);
+    const requiredAudience =
+      relationship === "close" ? "familiar" : "respectful";
+    if (
+      !cue ||
+      (cue.audience !== "anyone" && cue.audience !== requiredAudience)
+    ) {
+      return "Mayu claimed a reviewed cue that does not match the active relationship.";
+    }
+  }
+
+  return "";
+}
+
+function inspectInlinePcm(part) {
+  const inlineData = part.inlineData;
+  if (
+    !inlineData?.data ||
+    !inlineData.mimeType?.toLowerCase().startsWith("audio/pcm")
+  ) {
+    return null;
+  }
+
+  const bytes = Buffer.from(inlineData.data, "base64");
+  const sampleBytes = bytes.length - (bytes.length % 2);
+  let peak = 0;
+  for (let offset = 0; offset < sampleBytes; offset += 2) {
+    peak = Math.max(peak, Math.abs(bytes.readInt16LE(offset)));
+  }
+
+  return {
+    bytes: bytes.length,
+    peak,
+  };
+}
 
 async function runSmoke(relationship, durationSeconds) {
+  const greeting = getLiveOpeningGreeting(relationship);
+  const openingAudio = await inspectOpeningAudio(greeting);
   const startedAt = performance.now();
-  let promptSentAt = 0;
-  let firstToolCallAt = 0;
-  let firstRawAudioAt = 0;
-  let firstAudioAt = 0;
-  let selectedCueId = "";
-  let firstCaption = null;
-  let followupSentAt = 0;
-  let secondToolCallAt = 0;
-  let secondRawAudioAt = 0;
-  let secondAudioAt = 0;
-  let secondTurnCompleteAt = 0;
-  let secondCaption = null;
-  let lastToolCall = null;
-  let presentToolCallCount = 0;
-  let acceptedPresentToolCallCount = 0;
-  let rejectedPresentToolCallCount = 0;
-  let finalizedPresentTurnCount = 0;
-  let duplicatePresentToolCallCount = 0;
-  let supersededCandidateCount = 0;
-  let audibleTurnCount = 0;
-  let activeTurnHasAudio = false;
-  let pendingAudioPartCount = 0;
-  let bufferedAudioPartCount = 0;
-  let suppressedAudioPartCount = 0;
-  let suppressAudioUntilBoundary = false;
-  let presentationReady = false;
-  let pendingCandidate = null;
-  const presentCalls = [];
-  let expectedClose = false;
   let session;
+  let expectedClose = false;
+  let activeTurnNumber = 1;
+  let learnerSentAt = 0;
+  let secondLearnerSentAt = 0;
+  let firstGeneratedTurnAt = 0;
+  let secondGeneratedTurnAt = 0;
+  let toolResponseSentAt = 0;
+  let secondToolResponseSentAt = 0;
+  let firstAudiblePcmAt = 0;
+  let secondAudiblePcmAt = 0;
+  let serverTurnCompleteAt = 0;
+  let secondServerTurnCompleteAt = 0;
+  let acceptedTurn = null;
+  let secondAcceptedTurn = null;
+  let acceptedToolCallId = null;
+  let secondAcceptedToolCallId = null;
+  let audiblePcmBytes = 0;
+  let secondAudiblePcmBytes = 0;
+  let audiblePcmParts = 0;
+  let secondAudiblePcmParts = 0;
+  let audiblePcmPeak = 0;
+  let secondAudiblePcmPeak = 0;
+  const rejectedToolCalls = [];
 
-  let resolveReady;
-  let rejectReady;
-  const ready = new Promise((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
+  let resolveFirstTurn;
+  let rejectFirstTurn;
+  const firstTurn = new Promise((resolve, reject) => {
+    resolveFirstTurn = resolve;
+    rejectFirstTurn = reject;
   });
+  void firstTurn.catch(() => undefined);
+  let resolveSecondTurn;
+  let rejectSecondTurn;
+  const secondTurn = new Promise((resolve, reject) => {
+    resolveSecondTurn = resolve;
+    rejectSecondTurn = reject;
+  });
+  void secondTurn.catch(() => undefined);
 
-  function resolveWhenReady() {
-    if (secondToolCallAt && secondAudioAt && secondTurnCompleteAt) {
-      resolveReady();
-    }
-  }
-
+  const rejectSmoke = (error) => {
+    rejectFirstTurn(error);
+    rejectSecondTurn(error);
+  };
   const timeout = setTimeout(() => {
-    const progress = {
-      firstPresent: Boolean(firstToolCallAt),
-      firstRawAudio: Boolean(firstRawAudioAt),
-      firstAudio: Boolean(firstAudioAt),
-      learnerFollowup: Boolean(followupSentAt),
-      secondPresent: Boolean(secondToolCallAt),
-      secondRawAudio: Boolean(secondRawAudioAt),
-      secondAudio: Boolean(secondAudioAt),
-      secondTurnComplete: Boolean(secondTurnCompleteAt),
-      audibleTurnCount,
-      pendingAudioPartCount,
-      suppressAudioUntilBoundary,
-    };
-    rejectReady(
+    rejectSmoke(
       new Error(
-        `Gemini did not complete the expected two-turn presentation/audio sequence in time. Progress: ${JSON.stringify(progress)}.${
-          lastToolCall ? ` Last tool call: ${JSON.stringify(lastToolCall)}` : ""
-        }`,
+        `Gemini did not finish two audible presented turns without closing. Progress: ${JSON.stringify(
+          {
+            acceptedToolCallId,
+            secondAcceptedToolCallId,
+            firstGeneratedTurn: Boolean(firstGeneratedTurnAt),
+            secondGeneratedTurn: Boolean(secondGeneratedTurnAt),
+            audiblePcmBytes,
+            secondAudiblePcmBytes,
+            audiblePcmParts,
+            secondAudiblePcmParts,
+            audiblePcmPeak,
+            secondAudiblePcmPeak,
+            serverTurnComplete: Boolean(serverTurnCompleteAt),
+            secondServerTurnComplete: Boolean(secondServerTurnCompleteAt),
+          },
+        )}`,
       ),
     );
-  }, 30_000);
+  }, RESPONSE_TIMEOUT_MS);
 
-  function phaseName() {
-    return followupSentAt ? "learner-followup" : "opening";
-  }
-
-  function markAudibleAudio(at = performance.now()) {
-    if (!presentationReady || activeTurnHasAudio) return;
-
-    activeTurnHasAudio = true;
-    audibleTurnCount += 1;
-    if (followupSentAt) secondAudioAt ||= at;
-    else firstAudioAt ||= at;
-  }
-
-  function finalizePendingCandidate() {
-    const candidate = pendingCandidate;
-    if (!candidate) return false;
-
-    pendingCandidate = null;
-    presentationReady = true;
-    finalizedPresentTurnCount += 1;
-    candidate.record.recordedAs = `${candidate.phase}-final`;
-
-    if (candidate.phase === "opening") {
-      firstCaption = candidate.parsed.mayu;
-      firstToolCallAt = candidate.receivedAt;
-      selectedCueId = candidate.cue?.id ?? "";
-    } else {
-      secondCaption = candidate.parsed;
-      secondToolCallAt = candidate.receivedAt;
+  const resolveCompletedTurn = () => {
+    if (activeTurnNumber === 1) {
+      if (
+        acceptedTurn &&
+        audiblePcmBytes > 0 &&
+        audiblePcmPeak > 0 &&
+        serverTurnCompleteAt
+      ) {
+        resolveFirstTurn(acceptedTurn);
+      }
+      return;
     }
 
-    if (pendingAudioPartCount) {
-      pendingAudioPartCount = 0;
-      markAudibleAudio();
+    if (
+      secondAcceptedTurn &&
+      secondAudiblePcmBytes > 0 &&
+      secondAudiblePcmPeak > 0 &&
+      secondServerTurnCompleteAt
+    ) {
+      resolveSecondTurn(secondAcceptedTurn);
     }
-    return true;
-  }
-
-  function discardPendingCandidate(reason) {
-    if (pendingCandidate) {
-      pendingCandidate.record.recordedAs = `${pendingCandidate.phase}-${reason}`;
-      pendingCandidate = null;
-    }
-    pendingAudioPartCount = 0;
-  }
-
-  function resetPresentationBoundary() {
-    activeTurnHasAudio = false;
-    pendingAudioPartCount = 0;
-    pendingCandidate = null;
-    presentationReady = false;
-    suppressAudioUntilBoundary = false;
-  }
+  };
 
   try {
-    const serverAi = new GoogleGenAI({
-      apiKey,
-      httpOptions: { apiVersion: "v1alpha" },
-    });
     const options = { relationship, durationSeconds };
-    const config = buildLiveConnectConfig(scenario, options);
-    const tokenStartedAt = performance.now();
+    const config = {
+      ...buildLiveConnectConfig(scenario, options),
+      sessionResumption: {},
+      outputAudioTranscription: {},
+    };
     const tokenIssuedAt = Date.now();
     const tokenExpiresAt = new Date(
       tokenIssuedAt +
@@ -220,6 +274,11 @@ async function runSmoke(relationship, durationSeconds) {
     const newSessionExpiresAt = new Date(
       tokenIssuedAt + NEW_SESSION_WINDOW_SECONDS * 1_000,
     ).toISOString();
+    const serverAi = new GoogleGenAI({
+      apiKey,
+      httpOptions: { apiVersion: "v1alpha" },
+    });
+    const tokenStartedAt = performance.now();
     const token = await serverAi.authTokens.create({
       config: {
         uses: 1,
@@ -239,321 +298,266 @@ async function runSmoke(relationship, durationSeconds) {
       apiKey: token.name,
       httpOptions: { apiVersion: "v1alpha" },
     });
-
     session = await ai.live.connect({
       model: LIVE_MODEL,
       config,
       callbacks: {
-        onmessage: (message) => {
+        onmessage(message) {
           const functionCalls = message.toolCall?.functionCalls ?? [];
-          if (functionCalls.length) {
-            const functionResponses = functionCalls.map((call) => {
-              lastToolCall = { name: call.name, args: call.args };
-
-              if (call.name !== PRESENT_TURN_TOOL_NAME) {
-                return {
-                  id: call.id,
-                  name: call.name,
-                  scheduling: FunctionResponseScheduling.INTERRUPT,
-                  response: {
-                    error: `Use ${PRESENT_TURN_TOOL_NAME} for every audible Mayu turn.`,
-                  },
-                };
-              }
-
-              presentToolCallCount += 1;
-              const receivedAt = performance.now();
-              const phase = phaseName();
-              const relativeTo = followupSentAt || promptSentAt;
-
-              if (presentationReady) {
-                duplicatePresentToolCallCount += 1;
-                rejectedPresentToolCallCount += 1;
-                suppressAudioUntilBoundary = true;
-                presentCalls.push({
-                  sequence: presentCalls.length + 1,
-                  phase,
-                  relativeMs: Math.round(receivedAt - relativeTo),
-                  accepted: false,
-                  recordedAs: `${phase}-duplicate-rejected`,
-                  args: call.args,
-                });
-                return {
-                  id: call.id,
-                  name: call.name,
-                  scheduling: FunctionResponseScheduling.SILENT,
-                  response: {
-                    error:
-                      "The current Mayu speech has already been presented. Do not call present_turn again until the learner replies.",
-                  },
-                };
-              }
-
-              const parsed = parseLivePresentedTurnToolCall(call.args);
-              const learnerCaption = parsed?.learner ?? null;
-              const needsLearnerCaption = Boolean(followupSentAt);
-              const cueId = parsed?.mayu.cueId ?? "";
-              const cue = cueId
-                ? findLivePhraseCue(scenario.words, cueId)
-                : null;
-              const requiredAudience =
-                relationship === "close" ? "familiar" : "respectful";
-              const validCueClaim = Boolean(
-                parsed &&
-                  (!cueId ||
-                    (cue &&
-                      matchesReviewedLiveCue(parsed.mayu, cue) &&
-                      (cue.audience === "anyone" ||
-                        cue.audience === requiredAudience))),
-              );
-              const hasForbiddenEnglish = Boolean(
-                parsed && hasForbiddenAudibleEnglish(parsed.mayu),
-              );
-              const hasKnownLearnerMismatch = Boolean(
-                learnerCaption &&
-                  hasKnownLearnerMeaningMismatch(learnerCaption),
-              );
-              const hasKnownMayuMismatch = Boolean(
-                parsed && hasKnownMayuMeaningMismatch(parsed.mayu),
-              );
-              const hasKnownRelationshipMismatch = Boolean(
-                parsed &&
-                  hasKnownMayuRelationshipMismatch(
-                    parsed.mayu,
-                    relationship,
-                  ),
-              );
-              const fabricatedLearnerCaption = Boolean(
-                !needsLearnerCaption && learnerCaption,
-              );
-
-              let rejection = "";
-              if (!parsed) {
-                rejection =
-                  "Use only the present_turn schema fields. Provide all four complete Mayu fields; use cueId, never reviewedCueId; use lowercase learnerSourceLanguage when a learner caption is required. Then speak the matching Telugu immediately.";
-              } else if (fabricatedLearnerCaption) {
-                rejection =
-                  "No learner has spoken yet. Remove every learner field, keep Mayu in her role, and continue from the accepted opening.";
-              } else if (needsLearnerCaption && !learnerCaption) {
-                rejection =
-                  "After learner input, include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage in present_turn. learnerPronunciation is optional.";
-              } else if (hasForbiddenEnglish) {
-                rejection =
-                  "Remove every English interjection or copied-English word from the audible Telugu turn. Use a natural Telugu acknowledgment instead, then call present_turn again.";
-              } else if (hasKnownLearnerMismatch) {
-                rejection =
-                  "For a learner meaning that says hungry, use ఆకలి / aakali, such as naaku inkaa aakaligaa undi. Never use pasi or pasigaa for hunger. Correct every learner field and call present_turn again.";
-              } else if (hasKnownMayuMismatch) {
-                rejection =
-                  "For the hungry family follow-up, use avunaa, not avunnaa, and ask inkaa emainaa tintaavaa? (close) or inkaa emainaa tintaaraa? (respectful). Correct every Mayu field and call present_turn again.";
-              } else if (hasKnownRelationshipMismatch) {
-                rejection =
-                  "The hunger follow-up uses the wrong listener relationship. Use tintaavaa for someone close or tintaaraa for an elder or someone new, matching the locked session.";
-              } else if (!validCueClaim) {
-                rejection = cue
-                  ? "That cueId requires the exact reviewed phrase in the active relationship register. Correct every caption field or omit cueId."
-                  : "That cueId is not reviewed for this situation. Omit cueId for a natural conversational turn.";
-              }
-
-              if (rejection) {
-                rejectedPresentToolCallCount += 1;
-                presentCalls.push({
-                  sequence: presentCalls.length + 1,
-                  phase,
-                  relativeMs: Math.round(receivedAt - relativeTo),
-                  accepted: false,
-                  recordedAs: `${phase}-rejected`,
-                  args: call.args,
-                });
-                if (!fabricatedLearnerCaption) {
-                  discardPendingCandidate("discarded-by-rejection");
-                }
-                return {
-                  id: call.id,
-                  name: call.name,
-                  scheduling: FunctionResponseScheduling.INTERRUPT,
-                  response: { error: rejection },
-                };
-              }
-
-              acceptedPresentToolCallCount += 1;
-              if (pendingCandidate) {
-                pendingCandidate.record.recordedAs =
-                  `${pendingCandidate.phase}-superseded`;
-                supersededCandidateCount += 1;
-              }
-              const record = {
-                sequence: presentCalls.length + 1,
-                phase,
-                relativeMs: Math.round(receivedAt - relativeTo),
-                accepted: true,
-                recordedAs: `${phase}-candidate`,
-                args: call.args,
-              };
-              presentCalls.push(record);
-              pendingCandidate = {
-                phase,
-                receivedAt,
-                parsed: {
-                  ...parsed,
-                  learner: needsLearnerCaption ? learnerCaption : null,
-                },
-                cue,
-                record,
-              };
-
-              return {
-                id: call.id,
-                name: call.name,
-                scheduling: FunctionResponseScheduling.WHEN_IDLE,
-                response: {
-                  output: {
-                    accepted: true,
-                    captionReady: true,
-                    continueSameTurn: true,
-                    spokenTelugu: parsed.mayu.teluguInternal,
-                    instruction:
-                      "CONTINUATION ONLY: call no tool. Speak exactly spokenTelugu now, then wait.",
-                    ...(cue ? { cueId: cue.id } : {}),
-                  },
-                },
-              };
-            });
-
-            session?.sendToolResponse({ functionResponses });
-            if (pendingAudioPartCount && pendingCandidate) {
-              finalizePendingCandidate();
-            }
-          }
-
-          const audioParts = (
-            message.serverContent?.modelTurn?.parts ?? []
-          ).filter((part) => Boolean(part.inlineData?.data));
-          if (audioParts.length && promptSentAt) {
-            const receivedAt = performance.now();
-            if (suppressAudioUntilBoundary) {
-              suppressedAudioPartCount += audioParts.length;
-            } else {
-              if (followupSentAt) secondRawAudioAt ||= receivedAt;
-              else firstRawAudioAt ||= receivedAt;
-
-              if (!presentationReady) {
-                pendingAudioPartCount += audioParts.length;
-                bufferedAudioPartCount += audioParts.length;
-                finalizePendingCandidate();
-              }
-              if (presentationReady) markAudibleAudio(receivedAt);
-            }
-          }
-
           const content = message.serverContent;
-          if (content?.turnComplete || content?.waitingForInput) {
-            suppressAudioUntilBoundary = false;
-            if (firstCaption && firstAudioAt && !followupSentAt) {
-              resetPresentationBoundary();
-              followupSentAt = performance.now();
-              session?.sendRealtimeInput({
-                text:
-                  "Smoke-test learner input: this reply was sent as text and was entirely in English: 'I ate, but I am still a little hungry.' For the next audible Mayu turn, call present_turn with these learner captions: learnerTeluguInternal 'తిన్నాను, కానీ నాకు ఇంకా ఆకలిగా ఉంది.', learnerRoman 'tinnaanu, kaanee naaku inkaa aakaligaa undi.', learnerPronunciation 'tin-NAA-noo, kaa-NEE naa-koo IN-kaa aa-kuh-lee-GAA oon-DEE.', learnerEnglish 'I ate, but I am still a little hungry.', and learnerSourceLanguage 'english'. Respond to that latest meaning and move one small step forward as Mayu; do not repeat the learner's self-report as Mayu. Call present_turn exactly once immediately before speaking, then wait.",
+          const modelParts = content?.modelTurn?.parts ?? [];
+          const hasPrematureModelTurn = Boolean(
+            modelParts.length ||
+              content?.outputTranscription?.text ||
+              functionCalls.length ||
+              modelParts.some((part) => Boolean(part.inlineData?.data)),
+          );
+
+          if (!learnerSentAt && hasPrematureModelTurn) {
+            rejectSmoke(
+              new Error(
+                "Gemini generated an opening instead of waiting for the app-presented greeting reply.",
+              ),
+            );
+            return;
+          }
+
+          const activeLearnerSentAt =
+            activeTurnNumber === 1 ? learnerSentAt : secondLearnerSentAt;
+          const activeAcceptedTurn =
+            activeTurnNumber === 1 ? acceptedTurn : secondAcceptedTurn;
+
+          if (activeLearnerSentAt && functionCalls.length) {
+            if (activeAcceptedTurn) {
+              rejectSmoke(
+                new Error(
+                  `Gemini called a second tool before new learner input: ${JSON.stringify({
+                    acceptedToolCallId:
+                      activeTurnNumber === 1
+                        ? acceptedToolCallId
+                        : secondAcceptedToolCallId,
+                    unexpected: functionCalls.map((call) => ({
+                      id: call.id,
+                      name: call.name,
+                      args: call.args,
+                    })),
+                  })}`,
+                ),
+              );
+              return;
+            }
+            if (functionCalls.length > 1) {
+              rejectSmoke(
+                new Error(
+                  `Gemini called multiple tools before new learner input: ${JSON.stringify(
+                    functionCalls.map((call) => ({
+                      id: call.id,
+                      name: call.name,
+                    })),
+                  )}`,
+                ),
+              );
+              return;
+            }
+
+            const call = functionCalls[0];
+            if (call.name !== PRESENT_TURN_TOOL_NAME) {
+              rejectSmoke(
+                new Error(`Gemini called an unexpected tool: ${call.name}`),
+              );
+              return;
+            }
+
+            const parsed =
+              parseLivePresentedTurnToolCall(call.args) ??
+              repairLivePresentedTurnToolCall(call.args);
+            const validationError = validateFirstGeneratedTurn(
+              parsed,
+              relationship,
+            );
+            if (validationError) {
+              rejectedToolCalls.push({
+                error: validationError,
+                args: call.args,
               });
-            } else if (secondCaption && secondAudioAt) {
-              secondTurnCompleteAt ||= performance.now();
-              resetPresentationBoundary();
-              resolveWhenReady();
+              if (rejectedToolCalls.length >= 4) {
+                rejectSmoke(
+                  new Error(
+                    `${validationError} Calls: ${JSON.stringify(rejectedToolCalls)}`,
+                  ),
+                );
+                return;
+              }
+              session?.sendToolResponse({
+                functionResponses: [
+                  {
+                    id: call.id,
+                    name: call.name,
+                    scheduling: FunctionResponseScheduling.INTERRUPT,
+                    response: {
+                      error:
+                        `${validationError} This turn follows learner input. Include the complete learner caption and source fields, use only Latin letters in every Roman, pronunciation, and English field, use native Telugu script only in the two TeluguInternal fields, and use learnerSourceLanguage "english". Tinnaavaa or tinnaaraa means did you eat or have you eaten, not breakfast. Then call present_turn again before speaking.`,
+                    },
+                  },
+                ],
+              });
+              return;
+            }
+            if (matchesReviewedLiveCue(parsed.mayu, greeting)) {
+              const error =
+                "Gemini repeated the opening greeting after the learner replied.";
+              rejectedToolCalls.push({ error, args: call.args });
+              session?.sendToolResponse({
+                functionResponses: [
+                  {
+                    id: call.id,
+                    name: call.name,
+                    scheduling: FunctionResponseScheduling.INTERRUPT,
+                    response: {
+                      error:
+                        "The app already presented the greeting. Respond to the learner and begin the selected situation instead.",
+                    },
+                  },
+                ],
+              });
+              return;
+            }
+
+            const cue = parsed.mayu.cueId
+              ? findLivePhraseCue(scenario.words, parsed.mayu.cueId)
+              : null;
+            if (activeTurnNumber === 1) {
+              firstGeneratedTurnAt ||= performance.now();
+              acceptedTurn = parsed;
+              acceptedToolCallId = call.id ?? null;
+              toolResponseSentAt = performance.now();
+            } else {
+              secondGeneratedTurnAt ||= performance.now();
+              secondAcceptedTurn = parsed;
+              secondAcceptedToolCallId = call.id ?? null;
+              secondToolResponseSentAt = performance.now();
+            }
+            session?.sendToolResponse({
+              functionResponses: [
+                {
+                  id: call.id,
+                  name: call.name,
+                  response: {
+                    output: {
+                      accepted: true,
+                      captionReady: true,
+                      continueSameTurn: true,
+                      spokenTelugu: parsed.mayu.teluguInternal,
+                      instruction:
+                        "CONTINUATION ONLY: call no tool. Speak exactly spokenTelugu now, then wait.",
+                      ...(cue ? { cueId: cue.id } : {}),
+                    },
+                  },
+                },
+              ],
+            });
+          }
+
+          if (
+            (activeTurnNumber === 1 && !acceptedTurn) ||
+            (activeTurnNumber === 2 && !secondAcceptedTurn)
+          ) {
+            return;
+          }
+
+          for (const part of modelParts) {
+            const pcm = inspectInlinePcm(part);
+            if (!pcm || pcm.peak === 0) continue;
+            if (activeTurnNumber === 1) {
+              firstAudiblePcmAt ||= performance.now();
+              audiblePcmBytes += pcm.bytes;
+              audiblePcmParts += 1;
+              audiblePcmPeak = Math.max(audiblePcmPeak, pcm.peak);
+            } else {
+              secondAudiblePcmAt ||= performance.now();
+              secondAudiblePcmBytes += pcm.bytes;
+              secondAudiblePcmParts += 1;
+              secondAudiblePcmPeak = Math.max(
+                secondAudiblePcmPeak,
+                pcm.peak,
+              );
             }
           }
+
+          if (content?.turnComplete) {
+            if (activeTurnNumber === 1) {
+              serverTurnCompleteAt ||= performance.now();
+            } else {
+              secondServerTurnCompleteAt ||= performance.now();
+            }
+          }
+          resolveCompletedTurn();
         },
-        onerror: (error) => {
-          rejectReady(
+        onerror(error) {
+          rejectSmoke(
             error instanceof Error
               ? error
               : new Error("Gemini Live reported a connection error."),
           );
         },
-        onclose: (event) => {
+        onclose(event) {
           if (!expectedClose) {
-            rejectReady(
+            rejectSmoke(
               new Error(
-                `Gemini closed before returning audio (${event.code}: ${
-                  event.reason || "no reason"
-                }).`,
+                `Gemini closed early (${event.code}: ${event.reason || "no reason"}). Progress: ${JSON.stringify(
+                  {
+                    learnerSent: Boolean(learnerSentAt),
+                    secondLearnerSent: Boolean(secondLearnerSentAt),
+                    acceptedToolCallId,
+                    secondAcceptedToolCallId,
+                    firstGeneratedTurn: Boolean(firstGeneratedTurnAt),
+                    secondGeneratedTurn: Boolean(secondGeneratedTurnAt),
+                    audiblePcmBytes,
+                    secondAudiblePcmBytes,
+                    serverTurnComplete: Boolean(serverTurnCompleteAt),
+                    secondServerTurnComplete: Boolean(
+                      secondServerTurnCompleteAt,
+                    ),
+                    rejectedToolCalls: rejectedToolCalls.length,
+                  },
+                )}`,
               ),
             );
           }
         },
       },
     });
-
     const connectedAt = performance.now();
-    promptSentAt = performance.now();
+
+    await delay(PRE_LEARNER_SILENCE_WINDOW_MS);
+
+    learnerSentAt = performance.now();
     session.sendRealtimeInput({
-      text: getLiveOpeningCue(scenario, relationship),
+      text: "Practice smoke input: the learner spoke entirely in English and said, 'I am well.'",
     });
+    const parsed = await firstTurn;
+    await delay(POST_TURN_STABILITY_WINDOW_MS);
 
-    await ready;
-
-    if (firstToolCallAt > firstAudioAt || !firstRawAudioAt) {
-      throw new Error(
-        "The first Mayu audio could not be buffered behind present_turn.",
-      );
-    }
-    if (secondToolCallAt > secondAudioAt || !secondRawAudioAt) {
-      throw new Error(
-        "The second Mayu audio could not be buffered behind present_turn.",
-      );
-    }
-    if (finalizedPresentTurnCount !== 2) {
-      throw new Error(
-        `Expected two finalized latest presentation candidates, received ${finalizedPresentTurnCount}.`,
-      );
-    }
-    if (audibleTurnCount !== 2) {
-      throw new Error(
-        `Expected exactly two audible turns after duplicate suppression, received ${audibleTurnCount}.`,
-      );
-    }
-    const finalizedCalls = presentCalls.filter((entry) =>
-      entry.recordedAs.endsWith("-final"),
-    );
-    if (
-      finalizedCalls.length !== 2 ||
-      finalizedCalls[0]?.phase !== "opening" ||
-      finalizedCalls[1]?.phase !== "learner-followup"
-    ) {
-      throw new Error(
-        `The latest validated candidate was not finalized once per turn: ${JSON.stringify(presentCalls)}.`,
-      );
-    }
-    if (
-      presentCalls.some(
-        (entry) =>
-          entry.accepted && entry.recordedAs.includes("duplicate-rejected"),
-      )
-    ) {
-      throw new Error("A duplicate present_turn was accepted after playback began.");
-    }
-
-    if (scenario.id === "family-check-in") {
-      const expectedCueId =
-        relationship === "close"
-          ? "have-you-eaten__primary"
-          : "have-you-eaten__alt_0";
-      if (selectedCueId !== expectedCueId) {
-        throw new Error(
-          `Expected ${expectedCueId} for ${relationship}, received ${
-            selectedCueId || "no reviewed cue"
-          }. Present calls: ${JSON.stringify(presentCalls)}. Last tool call: ${JSON.stringify(lastToolCall)}.`,
-        );
-      }
-    }
+    activeTurnNumber = 2;
+    secondLearnerSentAt = performance.now();
+    session.sendRealtimeInput({
+      text: "Practice smoke input: the learner spoke entirely in English and said, 'Yes, I have eaten.'",
+    });
+    const secondParsed = await secondTurn;
 
     return {
       scenario: scenario.id,
       relationship,
       durationSeconds,
       model: LIVE_MODEL,
-      selectedCueId,
-      caption: firstCaption,
+      greeting: {
+        telugu: greeting.telugu,
+        roman: greeting.roman,
+        english: greeting.english,
+      },
+      openingAudio,
+      preLearnerStayedSilentMs: PRE_LEARNER_SILENCE_WINDOW_MS,
+      stayedOpenAfterFirstTurnMs: POST_TURN_STABILITY_WINDOW_MS,
       tokenTtlSeconds: Math.round(
         (Date.parse(tokenExpiresAt) - tokenIssuedAt) / 1_000,
       ),
@@ -562,36 +566,40 @@ async function runSmoke(relationship, durationSeconds) {
       ),
       tokenMs: Math.round(tokenCreatedAt - tokenStartedAt),
       connectMs: Math.round(connectedAt - startedAt),
-      presentTurnMs: Math.round(firstToolCallAt - promptSentAt),
-      captionCardMs: Math.round(firstToolCallAt - promptSentAt),
-      firstRawAudioMs: Math.round(firstRawAudioAt - promptSentAt),
-      firstAudioMs: Math.round(firstAudioAt - promptSentAt),
-      firstPlaybackMs: Math.round(firstAudioAt - promptSentAt),
-      presentToAudioMs: Math.round(firstAudioAt - firstToolCallAt),
-      audioBufferMs: Math.round(firstAudioAt - firstRawAudioAt),
-      audioArrivedBeforePresent: firstRawAudioAt < firstToolCallAt,
-      secondTurn: secondCaption,
-      secondPresentTurnMs: Math.round(secondToolCallAt - followupSentAt),
-      secondCaptionMs: Math.round(secondToolCallAt - followupSentAt),
-      secondRawAudioMs: Math.round(secondRawAudioAt - followupSentAt),
-      secondAudioMs: Math.round(secondAudioAt - followupSentAt),
-      secondPlaybackMs: Math.round(secondAudioAt - followupSentAt),
-      secondPresentToAudioMs: Math.round(secondAudioAt - secondToolCallAt),
-      secondAudioBufferMs: Math.round(secondAudioAt - secondRawAudioAt),
-      secondAudioArrivedBeforePresent: secondRawAudioAt < secondToolCallAt,
-      secondTurnCompleteMs: Math.round(
-        secondTurnCompleteAt - followupSentAt,
+      firstGeneratedTurnMs: Math.round(firstGeneratedTurnAt - learnerSentAt),
+      firstAudiblePcmMs: Math.round(firstAudiblePcmAt - learnerSentAt),
+      serverTurnCompleteMs: Math.round(
+        serverTurnCompleteAt - learnerSentAt,
       ),
-      presentToolCallCount,
-      acceptedPresentToolCallCount,
-      rejectedPresentToolCallCount,
-      finalizedPresentTurnCount,
-      duplicatePresentToolCallCount,
-      supersededCandidateCount,
-      bufferedAudioPartCount,
-      suppressedAudioPartCount,
-      audibleTurnCount,
-      presentCalls,
+      continuationMs: Math.round(serverTurnCompleteAt - toolResponseSentAt),
+      acceptedToolCallId,
+      secondGeneratedTurnMs: Math.round(
+        secondGeneratedTurnAt - secondLearnerSentAt,
+      ),
+      secondAudiblePcmMs: Math.round(
+        secondAudiblePcmAt - secondLearnerSentAt,
+      ),
+      secondServerTurnCompleteMs: Math.round(
+        secondServerTurnCompleteAt - secondLearnerSentAt,
+      ),
+      secondContinuationMs: Math.round(
+        secondServerTurnCompleteAt - secondToolResponseSentAt,
+      ),
+      secondAcceptedToolCallId,
+      presentationBehavior: "BLOCKING",
+      audiblePcm: {
+        bytes: audiblePcmBytes,
+        parts: audiblePcmParts,
+        peak: audiblePcmPeak,
+      },
+      secondAudiblePcm: {
+        bytes: secondAudiblePcmBytes,
+        parts: secondAudiblePcmParts,
+        peak: secondAudiblePcmPeak,
+      },
+      firstGeneratedTurn: parsed,
+      secondGeneratedTurn: secondParsed,
+      rejectedToolCalls,
     };
   } finally {
     clearTimeout(timeout);
@@ -616,9 +624,23 @@ const combinations = runMatrix
 
 const results = [];
 for (const combination of combinations) {
-  results.push(
-    await runSmoke(combination.relationship, combination.durationSeconds),
-  );
+  let result;
+  let attempts = 0;
+  while (!result && attempts < 2) {
+    attempts += 1;
+    try {
+      result = await runSmoke(
+        combination.relationship,
+        combination.durationSeconds,
+      );
+    } catch (error) {
+      const transient =
+        error instanceof Error &&
+        /(?:1011|temporarily unavailable|internal error)/iu.test(error.message);
+      if (!transient || attempts >= 2) throw error;
+    }
+  }
+  results.push({ ...result, attempts });
 }
 
 console.log(JSON.stringify(runMatrix ? results : results[0], null, 2));

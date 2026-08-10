@@ -332,7 +332,7 @@ test("builds a deduplicated bilingual ASR vocabulary", () => {
   assert.ok(!vocabulary.includes("tin-NAA-raa?"));
 });
 
-test("configures low-latency Telugu Live audio with one non-blocking presentation tool", () => {
+test("configures Telugu Live audio with one provider-safe presentation tool", () => {
   const config = buildLiveConnectConfig(scenario);
   const vad = config.realtimeInputConfig?.automaticActivityDetection;
   const declarations = config.tools?.[0]?.functionDeclarations ?? [];
@@ -341,7 +341,7 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
   );
   const presentSchema = presentDeclaration?.parametersJsonSchema;
 
-  assert.equal(LIVE_MODEL, "gemini-2.5-flash-native-audio-preview-12-2025");
+  assert.equal(LIVE_MODEL, "gemini-3.1-flash-live-preview");
   assert.deepEqual(config.responseModalities, ["AUDIO"]);
   assert.equal(
     config.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName,
@@ -366,8 +366,8 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
     config.realtimeInputConfig?.turnCoverage,
     "TURN_INCLUDES_ONLY_ACTIVITY",
   );
-  assert.equal(config.thinkingConfig?.thinkingBudget, 0);
-  assert.equal(config.thinkingConfig?.thinkingLevel, undefined);
+  assert.equal(config.thinkingConfig, undefined);
+  assert.equal(config.historyConfig, undefined);
   assert.ok(config.contextWindowCompression?.slidingWindow);
   assert.equal(config.temperature, 0.35);
   assert.equal(declarations.length, 1);
@@ -375,12 +375,16 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
     declarations.map((declaration) => declaration.name),
     [PRESENT_TURN_TOOL_NAME],
   );
-  assert.equal(presentDeclaration?.behavior, "NON_BLOCKING");
+  assert.equal(presentDeclaration?.behavior, "BLOCKING");
   assert.deepEqual(presentSchema?.required, [
     "mayuTeluguInternal",
     "mayuRoman",
     "mayuPronunciation",
     "mayuEnglish",
+    "learnerTeluguInternal",
+    "learnerRoman",
+    "learnerEnglish",
+    "learnerSourceLanguage",
   ]);
   assert.deepEqual(
     presentSchema?.properties?.cueId?.enum,
@@ -389,11 +393,7 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
   for (const optionalField of [
     "cueId",
     "replay",
-    "learnerTeluguInternal",
-    "learnerRoman",
     "learnerPronunciation",
-    "learnerEnglish",
-    "learnerSourceLanguage",
   ]) {
     assert.ok(presentSchema?.properties?.[optionalField], optionalField);
     assert.ok(!presentSchema?.required?.includes(optionalField), optionalField);
@@ -403,6 +403,14 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
     "english",
     "mixed",
   ]);
+  for (const nullableField of [
+    "learnerTeluguInternal",
+    "learnerRoman",
+    "learnerEnglish",
+    "learnerSourceLanguage",
+  ]) {
+    assert.equal(presentSchema?.properties?.[nullableField]?.nullable, true);
+  }
   assert.equal(
     presentSchema?.properties?.learnerAssessmentConfidence,
     undefined,
@@ -414,7 +422,7 @@ test("configures low-latency Telugu Live audio with one non-blocking presentatio
   assert.doesNotMatch(String(config.systemInstruction), /assess_learner/);
   assert.match(
     String(config.systemInstruction),
-    /before EVERY audible Mayu turn/i,
+    /before EVERY Gemini-generated audible Mayu turn/i,
   );
 });
 
@@ -452,7 +460,7 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
   assert.match(instruction, /Never .* run through a generic checklist/);
   assert.match(
     instruction,
-    /Immediately before EVERY audible Mayu turn.{0,180}speak immediately without waiting/is,
+    /immediately before EVERY Gemini-generated audible Mayu turn.{0,320}Wait for its accepted response.{0,160}Never call the tool twice/is,
   );
   assert.match(
     instruction,
@@ -460,7 +468,7 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
   );
   assert.match(
     instruction,
-    /On every present_turn call after a learner reply, include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage/,
+    /Every present_turn call includes learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage/,
   );
   assert.match(instruction, /Include learnerPronunciation only when useful/);
   assert.match(instruction, /claim phoneme-level certainty/);

@@ -1,6 +1,5 @@
-// Hardware echo cancellation carries the real echo burden in full-duplex
-// mode; this short tail only debounces the reply window and mic level meter
-// right after Mayu's last sample.
+// Half-duplex keeps uploads closed during output; this short tail also covers
+// the last bit of speaker energy right after Mayu's final sample.
 export const LIVE_OUTPUT_ECHO_TAIL_MS = 120;
 
 type LiveOutputCaptureGuardDependencies = {
@@ -17,25 +16,26 @@ export type LiveOutputCaptureGuard = {
 };
 
 /**
- * Microphone frames stream full-duplex: they keep flowing while Mayu speaks so
- * Gemini's server VAD can hear the learner interrupt. Only mute and session
- * identity gate the upload; the output guard governs the local meter and the
- * reply-window timing, never the stream itself.
+ * Hardware capture remains alive after Mayu opens a reply window. The caller
+ * still applies the production half-duplex output gate before uploading PCM.
+ * Before the first Mayu turn, withholding uploads prevents startup noise from
+ * becoming a contextless learner turn.
  */
 export function shouldForwardLiveMicrophoneFrame({
+  expectsLearnerResponse,
   isMuted,
   sessionMatches,
 }: {
+  expectsLearnerResponse: boolean;
   isMuted: boolean;
   sessionMatches: boolean;
 }) {
-  return !isMuted && sessionMatches;
+  return expectsLearnerResponse && !isMuted && sessionMatches;
 }
 
 /**
- * Debounces the moment output stops before reopening learner bookkeeping.
- * Playback no longer mutes the microphone; this guard only sequences the
- * reply window and quiets the mic level meter while Mayu is audible.
+ * Holds learner input closed through playback and a short acoustic tail before
+ * reopening learner bookkeeping. The MediaStream itself stays alive.
  */
 export function createLiveOutputCaptureGuard(
   dependencies: LiveOutputCaptureGuardDependencies,

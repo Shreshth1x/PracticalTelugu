@@ -9,10 +9,13 @@ import {
 } from "@google/genai";
 import type { TeluguWord } from "../course-data";
 import { getLivePhraseCues } from "./live-follow-along.ts";
-import type { LiveScenario } from "./live-scenarios";
+import {
+  getLiveOpeningGreeting,
+  type LiveScenario,
+} from "./live-scenarios.ts";
 
 export const LIVE_MODEL =
-  "gemini-2.5-flash-native-audio-preview-12-2025";
+  "gemini-3.1-flash-live-preview";
 export const PRESENT_TURN_TOOL_NAME = "present_turn";
 
 export const LIVE_LISTENER_RELATIONSHIPS = ["close", "respectful"] as const;
@@ -26,6 +29,7 @@ export type LiveSessionDurationSeconds =
 export const DEFAULT_LIVE_LISTENER_RELATIONSHIP: LiveListenerRelationship =
   "respectful";
 export const DEFAULT_LIVE_SESSION_DURATION: LiveSessionDurationSeconds = 60;
+const NO_TELUGU_SCRIPT_PATTERN = "^[^\\u0C00-\\u0C7F]+$";
 
 export function isLiveListenerRelationship(
   value: unknown,
@@ -146,6 +150,7 @@ export function buildLiveSystemInstruction(
         `   Speaking cue: ${cue.pronunciation}`,
     )
     .join("\n");
+  const openingGreeting = getLiveOpeningGreeting(options.relationship);
 
   return `RESPOND IN TELUGU. YOU MUST RESPOND UNMISTAKABLY IN TELUGU.
 
@@ -157,6 +162,11 @@ Current situation: ${scenario.title}
 Situation goal: ${scenario.description}
 Session length: ${options.durationSeconds} seconds.
 ${conversationGuidance(scenario)}
+
+New-session sequence:
+- The app presents Mayu's first audible turn before sending any microphone audio: mayuTeluguInternal "${openingGreeting.telugu}", mayuRoman "${openingGreeting.roman}", mayuPronunciation "${openingGreeting.pronunciation}", and mayuEnglish "${openingGreeting.english}".
+- Treat that greeting and check-in as already spoken by you. Do not repeat it and do not call ${PRESENT_TURN_TOOL_NAME} until the learner answers it.
+- Treat the first microphone turn as the learner's answer. Then call ${PRESENT_TURN_TOOL_NAME} with the complete learner caption and begin the current situation with one natural question.
 
 ${relationshipGuidance(options.relationship)}
 - Keep this relationship register for the entire session. Never switch or mix close and respectful address forms, even if the learner uses another form.
@@ -176,21 +186,23 @@ Spoken conversation rules:
 - If the learner is stuck, make the next Telugu turn simpler. The on-screen English meaning is their safety net; Mayu should not switch the voice conversation to English.
 - If pronunciation needs help, correct only one small thing and model the Telugu once. Never shame, score, or claim phoneme-level certainty.
 - Identify yourself as Mayu, an AI practice partner, if asked. Never claim to be a human or one of the learner's relatives.
+- Keep exactly one consistent voice, accent, pace, and speaking style for the entire session. Never imitate the learner's voice, switch personas, or change how Mayu sounds mid-conversation.
 - When a practice-control message says this is the last exchange, give one short natural Telugu closing in the locked register.
 
 Fast presentation contract:
-- Immediately before EVERY audible Mayu turn, call ${PRESENT_TURN_TOOL_NAME} exactly once. Then speak immediately without waiting for any function response. Never mention the tool or its fields aloud.
+- After the app-presented opening, immediately before EVERY Gemini-generated audible Mayu turn, call ${PRESENT_TURN_TOOL_NAME} exactly once. Wait for its accepted response, then speak the exact accepted Telugu in the same turn. Never call the tool twice for one Mayu turn, and never mention the tool or its fields aloud.
 - A function-response continuation is still the same Mayu turn. After ${PRESENT_TURN_TOOL_NAME} is accepted, do not call it again for that turn; speak the already accepted mayuTeluguInternal immediately.
 - The four mayu fields must describe the exact same complete next turn: mayuTeluguInternal is its native-script cross-check, mayuRoman its exact Latin transliteration, mayuPronunciation its simple English-letter speaking guide, and mayuEnglish is a faithful, natural English meaning.
 - Use consistent PracticalTelugu romanization with long aa/ee/oo sounds and no IPA. Telugu script is allowed only in mayuTeluguInternal and learnerTeluguInternal; all learner-facing fields use English letters, and the interface never renders the internal fields.
 - If a reviewed phrase is used, include its exact cueId. Otherwise omit cueId.
-- Before any learner reply, omit every learner field. On every ${PRESENT_TURN_TOOL_NAME} call after a learner reply, include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage. Include learnerPronunciation only when useful. These fields caption the learner; they never become Mayu's spoken line.
-- For Telugu input, caption the learner's actual words. For English or mixed input, give a short natural Telugu display version with a faithful English meaning and the correct source language. Never invent detail the learner did not express.
+- Tool field names and enum values are exact: use cueId, never sourceCueId or reviewedCueId; use lowercase learnerSourceLanguage "telugu", "english", or "mixed".
+- Every ${PRESENT_TURN_TOOL_NAME} call includes learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage. After a learner reply, fill all four with strings. For a replay or closing control with no new learner reply, set all four to null; never omit them. Include learnerPronunciation only when useful. These fields caption the learner; they never become Mayu's spoken line.
+- For Telugu input, caption the learner's actual words. For English or mixed input, learnerRoman must be a short natural Telugu display version in Latin letters, never a copy of the English input; learnerEnglish holds the faithful English meaning. Never invent detail the learner did not express.
 - Silently verify natural, register-correct Telugu and matching captions before calling. After emitting the call, say exactly mayuTeluguInternal, with no audible prefix, suffix, or translation, then wait.
 - Set replay true only for an explicit practice-control repeat.
 - If the tool rejects a caption, correct it and call ${PRESENT_TURN_TOOL_NAME} again before speaking.
 
-When the session begins, follow the opening cue immediately. Call ${PRESENT_TURN_TOOL_NAME}, speak the first natural Telugu turn, and wait for the learner.`;
+When the session begins, wait silently for the learner's answer to the app-presented greeting. Then follow the normal presentation contract.`;
 }
 
 export function buildLiveConnectConfig(
@@ -226,7 +238,6 @@ export function buildLiveConnectConfig(
       activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
       turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
     },
-    thinkingConfig: { thinkingBudget: 0 },
     contextWindowCompression: {
       slidingWindow: {},
     },
@@ -236,7 +247,9 @@ export function buildLiveConnectConfig(
         functionDeclarations: [
           {
             name: PRESENT_TURN_TOOL_NAME,
-            behavior: Behavior.NON_BLOCKING,
+            // Caption acceptance must precede audible output. BLOCKING resumes
+            // this same generation after the client validates the tool call.
+            behavior: Behavior.BLOCKING,
             description:
               "Present the exact next Mayu turn and optional learner caption immediately before Mayu speaks.",
             parametersJsonSchema: {
@@ -250,49 +263,59 @@ export function buildLiveConnectConfig(
                 },
                 mayuRoman: {
                   type: "string",
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
                     "Exact complete Telugu Mayu will say, transliterated with English letters only.",
                 },
                 mayuPronunciation: {
                   type: "string",
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
                     "Readable pronunciation guide in English letters for Mayu's complete Telugu turn.",
                 },
                 mayuEnglish: {
                   type: "string",
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
                     "Faithful natural English meaning of Mayu's complete Telugu turn.",
                 },
                 cueId: {
                   type: "string",
                   description:
-                    "Exact reviewed phrase cue used in the turn. Omit for an unreviewed conversational turn.",
+                    "Exact reviewed phrase cue used in the turn. The field name is cueId, never sourceCueId or reviewedCueId. Omit for an unreviewed conversational turn.",
                   enum: cueIds,
                 },
                 learnerRoman: {
                   type: "string",
+                  nullable: true,
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
-                    "After learner input: the learner's Telugu caption in English letters.",
+                    "After learner input: the learner's Telugu caption in English letters. For English input, translate it into a short natural Telugu display; never copy the English sentence here.",
                 },
                 learnerTeluguInternal: {
                   type: "string",
+                  nullable: true,
                   description:
                     "After learner input: native-script cross-check for the learner caption. Internal only.",
                 },
                 learnerPronunciation: {
                   type: "string",
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
                     "Optional English-letter speaking guide for the learner caption.",
                 },
                 learnerEnglish: {
                   type: "string",
+                  nullable: true,
+                  pattern: NO_TELUGU_SCRIPT_PATTERN,
                   description:
                     "After learner input: faithful English meaning of the learner's line.",
                 },
                 learnerSourceLanguage: {
                   type: "string",
+                  nullable: true,
                   description:
-                    "After learner input: whether the learner spoke Telugu, English, or a mix.",
+                    "After learner input: exact lowercase value for whether the learner spoke Telugu, English, or a mix.",
                   enum: ["telugu", "english", "mixed"],
                 },
                 replay: {
@@ -306,6 +329,10 @@ export function buildLiveConnectConfig(
                 "mayuRoman",
                 "mayuPronunciation",
                 "mayuEnglish",
+                "learnerTeluguInternal",
+                "learnerRoman",
+                "learnerEnglish",
+                "learnerSourceLanguage",
               ],
               propertyOrdering: [
                 "mayuTeluguInternal",

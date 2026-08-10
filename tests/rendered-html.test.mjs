@@ -291,6 +291,27 @@ test("makes Live register, time cap, and data handling explicit before start", a
   assert.match(html, /PracticalTelugu does not save your audio/);
 });
 
+test("keeps an interrupted Live conversation visible with recovery actions", async () => {
+  const source = await readFile(
+    new URL("../app/practice-live/PracticeLive.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /const hasInterruptedSession =\s*live\.phase === "error"[\s\S]*live\.transcript\.length > 0/,
+  );
+  assert.match(
+    source,
+    /const hasSessionLayout = hasConversationLayout \|\| live\.phase === "ended"/,
+    "a post-start connection error must not collapse back to the setup picker",
+  );
+  assert.match(source, /Connection interrupted/);
+  assert.match(source, /aria-label="Interrupted practice controls"/);
+  assert.match(source, />\s*Try again\s*</);
+  assert.match(source, />\s*Change setup\s*</);
+});
+
 test("keeps the completed Live session focused on an honest coaching dashboard", async () => {
   const [pageSource, gradingSource] = await Promise.all([
     readFile(
@@ -352,14 +373,14 @@ test("keeps Live presentation fast and assessment off the conversation session",
     ),
   ]);
 
-  assert.match(liveConfigSource, /behavior: Behavior\.NON_BLOCKING/);
+  assert.match(liveConfigSource, /behavior: Behavior\.BLOCKING/);
   assert.match(
     liveConfigSource,
-    /speak immediately without waiting for any function response/,
+    /Wait for its accepted response, then speak the exact accepted Telugu/,
   );
   assert.match(
     liveConfigSource,
-    /On every \$\{PRESENT_TURN_TOOL_NAME\} call after a learner reply/,
+    /Every \$\{PRESENT_TURN_TOOL_NAME\} call includes learnerTeluguInternal/,
   );
   assert.doesNotMatch(liveConfigSource, /assess_learner|ASSESS_LEARNER/);
 
@@ -460,7 +481,11 @@ test("keeps the permanent Gemini credential on the server", async () => {
   );
   assert.match(clientSource, /Authorization/);
   assert.match(clientSource, /sendRealtimeInput\(\{\s*text:/);
-  assert.doesNotMatch(clientSource, /sendClientContent\(/);
+  assert.doesNotMatch(
+    clientSource,
+    /sendClientContent/,
+    "the local greeting must not trigger Gemini before learner realtime input",
+  );
   assert.match(clientSource, /project has been denied access/);
   assert.match(clientSource, /onclose:\s*\(event/);
   assert.match(routeSource, /process\.env\.GEMINI_API_KEY/);

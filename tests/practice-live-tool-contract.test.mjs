@@ -15,6 +15,7 @@ import {
   parseLiveLearnerCaption,
   parseLiveMayuTurnToolCall,
   parseLivePresentedTurnToolCall,
+  repairLivePresentedTurnToolCall,
 } from "../app/practice-live/live-transcript.ts";
 
 const reviewedCue = {
@@ -102,6 +103,40 @@ test("treats the required all-null learner contract as an opening turn", () => {
   });
 
   assert.equal(parsed?.learner, null);
+});
+
+test("repairs Telugu script accidentally placed in Roman tool fields", () => {
+  const providerSlip = {
+    ...completePresentedTurnCall,
+    mayuRoman: "తిన్నావా?",
+    learnerRoman: "తిన్నాను.",
+  };
+
+  assert.equal(parseLivePresentedTurnToolCall(providerSlip), null);
+  const repaired = repairLivePresentedTurnToolCall(providerSlip);
+  assert.equal(repaired?.mayu.roman, "tinnaavaa?");
+  assert.equal(repaired?.learner?.roman, "tinnaanu.");
+});
+
+test("recovers a non-sensitive English caption missing only its internal script", () => {
+  const providerSlip = { ...completePresentedTurnCall };
+  delete providerSlip.learnerTeluguInternal;
+  providerSlip.learnerSourceLanguage = "english";
+  providerSlip.learnerRoman = "baagaane unnaanu";
+  providerSlip.learnerEnglish = "I am well.";
+
+  assert.equal(parseLivePresentedTurnToolCall(providerSlip), null);
+  const repaired = repairLivePresentedTurnToolCall(providerSlip);
+  assert.equal(repaired?.learner?.teluguInternal, "");
+  assert.equal(repaired?.learner?.roman, "baagaane unnaanu");
+
+  assert.equal(
+    repairLivePresentedTurnToolCall({
+      ...providerSlip,
+      learnerEnglish: "I am still hungry.",
+    }),
+    null,
+  );
 });
 
 test("keeps split caption and assessment validation independent", () => {
@@ -889,6 +924,19 @@ test("rejects provider mistakes in the high-confidence hunger follow-up", () => 
       english: "Would you like to eat anything else?",
     }),
     false,
+  );
+});
+
+test("rejects a breakfast meaning that the Telugu never says", () => {
+  assert.equal(
+    hasKnownMayuMeaningMismatch({
+      teluguInternal: "తిన్నారా?",
+      roman: "tinnaaraa?",
+      pronunciation: "tin-NAA-raa?",
+      english: "Did you have breakfast?",
+      sourceLanguage: "telugu",
+    }),
+    true,
   );
 });
 

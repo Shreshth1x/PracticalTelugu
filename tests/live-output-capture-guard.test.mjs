@@ -41,9 +41,14 @@ test("sequences the reply window through playback and its short tail", () => {
   assert.equal(guard.isInputBlocked(), false);
   guard.beginOutput();
   assert.equal(guard.isInputBlocked(), true);
-  // Full-duplex: playback never blocks the microphone upload itself.
+  // The basic eligibility check remains independent of output; the hook's
+  // production half-duplex gate applies immediately afterward.
   assert.equal(
-    shouldForwardLiveMicrophoneFrame({ isMuted: false, sessionMatches: true }),
+    shouldForwardLiveMicrophoneFrame({
+      expectsLearnerResponse: true,
+      isMuted: false,
+      sessionMatches: true,
+    }),
     true,
   );
 
@@ -127,9 +132,19 @@ test("interruption drops stale completion without extending the acoustic tail", 
   assert.equal(guard.isInputBlocked(), false);
 });
 
-test("forwards microphone frames for the active unmuted session, full duplex", () => {
+test("forwards microphone frames only after Mayu opens the reply window", () => {
   assert.equal(
     shouldForwardLiveMicrophoneFrame({
+      expectsLearnerResponse: false,
+      isMuted: false,
+      sessionMatches: true,
+    }),
+    false,
+    "startup audio must not become a learner turn before Mayu greets them",
+  );
+  assert.equal(
+    shouldForwardLiveMicrophoneFrame({
+      expectsLearnerResponse: true,
       isMuted: false,
       sessionMatches: true,
     }),
@@ -137,6 +152,7 @@ test("forwards microphone frames for the active unmuted session, full duplex", (
   );
   assert.equal(
     shouldForwardLiveMicrophoneFrame({
+      expectsLearnerResponse: true,
       isMuted: true,
       sessionMatches: true,
     }),
@@ -144,6 +160,7 @@ test("forwards microphone frames for the active unmuted session, full duplex", (
   );
   assert.equal(
     shouldForwardLiveMicrophoneFrame({
+      expectsLearnerResponse: true,
       isMuted: false,
       sessionMatches: false,
     }),
@@ -169,7 +186,7 @@ test("wires the output guard into every local voice path and microphone upload",
   assert.doesNotMatch(
     playSamplesSource,
     /endMicrophoneStream\(\);/,
-    "full-duplex playback must not close the microphone stream",
+    "playback must keep hardware capture alive while the frame gate pauses uploads",
   );
   assert.match(
     playSamplesSource,
@@ -190,6 +207,21 @@ test("wires the output guard into every local voice path and microphone upload",
     startCaptureSource,
     /microphoneStreamOpenRef\.current = true;/,
   );
+  assert.match(
+    hookSource,
+    /const LIVE_FULL_DUPLEX_ENABLED = false;/,
+    "speaker playback must remain fail-safe half-duplex until acoustic route tests prove barge-in safe",
+  );
+  assert.match(
+    hookSource,
+    /LIVE_FULL_DUPLEX_ENABLED && echoCancellationActive \? "full" : "half"/,
+    "a browser AEC setting alone must not enable full-duplex microphone upload",
+  );
+  assert.match(
+    startCaptureSource,
+    /if \(outputAudible && duplexModeRef\.current === "half"\) \{\s*endMicrophoneStream\(\);\s*return;/,
+    "Mayu playback and its acoustic tail must close the uploaded microphone stream",
+  );
   const forwardingGuardAt = startCaptureSource.indexOf(
     "!shouldForwardLiveMicrophoneFrame({",
   );
@@ -199,6 +231,11 @@ test("wires the output guard into every local voice path and microphone upload",
   );
   assert.ok(forwardingGuardAt >= 0);
   assert.ok(uploadAt > forwardingGuardAt);
+  assert.match(
+    startCaptureSource,
+    /expectsLearnerResponse:\s*learnerTurnStateRef\.current\.expectsLearnerResponse/,
+    "the opening greeting must establish a reply window before microphone upload",
+  );
   assert.ok(
     assessmentCaptureAt > uploadAt,
     "assessment PCM is captured only after the frame passes the microphone forwarding guard",
@@ -222,7 +259,7 @@ test("keeps checked captions independent and finalizes only the latest presentat
 
   assert.match(
     hookSource,
-    /const parsed = parseLivePresentedTurnToolCall\(call\.args\);/,
+    /const parsed =\s*parseLivePresentedTurnToolCall\(call\.args\) \?\?\s*repairLivePresentedTurnToolCall\(call\.args\);/,
   );
   assert.match(
     hookSource,
@@ -236,6 +273,11 @@ test("keeps checked captions independent and finalizes only the latest presentat
   );
   assert.match(
     hookSource,
+    /Mayu spoke without an accepted present_turn call[\s\S]*applyLearnerTurnEvent\(\{\s*type: "mayu-turn-presented",\s*expectsReply: !learnerTurnStateRef\.current\.controlTurnPending/,
+    "the uncaptioned-audio fallback still opens the learner reply window",
+  );
+  assert.match(
+    hookSource,
     /audioParts\.length &&[\s\S]*pendingPresentedTurnRef\.current[\s\S]*finalizePendingPresentation\(\)/,
     "the latest checked candidate becomes visible before buffered audio plays",
   );
@@ -243,6 +285,26 @@ test("keeps checked captions independent and finalizes only the latest presentat
     hookSource,
     /mayuPresentationReadyRef\.current &&[\s\S]*learnerReplyWindowOpenedAtRef\.current === null[\s\S]*FunctionResponseScheduling\.SILENT/,
     "post-audio continuation calls cannot create duplicate transcript turns",
+  );
+  const acceptedResponseStart = hookSource.indexOf(
+    "pendingPresentedTurnRef.current = {",
+  );
+  const acceptedResponseEnd = hookSource.indexOf(
+    "sessionRef.current?.sendToolResponse",
+    acceptedResponseStart,
+  );
+  assert.ok(
+    acceptedResponseStart >= 0 && acceptedResponseEnd > acceptedResponseStart,
+  );
+  const acceptedResponseSource = hookSource.slice(
+    acceptedResponseStart,
+    acceptedResponseEnd,
+  );
+  assert.match(acceptedResponseSource, /continueSameTurn: true/);
+  assert.doesNotMatch(
+    acceptedResponseSource,
+    /scheduling:/,
+    "the blocking presentation response must resume its existing generation instead of scheduling another one",
   );
   assert.doesNotMatch(
     hookSource,

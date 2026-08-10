@@ -29,11 +29,24 @@ import {
   type LearnerTurnEvent,
 } from "./live-learner-turn";
 import {
+  createLiveEchoGate,
+  type LiveEchoGate,
+} from "./live-echo-gate";
+import {
+  createLiveConnectBoundary,
+  nextLiveResumptionHandle,
+  type LiveConnectBoundary,
+} from "./live-connect-boundary";
+import {
   createLiveOutputCaptureGuard,
   shouldForwardLiveMicrophoneFrame,
   type LiveOutputCaptureGuard,
 } from "./live-output-capture-guard";
-import { liveScenarios, type LiveScenarioId } from "./live-scenarios";
+import {
+  getLiveOpeningGreeting,
+  liveScenarios,
+  type LiveScenarioId,
+} from "./live-scenarios";
 import {
   gradeLiveSession,
   type LiveSessionGrade,
@@ -60,6 +73,7 @@ import {
   hasKnownMayuRelationshipMismatch,
   matchesReviewedLiveCue,
   parseLivePresentedTurnToolCall,
+  repairLivePresentedTurnToolCall,
   sanitizeLiveProvisionalTranscript,
   type ParsedLiveCaptionTurn,
   type ParsedLivePresentedTurnToolCall,
@@ -125,6 +139,12 @@ const STUCK_PRESENTATION_WATCHDOG_MS = 5_000;
 const INITIAL_PLAYBACK_LEAD_SECONDS = 0.12;
 const CHUNK_PLAYBACK_LEAD_SECONDS = 0.025;
 const PLAYBACK_DRAIN_GRACE_MS = 250;
+const LIVE_RECONNECT_TIMEOUT_MS = 10_000;
+// Browser track settings only confirm that AEC was requested; they do not
+// prove that speaker playback is absent from the captured signal. Keep the
+// production conversation fail-safe and half-duplex until real device-route
+// acoustic tests justify enabling barge-in during Mayu's speech.
+const LIVE_FULL_DUPLEX_ENABLED = false;
 const CLOSING_CONTROL_TEXT =
   "Practice control: this is the last exchange. Give one short, natural Telugu closing in the locked relationship register. Call present_turn before speaking, then wait.";
 
@@ -229,6 +249,21 @@ function base64ToFloat32(value: string) {
   return output;
 }
 
+function pcm16ArrayBufferToFloat32(value: ArrayBuffer) {
+  if (!value.byteLength || value.byteLength % 2 !== 0) {
+    throw new Error("Mayu's opening greeting audio is unavailable.");
+  }
+
+  const view = new DataView(value);
+  const output = new Float32Array(value.byteLength / 2);
+
+  for (let index = 0; index < output.length; index += 1) {
+    output[index] = view.getInt16(index * 2, true) / 0x8000;
+  }
+
+  return output;
+}
+
 function rmsLevel(samples: Float32Array) {
   if (!samples.length) return 0;
 
@@ -301,6 +336,10 @@ export function useGeminiLive(
   // Sanitized provider ASR for the in-flight learner reply, rendered as an
   // explicitly unchecked draft so the learner sees what was heard right away.
   const [learnerDraft, setLearnerDraft] = useState("");
+  // Half-duplex is the production-safe default: browser AEC settings alone do
+  // not prove that Mayu's speaker output is absent from captured microphone PCM.
+  const [duplexMode, setDuplexMode] = useState<"full" | "half">("half");
+  const [reconnectCount, setReconnectCount] = useState(0);
   const [latestTurnLatencyMs, setLatestTurnLatencyMs] = useState<number | null>(
     null,
   );
@@ -316,6 +355,8 @@ export function useGeminiLive(
   const silentGainRef = useRef<GainNode | null>(null);
   const activeSourcesRef = useRef(new Set<AudioBufferSourceNode>());
   const outputCaptureGuardRef = useRef<LiveOutputCaptureGuard | null>(null);
+  const echoGateRef = useRef<LiveEchoGate | null>(null);
+  const duplexModeRef = useRef<"full" | "half">("half");
   const nextPlaybackTimeRef = useRef(0);
   const levelUpdatedAtRef = useRef(0);
   const assistantLevelUpdatedAtRef = useRef(0);
@@ -356,6 +397,7 @@ export function useGeminiLive(
   const activeTurnRef = useRef<LiveTranscriptTurn | null>(null);
   const toolTurnIdsRef = useRef(new Map<string, string>());
   const mayuPresentationReadyRef = useRef(false);
+  const openingGreetingPendingRef = useRef(false);
   const pendingNativeAudioRef = useRef<string[]>([]);
   const pendingPresentedTurnRef = useRef<PendingPresentedTurn | null>(null);
   const pendingAudioWatchdogRef = useRef<number | null>(null);
@@ -365,6 +407,10 @@ export function useGeminiLive(
   const outputTranscriptionTextRef = useRef("");
   const resumeHandleRef = useRef<string | null>(null);
   const resumeAttemptedRef = useRef(false);
+  const resumeInFlightRef = useRef(false);
+  const attemptResumeRef = useRef<(failureMessage: string) => boolean>(
+    () => false,
+  );
   const workletReadyResolvedRef = useRef(false);
   const liveConnectionRef = useRef<{
     apiToken: string;
@@ -511,11 +557,13 @@ export function useGeminiLive(
     tokenRequestRef.current = null;
     liveConnectionRef.current = null;
     resumeHandleRef.current = null;
+    openingGreetingPendingRef.current = false;
     clearPendingAudioWatchdog();
     clearStuckPresentationWatchdog();
 
     stopPlayback();
     getOutputCaptureGuard().cancel();
+    echoGateRef.current?.reset();
 
     const session = sessionRef.current;
     sessionRef.current = null;
@@ -832,6 +880,13 @@ export function useGeminiLive(
       }
 
       mayuAudioEndedAtRef.current = performance.now();
+      if (openingGreetingPendingRef.current) {
+        openingGreetingPendingRef.current = false;
+        applyLearnerTurnEvent({
+          type: "mayu-turn-presented",
+          expectsReply: true,
+        });
+      }
       prepareMayuResponse();
       openLearnerReplyWindow();
       if (sendQueuedClosingControl()) return;
@@ -840,6 +895,7 @@ export function useGeminiLive(
       }
     });
   }, [
+    applyLearnerTurnEvent,
     armStuckPresentationWatchdog,
     getOutputCaptureGuard,
     openLearnerReplyWindow,
@@ -854,10 +910,9 @@ export function useGeminiLive(
       if (!context || context.state === "closed") return;
       if (!samples.length) return;
 
-      // Full-duplex playback: microphone frames keep streaming while Mayu
-      // speaks so Gemini's server VAD hears a barge-in and interrupts. The
-      // guard below only quiets the local mic meter and times the reply
-      // window; hardware echo cancellation covers speaker bleed.
+      // The guard sequences the reply window and keeps microphone uploads
+      // closed through playback plus the short acoustic tail. Capture stays
+      // alive so reopening does not incur another permission or device delay.
       clearDrainGraceTimer();
       clearStuckPresentationWatchdog();
       getOutputCaptureGuard().beginOutput();
@@ -1053,6 +1108,10 @@ export function useGeminiLive(
         commitTranscript(
           applyLiveCaptionTurn(transcriptRef.current, fallbackTurn),
         );
+        applyLearnerTurnEvent({
+          type: "mayu-turn-presented",
+          expectsReply: !learnerTurnStateRef.current.controlTurnPending,
+        });
         activateTurn(fallbackTurn);
         mayuPresentationReadyRef.current = true;
         pendingNativeAudioRef.current = [];
@@ -1070,6 +1129,7 @@ export function useGeminiLive(
     };
   }, [
     activateTurn,
+    applyLearnerTurnEvent,
     commitTranscript,
     finalizePendingPresentation,
     playAudio,
@@ -1083,8 +1143,9 @@ export function useGeminiLive(
       }
 
       if (message.sessionResumptionUpdate) {
-        const { resumable, newHandle } = message.sessionResumptionUpdate;
-        if (resumable && newHandle) resumeHandleRef.current = newHandle;
+        resumeHandleRef.current = nextLiveResumptionHandle(
+          message.sessionResumptionUpdate,
+        );
       }
 
       if (message.goAway) {
@@ -1201,11 +1262,31 @@ export function useGeminiLive(
             };
           }
 
-          const parsed = parseLivePresentedTurnToolCall(call.args);
+          const parsed =
+            parseLivePresentedTurnToolCall(call.args) ??
+            repairLivePresentedTurnToolCall(call.args);
           if (!parsed) {
             return rejectToolCall(
-              "Provide every complete Mayu caption field and only present_turn fields. Omit learner fields before any learner reply; afterward include the complete safe learner caption and source fields. Keep Telugu script out of learner-facing fields.",
+              "Provide every complete Mayu caption field and only present_turn fields. Use cueId, never sourceCueId or reviewedCueId, and use a lowercase learnerSourceLanguage. Include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage on every call: fill all four after learner input, or set all four to null for a control turn. For English input, learnerRoman must be a natural Telugu display in Latin letters, not copied English. Keep Telugu script out of learner-facing fields.",
             );
+          }
+          const isOpeningPresentation =
+            transcriptRef.current.length === 0 &&
+            !mayuPresentationReadyRef.current &&
+            !learnerTurnStateRef.current.expectsLearnerResponse;
+          if (isOpeningPresentation) {
+            const greeting = getLiveOpeningGreeting(
+              activeRelationshipRef.current,
+            );
+            if (
+              parsed.learner ||
+              parsed.mayu.cueId ||
+              !matchesReviewedLiveCue(parsed.mayu, greeting)
+            ) {
+              return rejectToolCall(
+                `No learner has spoken. The entire opening must be exactly "${greeting.telugu}" with mayuRoman "${greeting.roman}", mayuPronunciation "${greeting.pronunciation}", mayuEnglish "${greeting.english}", and no cueId or learner fields. Correct present_turn, then speak only that greeting.`,
+              );
+            }
           }
           const needsLearnerCaption = learnerCaptionRequired(
             learnerTurnStateRef.current,
@@ -1227,7 +1308,7 @@ export function useGeminiLive(
 
           if (hasKnownMayuMeaningMismatch(parsed.mayu)) {
             return rejectToolCall(
-              "Correct the known phrase mismatch. For the hungry family follow-up, use avunaa, not avunnaa. For a water handoff, never use deenigaa; use idigoo neellu with the locked relationship form. Correct every Mayu field and call present_turn again.",
+              "Correct the known phrase mismatch. For the hungry family follow-up, use avunaa, not avunnaa. Tinnaavaa/tinnaaraa means did you eat or have you eaten, not breakfast. For a water handoff, never use deenigaa; use idigoo neellu with the locked relationship form. Correct every Mayu field and call present_turn again.",
             );
           }
 
@@ -1242,18 +1323,12 @@ export function useGeminiLive(
             );
           }
 
-          const cue = parsed.mayu.cueId
+          const claimedCue = parsed.mayu.cueId
             ? findLivePhraseCue(scenario.words, parsed.mayu.cueId)
             : null;
-          if (parsed.mayu.cueId && !cue) {
+          if (parsed.mayu.cueId && !claimedCue) {
             return rejectToolCall(
               "That cueId is not reviewed for this situation. Omit cueId for a natural conversational turn.",
-            );
-          }
-
-          if (cue && !matchesReviewedLiveCue(parsed.mayu, cue)) {
-            return rejectToolCall(
-              "That cueId requires the exact reviewed native Telugu, romanization, pronunciation, and English meaning. Correct all four fields, or omit cueId for a natural conversational turn.",
             );
           }
 
@@ -1262,14 +1337,22 @@ export function useGeminiLive(
               ? "familiar"
               : "respectful";
           if (
-            cue &&
-            cue.audience !== "anyone" &&
-            cue.audience !== requiredCueAudience
+            claimedCue &&
+            claimedCue.audience !== "anyone" &&
+            claimedCue.audience !== requiredCueAudience
           ) {
             return rejectToolCall(
               "That reviewed cue conflicts with the locked relationship. Use a matching cue, or omit cueId for a natural matching turn.",
             );
           }
+          // A model sometimes attaches a reviewed cue to a longer natural
+          // sentence containing that phrase. The spoken/caption fields remain
+          // usable, but the optional follow-along metadata is not exact, so
+          // drop the claim instead of forcing an otherwise valid turn to loop.
+          const cue =
+            claimedCue && matchesReviewedLiveCue(parsed.mayu, claimedCue)
+              ? claimedCue
+              : null;
 
           const parsedLearnerCaption = parsed.learner;
           const reviewedLearnerCue = parsedLearnerCaption
@@ -1309,10 +1392,10 @@ export function useGeminiLive(
             .find((turn) => turn.speaker === "you" && !turn.final)?.id ??
             `${toolCallId}-learner`;
 
-          // Gemini 2.5 can revise a valid non-blocking presentation before its
-          // first audio chunk. Keep only the newest validated candidate, then
-          // atomically expose its caption and release audio so the UI never
-          // flashes an earlier draft or pairs speech with stale text.
+          // Keep the validated presentation private until its first audio
+          // chunk, then atomically expose its caption and release audio so the
+          // UI never pairs speech with stale text. The function response marks
+          // this as the same accepted turn before audio is released.
           pendingPresentedTurnRef.current = {
             toolCallId,
             parsed,
@@ -1326,7 +1409,8 @@ export function useGeminiLive(
           return {
             id: call.id,
             name: call.name,
-            scheduling: FunctionResponseScheduling.WHEN_IDLE,
+            // present_turn is BLOCKING: this accepted response resumes the
+            // same generation into its already-validated spoken audio.
             response: {
               output: {
                 accepted: true,
@@ -1501,15 +1585,40 @@ export function useGeminiLive(
         level: number,
         sampleRateHz = INPUT_SAMPLE_RATE,
       ) => {
-        // Full-duplex: frames keep flowing while Mayu speaks so server VAD can
-        // hear an interruption; hardware echo cancellation covers speaker
-        // bleed. The output guard only quiets the local mic level meter.
+        // Capture stays alive continuously, but uploads begin only after Mayu
+        // has opened a learner reply window.
         if (
           !shouldForwardLiveMicrophoneFrame({
+            expectsLearnerResponse:
+              learnerTurnStateRef.current.expectsLearnerResponse,
             isMuted: mutedRef.current,
             sessionMatches: sessionRef.current === session,
           })
         ) {
+          return;
+        }
+
+        // Production remains half-duplex while Mayu is audible because a
+        // browser-reported AEC setting is not evidence that loud speaker bleed
+        // is gone. The echo gate remains available behind the disabled
+        // full-duplex flag for future device-route acoustic validation.
+        const outputAudible =
+          activeSourcesRef.current.size > 0 ||
+          outputCaptureGuard.isInputBlocked();
+        if (outputAudible && duplexModeRef.current === "half") {
+          endMicrophoneStream();
+          return;
+        }
+        const echoGate = (echoGateRef.current ??= createLiveEchoGate());
+        const gateDecision = echoGate.decide({
+          level,
+          outputAudible,
+          timestampMs: performance.now(),
+        });
+        if (!gateDecision.forward) {
+          // Mark the upload paused, matching the half-duplex path, so VAD
+          // reads an explicit gap instead of ambiguous silence.
+          endMicrophoneStream();
           return;
         }
 
@@ -1587,7 +1696,7 @@ export function useGeminiLive(
       silentGainRef.current = silentGain;
       void inputContext.resume();
     },
-    [getOutputCaptureGuard],
+    [endMicrophoneStream, getOutputCaptureGuard],
   );
 
   const rewireCaptureForSession = useCallback(
@@ -1613,6 +1722,65 @@ export function useGeminiLive(
     [startCapture],
   );
 
+  const createSessionCallbacks = useCallback(
+    (
+      attemptId: number,
+      boundary: LiveConnectBoundary<LiveServerMessage>,
+      isReplacement = false,
+    ) => ({
+      onopen: () => {
+        if (
+          !isReplacement &&
+          attemptId === connectionAttemptRef.current &&
+          !ignoreConnectionEventsRef.current &&
+          mountedRef.current
+        ) {
+          updatePhase("connecting");
+        }
+      },
+      onmessage: (message: LiveServerMessage) => {
+        if (
+          attemptId === connectionAttemptRef.current &&
+          !ignoreConnectionEventsRef.current
+        ) {
+          boundary.push(message);
+        }
+      },
+      onerror: () => {
+        if (
+          attemptId === connectionAttemptRef.current &&
+          !ignoreConnectionEventsRef.current &&
+          mountedRef.current
+        ) {
+          if (shouldCompleteNormally()) {
+            endSessionRef.current("limit");
+          } else {
+            const message =
+              "The live connection was interrupted. Try once more.";
+            if (boundary.consumeConnectFailure(new Error(message))) return;
+            if (!attemptResumeRef.current(message)) failSession(message);
+          }
+        }
+      },
+      onclose: (event: CloseEvent) => {
+        if (
+          attemptId === connectionAttemptRef.current &&
+          !ignoreConnectionEventsRef.current &&
+          mountedRef.current
+        ) {
+          if (shouldCompleteNormally()) {
+            endSessionRef.current("limit");
+          } else {
+            const message = describeLiveClose(event);
+            if (boundary.consumeConnectFailure(new Error(message))) return;
+            if (!attemptResumeRef.current(message)) failSession(message);
+          }
+        }
+      },
+    }),
+    [failSession, shouldCompleteNormally, updatePhase],
+  );
+
   const attemptResume = useCallback(
     (failureMessage: string) => {
       const connection = liveConnectionRef.current;
@@ -1631,12 +1799,18 @@ export function useGeminiLive(
       // transcript, timers, and grading refs across a transient network drop
       // instead of hard-failing the whole practice.
       resumeAttemptedRef.current = true;
+      resumeInFlightRef.current = true;
+      // Retiring the old attempt id unwires every callback still attached to
+      // the dead socket; the resumed session gets fresh callbacks below, so a
+      // late close event from the old connection cannot fail the new one.
+      connectionAttemptRef.current += 1;
       const attemptId = connectionAttemptRef.current;
       sessionRef.current = null;
       microphoneStreamOpenRef.current = false;
-      updatePhase("connecting");
+      console.info("Practice Live: connection lost, resuming session");
 
       void (async () => {
+        let reconnectTimeout: number | null = null;
         try {
           const { GoogleGenAI } = await loadGenAILibrary();
           if (
@@ -1651,14 +1825,50 @@ export function useGeminiLive(
             apiKey: connection.apiToken,
             httpOptions: { apiVersion: "v1alpha" },
           });
-          const session = await ai.live.connect({
+          const boundary = createLiveConnectBoundary<LiveServerMessage>();
+          const callbacks = createSessionCallbacks(
+            attemptId,
+            boundary,
+            true,
+          );
+          reconnectTimeout = window.setTimeout(() => {
+            boundary.consumeConnectFailure(
+              new Error("The live reconnect timed out."),
+            );
+          }, LIVE_RECONNECT_TIMEOUT_MS);
+          const connectPromise = ai.live.connect({
             model: connection.model,
             config: {
               ...connection.config,
               sessionResumption: { handle },
             },
-            callbacks: connection.callbacks,
+            callbacks,
           });
+          void connectPromise.then(
+            (lateSession) => {
+              if (
+                boundary.didFail() ||
+                attemptId !== connectionAttemptRef.current ||
+                !mountedRef.current ||
+                ignoreConnectionEventsRef.current
+              ) {
+                try {
+                  lateSession.close();
+                } catch {
+                  // A failed setup socket may already be closed.
+                }
+              }
+            },
+            () => undefined,
+          );
+          const session = await Promise.race([
+            connectPromise,
+            boundary.failure,
+          ]);
+          if (reconnectTimeout !== null) {
+            window.clearTimeout(reconnectTimeout);
+            reconnectTimeout = null;
+          }
 
           if (
             attemptId !== connectionAttemptRef.current ||
@@ -1673,11 +1883,12 @@ export function useGeminiLive(
             return;
           }
 
+          liveConnectionRef.current = { ...connection, callbacks };
           sessionRef.current = session;
+          boundary.install(handleServerMessage);
           rewireCaptureForSession(session);
-          if (isSessionPhase(phaseRef.current)) {
-            updatePhase(mutedRef.current ? "muted" : "listening");
-          }
+          setReconnectCount((count) => count + 1);
+          console.info("Practice Live: session resumed");
         } catch {
           if (
             attemptId === connectionAttemptRef.current &&
@@ -1686,13 +1897,27 @@ export function useGeminiLive(
           ) {
             failSession(failureMessage);
           }
+        } finally {
+          if (reconnectTimeout !== null) {
+            window.clearTimeout(reconnectTimeout);
+          }
+          resumeInFlightRef.current = false;
         }
       })();
 
       return true;
     },
-    [failSession, rewireCaptureForSession, updatePhase],
+    [
+      createSessionCallbacks,
+      failSession,
+      handleServerMessage,
+      rewireCaptureForSession,
+    ],
   );
+
+  useEffect(() => {
+    attemptResumeRef.current = attemptResume;
+  }, [attemptResume]);
 
   const start = useCallback(async () => {
     if (isSessionPhase(phaseRef.current)) return;
@@ -1706,11 +1931,14 @@ export function useGeminiLive(
     activeTurnRef.current = null;
     toolTurnIdsRef.current.clear();
     mayuPresentationReadyRef.current = false;
+    openingGreetingPendingRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
     outputTranscriptionTextRef.current = "";
     resumeHandleRef.current = null;
     resumeAttemptedRef.current = false;
+    resumeInFlightRef.current = false;
+    setReconnectCount(0);
     liveConnectionRef.current = null;
     usedCueIdsRef.current = [];
     assessmentAccessTokenRef.current = null;
@@ -1770,6 +1998,17 @@ export function useGeminiLive(
       void inputContextRef.current.resume();
       void outputContextRef.current.resume();
 
+      const openingGreeting = getLiveOpeningGreeting(relationship);
+      const openingAudioPromise = fetch(openingGreeting.audioSrc, {
+        cache: "force-cache",
+        credentials: "same-origin",
+      }).then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Mayu's opening greeting audio is unavailable.");
+        }
+        return pcm16ArrayBufferToFloat32(await response.arrayBuffer());
+      });
+
       updatePhase("requesting");
       const genAIPromise = loadGenAILibrary();
       const inputContext = inputContextRef.current;
@@ -1809,6 +2048,16 @@ export function useGeminiLive(
       }
       streamRef.current = stream;
 
+      // AEC is a prerequisite for future barge-in, but a `true` setting merely
+      // confirms the requested constraint. It does not prove effective echo
+      // suppression on the current speaker/microphone route.
+      const echoCancellationActive =
+        stream.getAudioTracks()[0]?.getSettings?.().echoCancellation === true;
+      duplexModeRef.current =
+        LIVE_FULL_DUPLEX_ENABLED && echoCancellationActive ? "full" : "half";
+      echoGateRef.current?.reset();
+      setDuplexMode(duplexModeRef.current);
+
       const requestController = new AbortController();
       tokenRequestRef.current = requestController;
       const tokenPromise = fetch("/api/practice-live/token", {
@@ -1827,10 +2076,12 @@ export function useGeminiLive(
         payload: (await response.json()) as TokenResponse,
       }));
 
-      const [tokenResult, { GoogleGenAI }, workletReady] = await Promise.all([
+      const [tokenResult, { GoogleGenAI }, workletReady, openingSamples] =
+        await Promise.all([
         tokenPromise,
         genAIPromise,
         inputWorkletReadyRef.current,
+        openingAudioPromise,
       ]);
       tokenRequestRef.current = null;
       if (attemptId !== connectionAttemptRef.current) return;
@@ -1857,6 +2108,8 @@ export function useGeminiLive(
         !tokenPayload.assessmentAccessToken ||
         !isLiveListenerRelationship(tokenPayload.relationship) ||
         !isLiveSessionDuration(tokenPayload.sessionLimitSeconds) ||
+        tokenPayload.relationship !== relationship ||
+        tokenPayload.sessionLimitSeconds !== durationSeconds ||
         !Number.isFinite(parsedTokenExpiry) ||
         parsedTokenExpiry <= Date.now()
       ) {
@@ -1878,64 +2131,39 @@ export function useGeminiLive(
         sessionResumption: {},
         outputAudioTranscription: {},
       };
-      const callbacks = {
-        onopen: () => {
-          if (
-            attemptId === connectionAttemptRef.current &&
-            !ignoreConnectionEventsRef.current &&
-            mountedRef.current
-          ) {
-            updatePhase("connecting");
-          }
-        },
-        onmessage: (message: LiveServerMessage) => {
-          if (
-            attemptId === connectionAttemptRef.current &&
-            !ignoreConnectionEventsRef.current
-          ) {
-            handleServerMessage(message);
-          }
-        },
-        onerror: () => {
-          if (
-            attemptId === connectionAttemptRef.current &&
-            !ignoreConnectionEventsRef.current &&
-            mountedRef.current
-          ) {
-            if (shouldCompleteNormally()) {
-              endSessionRef.current("limit");
-            } else {
-              const message =
-                "The live connection was interrupted. Try once more.";
-              if (!attemptResume(message)) failSession(message);
-            }
-          }
-        },
-        onclose: (event: CloseEvent) => {
-          if (
-            attemptId === connectionAttemptRef.current &&
-            !ignoreConnectionEventsRef.current &&
-            mountedRef.current
-          ) {
-            if (shouldCompleteNormally()) {
-              endSessionRef.current("limit");
-            } else {
-              const message = describeLiveClose(event);
-              if (!attemptResume(message)) failSession(message);
-            }
-          }
-        },
-      };
+      const boundary = createLiveConnectBoundary<LiveServerMessage>();
+      const callbacks = createSessionCallbacks(attemptId, boundary);
 
       const ai = new GoogleGenAI({
         apiKey: tokenPayload.token,
         httpOptions: { apiVersion: "v1alpha" },
       });
-      const session = await ai.live.connect({
+      const connectPromise = ai.live.connect({
         model: tokenPayload.model,
         config: connectConfig,
         callbacks,
       });
+      void connectPromise.then(
+        (lateSession) => {
+          if (
+            boundary.didFail() ||
+            !mountedRef.current ||
+            attemptId !== connectionAttemptRef.current ||
+            ignoreConnectionEventsRef.current
+          ) {
+            try {
+              lateSession.close();
+            } catch {
+              // A failed setup socket may already be closed.
+            }
+          }
+        },
+        () => undefined,
+      );
+      const session = await Promise.race([
+        connectPromise,
+        boundary.failure,
+      ]);
 
       if (
         !mountedRef.current ||
@@ -1955,6 +2183,7 @@ export function useGeminiLive(
       };
       sessionRef.current = session;
       workletReadyResolvedRef.current = workletReady;
+      boundary.install(handleServerMessage);
       startCapture(stream, session, workletReady);
       const startedAt = Date.now();
       startedAtRef.current = startedAt;
@@ -2019,12 +2248,26 @@ export function useGeminiLive(
       updateDeadline();
 
       prepareMayuResponse();
-      updatePhase("thinking");
-      session.sendRealtimeInput({
-        text:
-          tokenPayload.openingCue ??
-          "Set the scene in one sentence and begin our practice now.",
-      });
+      const openingTurn: LiveTranscriptTurn = {
+        id: `mayu-opening-${attemptId}`,
+        speaker: "mayu",
+        roman: openingGreeting.roman,
+        pronunciation: openingGreeting.pronunciation,
+        english: openingGreeting.english,
+        final: true,
+        sourceLanguage: "telugu",
+      };
+      commitTranscript(
+        applyLiveCaptionTurn(transcriptRef.current, openingTurn),
+      );
+      activateTurn(openingTurn);
+      openingGreetingPendingRef.current = true;
+      mayuPresentationReadyRef.current = true;
+      mayuTurnCompleteRef.current = true;
+      playSamples(openingSamples);
+      if (!activeSourcesRef.current.size) {
+        throw new Error("Mayu's opening greeting could not play.");
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       failSession(
@@ -2035,17 +2278,19 @@ export function useGeminiLive(
     }
   }, [
     applyLearnerTurnEvent,
-    attemptResume,
+    activateTurn,
     cancelPendingAssessmentRequests,
     clearTimer,
+    commitTranscript,
+    createSessionCallbacks,
+    durationSeconds,
     failSession,
     handleServerMessage,
-    durationSeconds,
     prepareMayuResponse,
+    playSamples,
     relationship,
     releaseHardware,
     scenarioId,
-    shouldCompleteNormally,
     startCapture,
     updatePhase,
   ]);
@@ -2183,6 +2428,8 @@ export function useGeminiLive(
     outputTranscriptionTextRef.current = "";
     resumeHandleRef.current = null;
     resumeAttemptedRef.current = false;
+    resumeInFlightRef.current = false;
+    setReconnectCount(0);
     liveConnectionRef.current = null;
     usedCueIdsRef.current = [];
     setElapsedSeconds(0);
@@ -2255,6 +2502,8 @@ export function useGeminiLive(
     micLevel,
     assistantLevel,
     latestTurnLatencyMs,
+    duplexMode,
+    reconnectCount,
     transcript,
     activeTurn,
     learnerDraft,

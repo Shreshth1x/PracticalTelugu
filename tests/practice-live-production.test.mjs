@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { POST as createLiveToken } from "../app/api/practice-live/token/route.ts";
@@ -10,6 +11,7 @@ import {
 } from "../app/practice-live/live-config.ts";
 import {
   getLiveOpeningCue,
+  getLiveOpeningGreeting,
   getLiveScenario,
 } from "../app/practice-live/live-scenarios.ts";
 
@@ -43,14 +45,64 @@ test("locks each Live prompt and reviewed family opener to one relationship", ()
   assert.match(respectful, /meeru\/mee/);
   assert.match(respectful, /new person of the learner's own age/);
   assert.match(respectful, /Session length: 120 seconds/);
-  assert.match(
-    getLiveOpeningCue(familyScenario, "close"),
-    /have-you-eaten__primary/,
+  assert.match(close, /have-you-eaten__primary/);
+  assert.match(respectful, /have-you-eaten__alt_0/);
+  const closeOpening = getLiveOpeningCue(familyScenario, "close");
+  const respectfulOpening = getLiveOpeningCue(
+    familyScenario,
+    "respectful",
   );
-  assert.match(
-    getLiveOpeningCue(familyScenario, "respectful"),
-    /have-you-eaten__alt_0/,
-  );
+
+  assert.match(closeOpening, /entire first turn/);
+  assert.match(closeOpening, /నమస్కారం\. ఎలా ఉన్నావు\?/);
+  assert.doesNotMatch(closeOpening, /నమస్కారం అండి/);
+  assert.match(closeOpening, /until the learner replies/);
+  assert.match(closeOpening, /mayuEnglish "Hello\. How are you\?"/);
+  assert.doesNotMatch(closeOpening, /have-you-eaten/);
+  assert.match(respectfulOpening, /నమస్కారం అండి\. ఎలా ఉన్నారు\?/);
+  assert.doesNotMatch(respectfulOpening, /have-you-eaten/);
+});
+
+test("opens every Live situation with a greeting before its scenario", () => {
+  for (const scenarioId of ["family-check-in", "at-the-table", "when-stuck"]) {
+    const scenario = getLiveScenario(scenarioId);
+    assert.ok(scenario);
+
+    for (const relationship of ["close", "respectful"]) {
+      const opening = getLiveOpeningCue(scenario, relationship);
+      const expectedGreeting = getLiveOpeningGreeting(relationship);
+
+      assert.match(opening, /no learner has spoken yet/);
+      assert.match(opening, new RegExp(expectedGreeting.telugu));
+      assert.match(opening, /Do not repeat it or call present_turn/);
+      assert.match(opening, /first microphone turn/);
+      assert.doesNotMatch(opening, /continue with this situation/);
+
+      const instruction = buildLiveSystemInstruction(scenario, {
+        relationship,
+        durationSeconds: 60,
+      });
+      assert.match(instruction, /New-session sequence/);
+      assert.match(instruction, /Treat the first microphone turn/);
+      assert.match(instruction, /wait silently for the learner's answer/);
+      assert.match(instruction, new RegExp(scenario.title));
+      assert.match(instruction, new RegExp(expectedGreeting.telugu));
+    }
+  }
+});
+
+test("ships a valid 24 kHz PCM opening for each relationship", async () => {
+  for (const relationship of ["close", "respectful"]) {
+    const greeting = getLiveOpeningGreeting(relationship);
+    const bytes = await readFile(
+      new URL(`../public${greeting.audioSrc}`, import.meta.url),
+    );
+    const durationSeconds = bytes.length / 2 / 24_000;
+
+    assert.equal(bytes.length % 2, 0);
+    assert.ok(durationSeconds >= 1);
+    assert.ok(durationSeconds <= 3);
+  }
 });
 
 test("uses the production 500 ms end-of-speech window", () => {

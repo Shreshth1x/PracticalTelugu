@@ -714,7 +714,13 @@ export default function PracticeLive() {
     "speaking",
     "muted",
   ].includes(live.phase);
-  const hasSessionLayout = isBusy || live.phase === "ended";
+  const hasInterruptedSession =
+    live.phase === "error" &&
+    (live.elapsedSeconds > 0 ||
+      live.activeTurn !== null ||
+      live.transcript.length > 0);
+  const hasConversationLayout = isBusy || hasInterruptedSession;
+  const hasSessionLayout = hasConversationLayout || live.phase === "ended";
   const canMute = ["listening", "thinking", "speaking", "muted"].includes(
     live.phase,
   );
@@ -819,7 +825,12 @@ export default function PracticeLive() {
     setIsPracticeSettingsOpen(true);
   };
 
-  const currentStatus = live.isLastExchange
+  const currentStatus = hasInterruptedSession
+    ? {
+        title: "Connection interrupted",
+        detail: "Try the same setup again, or change it before restarting.",
+      }
+    : live.isLastExchange
     ? {
         title: "Last exchange",
         detail: "Finish this short turn before the practice wraps up.",
@@ -861,7 +872,7 @@ export default function PracticeLive() {
           <span>{scenario.eyebrow}</span>
           <strong>{scenario.title}</strong>
           <p>{scenario.description}</p>
-          {isBusy ? (
+          {hasConversationLayout ? (
             <small className="live-session-lock">
               {relationshipLabel}
               {` · ${formatDuration(sessionDuration)} practice`}
@@ -1091,7 +1102,24 @@ export default function PracticeLive() {
           </div>
         ) : null}
 
-        {isBusy ? (
+        {hasInterruptedSession ? (
+          <div className="live-controls" aria-label="Interrupted practice controls">
+            <button
+              type="button"
+              className="live-control"
+              onClick={startPractice}
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              className="live-control live-control-end"
+              onClick={changePracticeSetup}
+            >
+              Change setup
+            </button>
+          </div>
+        ) : isBusy ? (
           <div className="live-controls" aria-label="Live practice controls">
             {canMute ? (
               <button
@@ -1121,7 +1149,7 @@ export default function PracticeLive() {
           </div>
         ) : null}
 
-        {isBusy ? (
+        {hasConversationLayout ? (
           <>
             <p className="sr-only" aria-live="polite" aria-atomic="true">
               {live.activeTurn

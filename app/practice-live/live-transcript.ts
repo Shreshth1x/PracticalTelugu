@@ -421,6 +421,12 @@ export function hasKnownLearnerMeaningMismatch(
 /** Rejects two provider mistakes observed in the reviewed family dialogue. */
 export function hasKnownMayuMeaningMismatch(turn: ParsedLiveCaptionTurn) {
   if (/\b(?:avunnaa|deenigaa)\b/iu.test(turn.roman)) return true;
+  if (
+    /\bbreakfast\b/iu.test(turn.english) &&
+    !/\b(?:alpahaaram|breakfast)\b/iu.test(turn.roman)
+  ) {
+    return true;
+  }
 
   return (
     /\bwhat would you like to eat\b/iu.test(turn.english) &&
@@ -553,6 +559,70 @@ export function parseLivePresentedTurnToolCall(
 
   const learner = parseLiveLearnerCaption(args);
   return learner ? { ...mayuTurn, learner } : null;
+}
+
+/**
+ * Repairs one recoverable provider slip without weakening the public caption
+ * parser: native Telugu accidentally placed in a Roman field is mechanically
+ * transliterated, while every other schema and meaning check stays strict.
+ */
+export function repairLivePresentedTurnToolCall(value: unknown) {
+  if (!value || typeof value !== "object") return null;
+  const repaired = { ...(value as Record<string, unknown>) };
+
+  for (const field of ["mayuRoman", "learnerRoman"] as const) {
+    const current = repaired[field];
+    if (typeof current !== "string" || !TELUGU_SCRIPT.test(current)) continue;
+    const roman = transliterateLiveTeluguTranscript(current);
+    if (roman) repaired[field] = roman;
+  }
+
+  const parsed = parseLivePresentedTurnToolCall(repaired);
+  if (parsed) return parsed;
+
+  // For an English learner turn, the native-script display cross-check is
+  // useful but not audible evidence. If that one internal-only field is the
+  // sole omission, preserve the safe Latin caption instead of looping the
+  // conversation. Meaning-sensitive cases such as hunger still fail closed.
+  if (
+    Object.keys(repaired).some(
+      (field) => !PRESENTED_TURN_TOOL_FIELDS.has(field),
+    ) ||
+    hasMeaningfulField(repaired, "learnerTeluguInternal")
+  ) {
+    return null;
+  }
+  const mayuTurn = parseLiveMayuTurnToolCall(repaired);
+  const learnerRoman = cleanCaptionText(repaired.learnerRoman);
+  const learnerPronunciation = cleanCaptionText(
+    repaired.learnerPronunciation,
+  );
+  const learnerEnglish = cleanCaptionText(repaired.learnerEnglish);
+  const learnerSourceLanguage = sourceLanguage(
+    repaired.learnerSourceLanguage,
+  );
+  if (
+    !mayuTurn ||
+    !learnerRoman ||
+    !learnerEnglish ||
+    learnerSourceLanguage !== "english" ||
+    /\bhungr(?:y|ier|iest)\b/iu.test(learnerEnglish)
+  ) {
+    return null;
+  }
+
+  return {
+    ...mayuTurn,
+    learner: {
+      teluguInternal: "",
+      roman: learnerRoman,
+      ...(learnerPronunciation
+        ? { pronunciation: learnerPronunciation }
+        : {}),
+      english: learnerEnglish,
+      sourceLanguage: learnerSourceLanguage,
+    },
+  };
 }
 
 /**

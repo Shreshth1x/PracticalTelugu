@@ -84,17 +84,32 @@ export function getLiveScenario(value: unknown) {
   return liveScenarios.find((scenario) => scenario.id === value);
 }
 
-export function getLiveOpeningCue(
-  scenario: LiveScenario,
+export function getLiveOpeningGreeting(
   relationship: LiveListenerRelationship,
 ) {
-  const relationshipCue = scenario.openingCues?.[relationship];
-  if (relationshipCue) return relationshipCue;
+  return relationship === "close"
+    ? {
+        telugu: "నమస్కారం. ఎలా ఉన్నావు?",
+        roman: "namaskaaram. elaa unnaavu?",
+        pronunciation: "nuh-muh-SKAA-rum. eh-LAA oon-NAA-voo?",
+        english: "Hello. How are you?",
+        audioSrc: "/audio/live/mayu-opening-close.pcm",
+      }
+    : {
+        telugu: "నమస్కారం అండి. ఎలా ఉన్నారు?",
+        roman: "namaskaaram andi. elaa unnaaru?",
+        pronunciation:
+          "nuh-muh-SKAA-rum UN-dee. eh-LAA oon-NAA-roo?",
+        english: "Hello. How are you?",
+        audioSrc: "/audio/live/mayu-opening-respectful.pcm",
+      };
+}
 
-  const registerReminder =
-    relationship === "close"
-      ? "Keep familiar nuvvu/nee forms for the whole exchange."
-      : "Keep respectful meeru/mee, -aaru, and -andi forms for the whole exchange.";
+export function getLiveOpeningCue(
+  _scenario: LiveScenario,
+  relationship: LiveListenerRelationship,
+) {
+  const greeting = getLiveOpeningGreeting(relationship);
 
-  return `${scenario.openingCue} ${registerReminder}`;
+  return `Practice context: this is not learner speech; no learner has spoken yet. The app will present Mayu's entire first turn as exactly: mayuTeluguInternal "${greeting.telugu}", mayuRoman "${greeting.roman}", mayuPronunciation "${greeting.pronunciation}", and mayuEnglish "${greeting.english}". Do not repeat it or call present_turn until the learner replies. Treat the first microphone turn as the learner's answer to that greeting and check-in.`;
 }
