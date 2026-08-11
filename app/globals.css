@@ -494,6 +494,15 @@ svg {
   row-gap: 2px;
 }
 
+.phrase-spoken-with-action {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  column-gap: 14px;
+  row-gap: 10px;
+}
+
 .phrase-roman {
   color: var(--green);
   font-weight: 800;
@@ -594,6 +603,14 @@ svg {
 
 .phrase-lesson .phrase-spoken {
   margin-top: 5px;
+}
+
+.phrase-lesson .phrase-spoken-with-action {
+  margin-top: 8px;
+}
+
+.phrase-lesson .phrase-spoken-with-action .phrase-spoken {
+  margin-top: 0;
 }
 
 .phrase-lesson .phrase-roman,
@@ -732,8 +749,8 @@ svg {
 
 .register-audio-button {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
@@ -746,6 +763,10 @@ svg {
     border-color 150ms ease,
     background 150ms ease,
     transform 150ms ease;
+}
+
+.register-audio-button:active {
+  transform: scale(0.96);
 }
 
 .register-audio-button:hover {
@@ -2492,10 +2513,7 @@ svg {
 }
 
 .lesson-word-card {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 32px;
+  display: block;
   padding: 36px;
   border: 1px solid #c6d8ca;
   border-radius: 22px;
@@ -2511,6 +2529,17 @@ svg {
 .lesson-register-alternatives {
   max-width: 520px;
   margin-top: 24px;
+}
+
+.lesson-primary-audio {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  flex: 0 0 auto;
+}
+
+.lesson-primary-audio:active {
+  transform: scale(0.96);
 }
 
 .introduce-exercise > p,
@@ -3284,8 +3313,6 @@ svg {
   }
 
   .lesson-word-card {
-    align-items: flex-start;
-    flex-direction: column;
     padding: 27px;
   }
 

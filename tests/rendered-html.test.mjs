@@ -240,12 +240,18 @@ test("keeps Practice Live Telugu in English letters with English directly undern
     liveDraftStart >= 0 && liveDraftStart < source.indexOf('className="live-follow-phrase"'),
     "the learner reply status appears on the main card before the prior prompt",
   );
-  assert.match(source, /Preparing the checked transcript…/);
-  assert.match(source, /Reply heard — preparing the checked transcript…/);
+  assert.match(source, /Reply heard; exact words are not available yet\./);
+  assert.match(source, /Reply heard — exact words are not available yet\./);
+  assert.match(source, /Automatic microphone transcript/);
+  assert.doesNotMatch(
+    source,
+    /Telugu version/,
+    "a generated Telugu translation is never presented as the learner's transcript",
+  );
   assert.match(
     source,
-    /learnerDraftText[\s\S]*\(unchecked\)/,
-    "early ASR renders as an explicitly unchecked draft",
+    /learnerDraftText[\s\S]*may be inaccurate/,
+    "early ASR renders as an explicitly automatic, fallible draft",
   );
   assert.match(
     source.slice(liveDraftStart, source.indexOf("{turn ?", liveDraftStart)),
@@ -424,7 +430,7 @@ test("keeps Live presentation fast and assessment off the conversation session",
   );
 });
 
-test("renders early ASR as an explicit unchecked draft", async () => {
+test("renders early ASR as an explicit automatic draft", async () => {
   const liveClientSource = await readFile(
     new URL("../app/practice-live/useGeminiLive.ts", import.meta.url),
     "utf8",
@@ -1129,6 +1135,18 @@ test("uses complete Telugu phrases while preserving earlier progress keys", asyn
   assert.ok(
     respectfulIndex > registerIndex,
     "respectful greeting is clearly secondary",
+  );
+
+  const primarySpokenIndex = html.indexOf("phrase-spoken-with-action");
+  const primaryListenIndex = html.indexOf("lesson-primary-audio");
+  const primaryTeluguIndex = html.indexOf(">నమస్కారం</span>");
+
+  assert.ok(
+    primarySpokenIndex >= 0 &&
+      primaryListenIndex > primarySpokenIndex &&
+      primaryTeluguIndex > primaryListenIndex &&
+      registerIndex > primaryTeluguIndex,
+    "the primary Listen action stays with the primary pronunciation before alternative forms",
   );
 });
 

@@ -123,6 +123,24 @@ export function getLiveFamilyAteFollowup(
       };
 }
 
+export function getLiveClosingFarewell(
+  relationship: LiveListenerRelationship,
+) {
+  return relationship === "close"
+    ? {
+        telugu: "సరే, మళ్లీ మాట్లాడదాం.",
+        roman: "sare, malli maatlaadadaam.",
+        pronunciation: "suh-RAY, MUL-lee maat-LAA-duh-daam.",
+        english: "Okay, let's talk again.",
+      }
+    : {
+        telugu: "సరే అండి, మళ్లీ మాట్లాడదాం.",
+        roman: "sare andi, malli maatlaadadaam.",
+        pronunciation: "suh-RAY UN-dee, MUL-lee maat-LAA-duh-daam.",
+        english: "Okay, let's talk again.",
+      };
+}
+
 export function getLiveOpeningCue(
   _scenario: LiveScenario,
   relationship: LiveListenerRelationship,

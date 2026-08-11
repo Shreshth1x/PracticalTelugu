@@ -36,6 +36,7 @@ import {
   describeLiveScoreProgress,
   isComparableLiveSession,
 } from "./live-session-comparison";
+import { describeLiveSessionCompletion } from "./live-session-completion";
 
 const LIVE_HISTORY_KEY = "practicaltelugu.live-sessions.v1";
 
@@ -72,8 +73,8 @@ const statusCopy: Record<
     detail: "Turn it back on when you’re ready to continue.",
   },
   ended: {
-    title: "Nice work",
-    detail: "A focused conversation out loud goes a long way.",
+    title: "Session complete",
+    detail: "Review what was captured from this conversation.",
   },
   setup: {
     title: "Connect Gemini Live",
@@ -201,6 +202,10 @@ function SessionResults({
     grade.overallScore,
     previousScore,
   );
+  const completionCopy = describeLiveSessionCompletion({
+    learnerTurns: session.learnerTurns,
+    grade,
+  });
   const metrics: Array<{
     id: LiveScoreMetric;
     label: string;
@@ -247,12 +252,8 @@ function SessionResults({
       <div className="live-results-hero">
         <div className="live-results-heading">
           <span>Session complete · {scenarioTitle}</span>
-          <h2 id="live-results-title">
-            {session.completionReason === "limit"
-              ? "You completed the practice."
-              : "You kept the conversation going."}
-          </h2>
-          <p>{grade.summary}</p>
+          <h2 id="live-results-title">{completionCopy.headline}</h2>
+          <p>{completionCopy.subcopy}</p>
           <dl className="live-results-facts">
             <div>
               <dt>Spoken</dt>
@@ -455,13 +456,14 @@ function CurrentTurnCard({
           aria-live="polite"
           aria-atomic="true"
         >
-          <span>Reply heard</span>
+          <span>Automatic microphone transcript</span>
           {learnerDraftText ? (
-            <p className="live-draft-text" lang="te-Latn">
-              “{learnerDraftText}” <small lang="en">(unchecked)</small>
+            <p className="live-draft-text">
+              “{learnerDraftText}”{" "}
+              <small lang="en">(may be inaccurate)</small>
             </p>
           ) : (
-            <p lang="en">Preparing the checked transcript…</p>
+            <p lang="en">Reply heard; exact words are not available yet.</p>
           )}
         </div>
       ) : null}
@@ -531,7 +533,10 @@ function ConversationTranscript({
       <div className="live-conversation-heading">
         <div>
           <h2 id="live-conversation-title">Conversation transcript</h2>
-          <p>Spoken Telugu in English letters, with English underneath.</p>
+          <p>
+            Mayu’s Telugu is translated below. Your replies use only the
+            automatic microphone transcript.
+          </p>
         </div>
         <span>
           {turns.length
@@ -559,10 +564,8 @@ function ConversationTranscript({
                     ? turn.speaker === "you" &&
                       turn.assessment?.confidence === "low"
                       ? "Not scored"
-                      : turn.speaker === "you" &&
-                          turn.sourceLanguage &&
-                          turn.sourceLanguage !== "telugu"
-                        ? "Telugu version"
+                      : turn.speaker === "you"
+                        ? "Automatic transcript"
                         : ""
                     : turn.speaker === "you"
                       ? "Reply heard"
@@ -575,19 +578,25 @@ function ConversationTranscript({
                     <p
                       className="live-transcript-roman"
                       lang={
-                        turn.assessment?.confidence === "low" ? "en" : "te-Latn"
+                        turn.assessment?.confidence === "low" ||
+                        (turn.speaker === "you" &&
+                          turn.sourceLanguage !== "telugu")
+                          ? "en"
+                          : "te-Latn"
                       }
                     >
                       {turn.roman}
                     </p>
-                    {turn.pronunciation ? (
+                    {turn.speaker === "mayu" && turn.pronunciation ? (
                       <small className="live-transcript-pronunciation">
                         ({turn.pronunciation})
                       </small>
                     ) : null}
                   </div>
                   <p className="live-transcript-english" lang="en">
-                    {turn.english}
+                    {turn.speaker === "you" && turn.roman === turn.english
+                      ? "Automatic microphone transcript; it may be inaccurate."
+                      : turn.english}
                   </p>
                 </div>
               ) : (
@@ -595,12 +604,12 @@ function ConversationTranscript({
                   <span aria-hidden="true" />
                   <div>
                     {turn.speaker === "you" && pendingDraftText ? (
-                      <p className="live-draft-text" lang="te-Latn">
+                      <p className="live-draft-text">
                         “{pendingDraftText}”{" "}
-                        <small lang="en">(unchecked)</small>
+                        <small lang="en">(automatic; may be inaccurate)</small>
                       </p>
                     ) : (
-                      <p>Reply heard — preparing the checked transcript…</p>
+                      <p>Reply heard — exact words are not available yet.</p>
                     )}
                   </div>
                 </div>

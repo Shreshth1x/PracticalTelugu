@@ -10,6 +10,7 @@ import {
   isLiveSessionDuration,
 } from "../app/practice-live/live-config.ts";
 import {
+  getLiveClosingFarewell,
   getLiveFamilyAteFollowup,
   getLiveOpeningCue,
   getLiveOpeningGreeting,
@@ -72,6 +73,18 @@ test("locks each Live prompt and reviewed family opener to one relationship", ()
     respectful,
     /entire next turn must be exactly[^\n]+ఏం తిన్నావు\?/,
   );
+  assert.deepEqual(getLiveClosingFarewell("close"), {
+    telugu: "సరే, మళ్లీ మాట్లాడదాం.",
+    roman: "sare, malli maatlaadadaam.",
+    pronunciation: "suh-RAY, MUL-lee maat-LAA-duh-daam.",
+    english: "Okay, let's talk again.",
+  });
+  assert.deepEqual(getLiveClosingFarewell("respectful"), {
+    telugu: "సరే అండి, మళ్లీ మాట్లాడదాం.",
+    roman: "sare andi, malli maatlaadadaam.",
+    pronunciation: "suh-RAY UN-dee, MUL-lee maat-LAA-duh-daam.",
+    english: "Okay, let's talk again.",
+  });
   const closeOpening = getLiveOpeningCue(familyScenario, "close");
   const respectfulOpening = getLiveOpeningCue(
     familyScenario,
@@ -108,7 +121,8 @@ test("opens every Live situation with a greeting before its scenario", () => {
         durationSeconds: 60,
       });
       assert.match(instruction, /New-session sequence/);
-      assert.match(instruction, /Treat the first microphone turn/);
+      assert.match(instruction, /Treat the first evidenced microphone turn/);
+      assert.match(instruction, /Never infer a reply from silence, noise/);
       assert.match(instruction, /wait silently for the learner's answer/);
       assert.match(instruction, new RegExp(scenario.title));
       assert.match(instruction, new RegExp(expectedGreeting.telugu));

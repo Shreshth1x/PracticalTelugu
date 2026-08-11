@@ -316,6 +316,12 @@ export function advanceLearnerTurn(
 
   if (event.type === "learner-caption") {
     let epoch = state.currentEpoch;
+    if (!epoch?.observedLearnerInput) {
+      // A dialogue-model tool claim is not proof that the microphone captured
+      // a learner reply. Without VAD or transcription evidence, accepting it
+      // would let a plausible model completion create a fabricated "You" row.
+      return { state, effects };
+    }
     if (
       epoch?.captioned &&
       !epoch.modelBoundaryAfterCaption
@@ -326,16 +332,17 @@ export function advanceLearnerTurn(
       return { state, effects };
     }
 
-    // The next blocking tool can arrive even when the provider omitted learner
-    // VAD and transcription. Model output is still the exchange boundary, so
-    // start a fresh slot once the prior response has crossed that boundary.
-    if (!epoch || epoch.captioned) {
+    // A later learner response needs its own observed VAD/transcription epoch.
+    // A tool-only caption can never manufacture that evidence.
+    if (epoch.captioned) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
     }
 
-    if (epoch.captioned) return { state, effects };
+    if (!epoch.observedLearnerInput || epoch.captioned) {
+      return { state, effects };
+    }
 
     epoch = {
       ...epoch,

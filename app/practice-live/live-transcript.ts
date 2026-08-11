@@ -15,9 +15,9 @@ export type LiveTranscriptTurn = {
   speaker: LiveTranscriptSpeaker;
   roman: string;
   /**
-   * Provider ASR shown only while this learner turn is pending. This is a
-   * disposable Latin-script draft, never the authoritative caption used for
-   * assessment, persistence, or session results.
+   * Sanitized provider ASR shown while this learner turn is pending. A final
+   * provider transcription may ground the visible learner row; a dialogue-
+   * model caption never replaces it.
    */
   provisionalRoman?: string;
   pronunciation?: string;
@@ -266,8 +266,7 @@ function selectToolFields(
 /**
  * Converts provider Telugu-script ASR into the same simple English-letter
  * spelling used throughout Practice Live. This is a mechanical script
- * conversion only; authoritative meaning and coaching still come from the
- * model's validated learner fields.
+ * conversion only; it never translates, completes, or adds learner words.
  */
 export function transliterateLiveTeluguTranscript(value: unknown) {
   if (typeof value !== "string") return "";
@@ -615,6 +614,19 @@ export function repairLivePresentedTurnToolCall(value: unknown) {
   const parsed = parseLivePresentedTurnToolCall(repaired);
   if (parsed) return parsed;
 
+  // Gemini sometimes repeats an entirely English learner transcript in the
+  // internal native-script slot. That field is neither displayed nor used as
+  // speech evidence, so treat the provider slip exactly like an omitted
+  // internal cross-check instead of rejecting an otherwise valid Mayu turn.
+  if (
+    sourceLanguage(repaired.learnerSourceLanguage) === "english" &&
+    typeof repaired.learnerTeluguInternal === "string" &&
+    repaired.learnerTeluguInternal.trim() &&
+    !TELUGU_SCRIPT.test(repaired.learnerTeluguInternal)
+  ) {
+    delete repaired.learnerTeluguInternal;
+  }
+
   // For an English learner turn, the native-script display cross-check is
   // useful but not audible evidence. If that one internal-only field is the
   // sole omission, preserve the safe Latin caption instead of looping the
@@ -868,6 +880,33 @@ export function createLiveLearnerTranscriptFallback(
   };
 }
 
+/**
+ * Builds the only learner caption that may be promoted into the visible
+ * transcript: the independent microphone transcription itself. The dialogue
+ * model's learner fields can guide its response, but they are never evidence
+ * that the learner spoke those words and must never be rendered under "You".
+ */
+export function createGroundedLiveLearnerCaption(
+  providerTranscript: unknown,
+  sourceLanguage?: LiveTranscriptSource,
+): ParsedLiveCaptionTurn | null {
+  const roman = sanitizeLiveProvisionalTranscript(providerTranscript);
+  if (!roman) return null;
+
+  const raw = typeof providerTranscript === "string" ? providerTranscript : "";
+  const inferredSourceLanguage =
+    sourceLanguage ?? (TELUGU_SCRIPT.test(raw) ? "telugu" : "english");
+
+  return {
+    teluguInternal: "",
+    roman,
+    // Keep assessment context literal too. A generated translation is not a
+    // transcript and can bias the audio assessor toward words never spoken.
+    english: roman,
+    sourceLanguage: inferredSourceLanguage,
+  };
+}
+
 export function beginPendingLearnerTurn(
   turns: LiveTranscriptTurn[],
   id: string,
@@ -895,7 +934,8 @@ export function sanitizeLiveProvisionalTranscript(value: unknown) {
 /**
  * Adds a provider ASR preview to the latest pending learner row. Telugu script
  * is mechanically transliterated; other unsafe scripts clear an older preview.
- * It never creates a second row or changes a turn to final.
+ * It never creates a second row or changes a turn to final; final promotion is
+ * handled only after an inputTranscription final event.
  */
 export function applyProvisionalLearnerTranscript(
   turns: LiveTranscriptTurn[],

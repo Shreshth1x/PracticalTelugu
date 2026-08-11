@@ -138,7 +138,7 @@ test("model-audio-before-final remains in one epoch and one count", () => {
   );
 });
 
-test("deduplicates a retried caption but accepts the next tool-only learner reply", () => {
+test("deduplicates retried captions and rejects a later tool-only learner claim", () => {
   const result = run([
     { type: "activity-start" },
     { type: "model-output" },
@@ -150,8 +150,8 @@ test("deduplicates a retried caption but accepts the next tool-only learner repl
   ]);
 
   assert.equal(result.pendingRows, 1);
-  assert.equal(result.appliedLearnerCaptions, 2);
-  assert.equal(result.countedTurns, 2);
+  assert.equal(result.appliedLearnerCaptions, 1);
+  assert.equal(result.countedTurns, 1);
   assert.equal(
     result.transitions[4].state.currentEpoch.id,
     1,
@@ -169,11 +169,12 @@ test("deduplicates a retried caption but accepts the next tool-only learner repl
   );
   assert.equal(
     result.transitions[6].effects.applyLearnerCaption,
-    true,
-    "a caption after a new post-acceptance model boundary is a genuine next tool-only reply",
+    false,
+    "a later tool claim still needs new VAD or transcription evidence",
   );
   assert.equal(result.state.currentEpoch.id, 2);
-  assert.equal(result.state.currentEpoch.captioned, true);
+  assert.equal(result.state.currentEpoch.observedLearnerInput, false);
+  assert.equal(result.state.currentEpoch.captioned, false);
 });
 
 test("requires response captions while permitting opening, replay, and closing control", () => {
@@ -201,4 +202,17 @@ test("requires response captions while permitting opening, replay, and closing c
 
   state = advanceLearnerTurn(state, { type: "learner-caption" }).state;
   assert.equal(learnerCaptionRequired(state), false);
+});
+
+test("a reply window and model claim alone are not learner-speech evidence", () => {
+  const result = run([
+    { type: "mayu-turn-presented", expectsReply: true },
+    { type: "learner-caption" },
+  ]);
+
+  assert.equal(result.pendingRows, 0);
+  assert.equal(result.appliedLearnerCaptions, 0);
+  assert.equal(result.countedTurns, 0);
+  assert.equal(result.state.currentEpoch, null);
+  assert.equal(result.state.expectsLearnerResponse, true);
 });

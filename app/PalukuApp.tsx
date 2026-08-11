@@ -256,6 +256,7 @@ function RegisterAlternatives({
           </div>
           {alternative.audioSrc ? (
             <button
+              type="button"
               className="register-audio-button"
               onClick={() =>
                 playAudioSource(
@@ -584,6 +585,7 @@ function PhraseStack({
   word,
   showPronunciation = true,
   showUsageContext,
+  spokenAction,
   size = "row",
   headingAs = "strong",
   headingId,
@@ -595,6 +597,7 @@ function PhraseStack({
   >;
   showPronunciation?: boolean;
   showUsageContext?: boolean;
+  spokenAction?: React.ReactNode;
   size?: "row" | "card" | "hero" | "lesson" | "recap" | "feedback";
   headingAs?: "h1" | "h2" | "h3" | "strong";
   headingId?: string;
@@ -614,10 +617,20 @@ function PhraseStack({
       {shouldShowUsageContext ? (
         <FormUsageContext usage={word.usage} />
       ) : null}
-      <SpokenGuide
-        word={word}
-        showPronunciation={showPronunciation}
-      />
+      {spokenAction ? (
+        <div className="phrase-spoken-with-action">
+          <SpokenGuide
+            word={word}
+            showPronunciation={showPronunciation}
+          />
+          {spokenAction}
+        </div>
+      ) : (
+        <SpokenGuide
+          word={word}
+          showPronunciation={showPronunciation}
+        />
+      )}
       <span className="phrase-telugu" lang="te">
         {word.telugu}
       </span>
@@ -657,6 +670,7 @@ function AudioButton({
 
   return (
     <button
+      type="button"
       className={`audio-button ${className}`.trim()}
       onClick={() => playWordAudio(word, notify)}
       aria-label={
@@ -2179,6 +2193,13 @@ function LessonView({
                   word={step.word}
                   showPronunciation={preferences.showPronunciation}
                   size="lesson"
+                  spokenAction={
+                    <AudioButton
+                      word={step.word}
+                      notify={notify}
+                      className="lesson-primary-audio"
+                    />
+                  }
                 />
                 <RegisterAlternatives
                   alternatives={step.word.alternatives}
@@ -2187,7 +2208,6 @@ function LessonView({
                   className="lesson-register-alternatives"
                 />
               </div>
-              <AudioButton word={step.word} notify={notify} />
             </div>
             <p>Say it once as if you needed the phrase right now.</p>
           </section>

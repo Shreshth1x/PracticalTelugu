@@ -353,7 +353,11 @@ test("configures Telugu Live audio with one provider-safe presentation tool", ()
     "en-US",
   ]);
   assert.equal(config.outputAudioTranscription, undefined);
-  assert.ok(config.inputAudioTranscription?.customVocabulary?.includes("తిన్నారా?"));
+  assert.equal(
+    config.inputAudioTranscription?.customVocabulary,
+    undefined,
+    "learner ASR is not biased toward a reviewed course phrase",
+  );
   assert.equal(vad?.startOfSpeechSensitivity, "START_SENSITIVITY_HIGH");
   assert.equal(vad?.endOfSpeechSensitivity, "END_SENSITIVITY_HIGH");
   assert.equal(vad?.prefixPaddingMs, 100);
@@ -469,6 +473,18 @@ test("keeps Mayu Telugu-only while captioning flexible learner replies", () => {
   assert.match(
     instruction,
     /Every present_turn call includes learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage/,
+  );
+  assert.match(
+    instruction,
+    /app's independent microphone transcription is the only learner text shown on screen/,
+  );
+  assert.match(
+    instruction,
+    /For English input, learnerRoman and learnerEnglish both preserve the actual English words/,
+  );
+  assert.doesNotMatch(
+    instruction,
+    /translate it into a short natural Telugu display/i,
   );
   assert.match(instruction, /Include learnerPronunciation only when useful/);
   assert.match(instruction, /claim phoneme-level certainty/);

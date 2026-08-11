@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { applyLiveConversationPolicy } from "../app/practice-live/live-conversation-policy.ts";
-import { getLiveFamilyAteFollowup } from "../app/practice-live/live-scenarios.ts";
+import {
+  getLiveClosingFarewell,
+  getLiveFamilyAteFollowup,
+} from "../app/practice-live/live-scenarios.ts";
 
 const stockQuestion = {
   teluguInternal: "బాగున్నారా?",
@@ -86,4 +89,44 @@ test("does not flatten distinct meal meanings into the bare-answer branch", () =
     applyLiveConversationPolicy(otherScenario),
     otherScenario.turn,
   );
+});
+
+test("uses the microphone transcript instead of a conflicting model learner claim", () => {
+  const unsupportedModelClaim = applyLiveConversationPolicy({
+    ...policyTurn(learner("I ate.")),
+    groundedLearnerTranscript: "I ate dosa.",
+  });
+  assert.deepEqual(unsupportedModelClaim.mayu, stockQuestion);
+
+  const groundedBareReply = applyLiveConversationPolicy({
+    ...policyTurn(learner("I ate dosa.")),
+    groundedLearnerTranscript: "I ate.",
+  });
+  assert.equal(
+    groundedBareReply.mayu.english,
+    getLiveFamilyAteFollowup("respectful").english,
+  );
+});
+
+test("locks a closing control turn to a deterministic non-question farewell", () => {
+  for (const relationship of ["close", "respectful"]) {
+    const input = policyTurn(learner("I ate."));
+    const result = applyLiveConversationPolicy({
+      ...input,
+      relationship,
+      isControlTurn: true,
+    });
+    const farewell = getLiveClosingFarewell(relationship);
+
+    assert.deepEqual(result.mayu, {
+      teluguInternal: farewell.telugu,
+      roman: farewell.roman,
+      pronunciation: farewell.pronunciation,
+      english: farewell.english,
+      sourceLanguage: "telugu",
+    });
+    assert.equal(result.learner, input.turn.learner);
+    assert.doesNotMatch(result.mayu.roman, /\?/);
+    assert.doesNotMatch(result.mayu.english, /\?/);
+  }
 });

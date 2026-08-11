@@ -278,8 +278,8 @@ test("keeps checked captions independent and finalizes only the latest presentat
   );
   assert.match(
     hookSource,
-    /Mayu spoke without an accepted present_turn call[\s\S]*applyLearnerTurnEvent\(\{\s*type: "mayu-turn-presented",\s*expectsReply: !learnerTurnStateRef\.current\.controlTurnPending/,
-    "the uncaptioned-audio fallback still opens the learner reply window",
+    /Mayu spoke without an accepted present_turn call[\s\S]*const isControlTurn =\s*learnerTurnStateRef\.current\.controlTurnPending;[\s\S]*applyLearnerTurnEvent\(\{\s*type: "mayu-turn-presented",\s*expectsReply: !isControlTurn/,
+    "the uncaptioned-audio fallback preserves the ordinary or closing reply contract",
   );
   assert.match(
     hookSource,
@@ -322,13 +322,18 @@ test("keeps checked captions independent and finalizes only the latest presentat
   );
   assert.match(
     hookSource,
-    /transcriptRef\.current = next;/,
-    "provider ASR stays private until a checked learner caption arrives",
+    /createGroundedLiveLearnerCaption\(/,
+    "visible learner rows are created from microphone transcription evidence",
   );
   assert.doesNotMatch(
     hookSource,
-    /validLearnerCaption \?\? transcriptFallback/,
-    "an unstable provider transcript cannot become the active caption",
+    /roman:\s*pending\.learnerCaption\.roman|english:\s*pending\.learnerCaption\.english/,
+    "model-authored learner words can never become the visible transcript",
+  );
+  assert.match(
+    hookSource,
+    /!learnerEpoch\?\.observedLearnerInput \|\| !pendingLearnerTurn/,
+    "a reply expectation without observed microphone input cannot create a learner row",
   );
   assert.match(
     hookSource,

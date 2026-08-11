@@ -1,5 +1,6 @@
 import type { LiveListenerRelationship } from "./live-config.ts";
 import {
+  getLiveClosingFarewell,
   getLiveFamilyAteFollowup,
   type LiveScenarioId,
 } from "./live-scenarios.ts";
@@ -12,6 +13,8 @@ type LiveConversationPolicyInput = {
   scenarioId: LiveScenarioId;
   relationship: LiveListenerRelationship;
   turn: ParsedLivePresentedTurnToolCall;
+  groundedLearnerTranscript?: string;
+  isControlTurn?: boolean;
 };
 
 /**
@@ -22,12 +25,30 @@ export function applyLiveConversationPolicy({
   scenarioId,
   relationship,
   turn,
+  groundedLearnerTranscript,
+  isControlTurn = false,
 }: LiveConversationPolicyInput): ParsedLivePresentedTurnToolCall {
+  if (isControlTurn && !turn.replay) {
+    const farewell = getLiveClosingFarewell(relationship);
+
+    return {
+      ...turn,
+      mayu: {
+        teluguInternal: farewell.telugu,
+        roman: farewell.roman,
+        pronunciation: farewell.pronunciation,
+        english: farewell.english,
+        sourceLanguage: "telugu",
+      },
+    };
+  }
+
   if (
     scenarioId !== "family-check-in" ||
     turn.replay ||
-    !turn.learner ||
-    !isPlainAteReply(turn.learner)
+    !isPlainAteReply({
+      english: groundedLearnerTranscript ?? turn.learner?.english ?? "",
+    })
   ) {
     return turn;
   }

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyLiveLearnerAssessment,
+  createGroundedLiveLearnerCaption,
   createLiveLearnerTranscriptFallback,
   createUnscoredLiveLearnerCaption,
   finalizeLiveTranscriptForEnd,
@@ -107,6 +108,35 @@ test("treats the required all-null learner contract as an opening turn", () => {
   assert.equal(parsed?.learner, null);
 });
 
+test("grounds visible learner words in microphone transcription, never the model claim", () => {
+  const claimedCaption = parseLiveLearnerCaption({
+    learnerTeluguInternal: "బాగానే ఉన్నాను, మరి మీరు?",
+    learnerRoman: "baagaane unnaanu, mari meeru?",
+    learnerPronunciation: "baa-GAA-nay oo-NAA-noo",
+    learnerEnglish: "I'm doing well, and you?",
+    learnerSourceLanguage: "english",
+  });
+
+  assert.ok(claimedCaption);
+  assert.deepEqual(
+    createGroundedLiveLearnerCaption(
+      "I only said hello",
+      claimedCaption.sourceLanguage,
+    ),
+    {
+      teluguInternal: "",
+      roman: "I only said hello",
+      english: "I only said hello",
+      sourceLanguage: "english",
+    },
+  );
+  assert.equal(createGroundedLiveLearnerCaption("", "english"), null);
+  assert.equal(
+    createGroundedLiveLearnerCaption("నేను తిన్నాను")?.roman,
+    "neenu tinnaanu",
+  );
+});
+
 test("repairs Telugu script accidentally placed in Roman tool fields", () => {
   const providerSlip = {
     ...completePresentedTurnCall,
@@ -139,6 +169,22 @@ test("recovers a non-sensitive English caption missing only its internal script"
     }),
     null,
   );
+});
+
+test("ignores English repeated in the internal Telugu learner field", () => {
+  const providerSlip = {
+    ...completePresentedTurnCall,
+    learnerTeluguInternal: "I am well.",
+    learnerSourceLanguage: "english",
+    learnerRoman: "I am well.",
+    learnerEnglish: "I am well.",
+  };
+
+  assert.equal(parseLivePresentedTurnToolCall(providerSlip), null);
+  const repaired = repairLivePresentedTurnToolCall(providerSlip);
+  assert.equal(repaired?.learner?.teluguInternal, "");
+  assert.equal(repaired?.learner?.roman, "I am well.");
+  assert.equal(repaired?.learner?.english, "I am well.");
 });
 
 test("keeps split caption and assessment validation independent", () => {

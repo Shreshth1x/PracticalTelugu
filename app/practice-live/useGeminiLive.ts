@@ -9,7 +9,6 @@ import type {
 import { FunctionResponseScheduling } from "@google/genai";
 import {
   findLivePhraseCue,
-  resolveLivePhraseCue,
   type LivePhraseCue,
 } from "./live-follow-along";
 import {
@@ -52,6 +51,10 @@ import {
   gradeLiveSession,
   type LiveSessionGrade,
 } from "./live-session-grading";
+import {
+  canSendClosingControlNow,
+  shouldCompleteClosingPlayback,
+} from "./live-closing-completion";
 import { isCalibratedLiveLearnerAssessment } from "./live-assessment";
 import {
   appendLiveAssessmentAudio,
@@ -66,6 +69,7 @@ import {
   applyLiveLearnerAssessment,
   applyProvisionalLearnerTranscript,
   beginPendingLearnerTurn,
+  createGroundedLiveLearnerCaption,
   createUnscoredLiveLearnerCaption,
   finalizeLiveTranscriptForEnd,
   hasForbiddenAudibleEnglish,
@@ -78,6 +82,7 @@ import {
   sanitizeLiveProvisionalTranscript,
   type ParsedLiveCaptionTurn,
   type ParsedLivePresentedTurnToolCall,
+  type LiveTranscriptSource,
   type LiveTranscriptTurn,
 } from "./live-transcript";
 
@@ -140,6 +145,9 @@ const STUCK_PRESENTATION_WATCHDOG_MS = 5_000;
 const INITIAL_PLAYBACK_LEAD_SECONDS = 0.12;
 const CHUNK_PLAYBACK_LEAD_SECONDS = 0.025;
 const PLAYBACK_DRAIN_GRACE_MS = 250;
+// A validated farewell normally completes as soon as its audio and acoustic
+// tail drain. Keep one bounded escape hatch if Gemini omits a final boundary.
+const CLOSING_PLAYBACK_GRACE_MS = 10_000;
 const LIVE_RECONNECT_TIMEOUT_MS = 10_000;
 // Browser track settings only confirm that AEC was requested; they do not
 // prove that speaker playback is absent from the captured signal. Keep the
@@ -147,7 +155,7 @@ const LIVE_RECONNECT_TIMEOUT_MS = 10_000;
 // acoustic tests justify enabling barge-in during Mayu's speech.
 const LIVE_FULL_DUPLEX_ENABLED = false;
 const CLOSING_CONTROL_TEXT =
-  "Practice control: this is the last exchange. Give one short, natural Telugu closing in the locked relationship register. Call present_turn before speaking, then wait.";
+  "Practice control: this is the last exchange. Give one short, natural Telugu closing in the locked relationship register. Call present_turn before speaking. This closes the session, so do not ask a question or invite a reply.";
 
 type CompletionReason = CompletedLiveSession["completionReason"];
 
@@ -158,7 +166,17 @@ type PendingPresentedTurn = {
   learnerCaption: ParsedLiveCaptionTurn | null;
   learnerTurnId: string;
   learnerResponseLatencyMs?: number;
+  hasLearnerReply: boolean;
   isControlTurn: boolean;
+};
+
+type PendingGroundedLearnerTurn = {
+  epochId: number;
+  learnerTurnId: string;
+  learnerResponseLatencyMs?: number;
+  sourceLanguage?: LiveTranscriptSource;
+  pcm: Int16Array | null;
+  priorMayu: Pick<LiveTranscriptTurn, "roman" | "english"> | null;
 };
 
 type LearnerAssessmentRequest = {
@@ -379,6 +397,7 @@ export function useGeminiLive(
   const mutedRef = useRef(false);
   const closingRequestedRef = useRef(false);
   const closingQueuedRef = useRef(false);
+  const closingPlaybackPendingRef = useRef(false);
   const goAwayReceivedRef = useRef(false);
   const activeRelationshipRef = useRef<LiveListenerRelationship>(relationship);
   const activeSessionLimitRef = useRef<LiveSessionDurationSeconds>(
@@ -401,6 +420,9 @@ export function useGeminiLive(
   const openingGreetingPendingRef = useRef(false);
   const pendingNativeAudioRef = useRef<string[]>([]);
   const pendingPresentedTurnRef = useRef<PendingPresentedTurn | null>(null);
+  const pendingGroundedLearnerTurnsRef = useRef(
+    new Map<number, PendingGroundedLearnerTurn>(),
+  );
   const pendingAudioWatchdogRef = useRef<number | null>(null);
   const stuckPresentationWatchdogRef = useRef<number | null>(null);
   const drainGraceTimerRef = useRef<number | null>(null);
@@ -559,6 +581,7 @@ export function useGeminiLive(
     liveConnectionRef.current = null;
     resumeHandleRef.current = null;
     openingGreetingPendingRef.current = false;
+    closingPlaybackPendingRef.current = false;
     clearPendingAudioWatchdog();
     clearStuckPresentationWatchdog();
 
@@ -742,7 +765,44 @@ export function useGeminiLive(
     [attachLearnerAssessment, scenario.id],
   );
 
+  const finalizeGroundedLearnerTurn = useCallback(
+    (epochId: number, providerTranscript: unknown) => {
+      const pending = pendingGroundedLearnerTurnsRef.current.get(epochId);
+      if (!pending) return false;
+
+      const groundedCaption = createGroundedLiveLearnerCaption(
+        providerTranscript,
+        pending.sourceLanguage,
+      );
+      if (!groundedCaption) return false;
+
+      const next = applyLiveCaptionTurn(transcriptRef.current, {
+        id: pending.learnerTurnId,
+        speaker: "you",
+        roman: groundedCaption.roman,
+        english: groundedCaption.english,
+        sourceLanguage: groundedCaption.sourceLanguage,
+        responseLatencyMs: pending.learnerResponseLatencyMs,
+      });
+      commitTranscript(next);
+      setLearnerDraft("");
+      pendingGroundedLearnerTurnsRef.current.delete(epochId);
+
+      if (pending.pcm && pending.priorMayu) {
+        requestLearnerAssessment({
+          turnId: pending.learnerTurnId,
+          pcm: pending.pcm,
+          priorMayu: pending.priorMayu,
+          checkedCaption: groundedCaption,
+        });
+      }
+      return true;
+    },
+    [commitTranscript, requestLearnerAssessment],
+  );
+
   const prepareMayuResponse = useCallback(() => {
+    closingPlaybackPendingRef.current = false;
     mayuPresentationReadyRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
@@ -769,11 +829,9 @@ export function useGeminiLive(
         value,
       );
       if (next === transcriptRef.current) return;
-      // Provider ASR has no stability/finality guarantee, so it never becomes
-      // an authoritative transcript row. It is kept privately as the
-      // end-of-session fallback, and the sanitized text is surfaced as a
-      // lightweight draft state so the learner immediately sees what was
-      // heard, clearly marked unchecked, until the checked caption arrives.
+      // Interim provider ASR is explicitly fallible and stays provisional.
+      // Only a final inputTranscription event may promote its sanitized words
+      // into the visible learner row; dialogue-model learner fields never do.
       transcriptRef.current = next;
       const pending = next.findLast(
         (turn) => turn.speaker === "you" && !turn.final,
@@ -877,6 +935,19 @@ export function useGeminiLive(
         // buffered-audio path or its watchdog finalizes and plays it.
         armStuckPresentationWatchdog();
         if (phaseRef.current === "speaking") updatePhase("thinking");
+        return;
+      }
+
+      if (
+        shouldCompleteClosingPlayback({
+          closingPlaybackPending: closingPlaybackPendingRef.current,
+          activeAudioSourceCount: activeSourcesRef.current.size,
+          mayuTurnComplete: mayuTurnCompleteRef.current,
+          hasPendingPresentation: false,
+        })
+      ) {
+        closingPlaybackPendingRef.current = false;
+        endSessionRef.current("limit");
         return;
       }
 
@@ -995,29 +1066,55 @@ export function useGeminiLive(
     const priorMayu = activeTurnRef.current;
     let assessmentRequest: LearnerAssessmentRequest | null = null;
     let next = transcriptRef.current;
-    if (!pending.parsed.replay && pending.learnerCaption) {
+    if (!pending.parsed.replay && pending.hasLearnerReply) {
       const learnerEffects = applyLearnerTurnEvent({
         type: "learner-caption",
       });
       if (learnerEffects.applyLearnerCaption) {
-        next = applyLiveCaptionTurn(next, {
-          id: pending.learnerTurnId,
-          speaker: "you",
-          roman: pending.learnerCaption.roman,
-          pronunciation: pending.learnerCaption.pronunciation,
-          english: pending.learnerCaption.english,
-          sourceLanguage: pending.learnerCaption.sourceLanguage,
-          responseLatencyMs: pending.learnerResponseLatencyMs,
-        });
-        setLearnerDraft("");
+        const epoch = learnerTurnStateRef.current.currentEpoch;
         const pcm = takeLiveAssessmentAudio(learnerAssessmentAudioRef.current);
-        if (pcm && priorMayu?.speaker === "mayu") {
-          assessmentRequest = {
-            turnId: pending.learnerTurnId,
+        const priorMayuContext = priorMayu?.speaker === "mayu"
+          ? { roman: priorMayu.roman, english: priorMayu.english }
+          : null;
+
+        if (epoch) {
+          const pendingGroundedTurn: PendingGroundedLearnerTurn = {
+            epochId: epoch.id,
+            learnerTurnId: pending.learnerTurnId,
+            learnerResponseLatencyMs: pending.learnerResponseLatencyMs,
+            sourceLanguage: pending.learnerCaption?.sourceLanguage,
             pcm,
-            priorMayu,
-            checkedCaption: pending.learnerCaption,
+            priorMayu: priorMayuContext,
           };
+          pendingGroundedLearnerTurnsRef.current.set(
+            epoch.id,
+            pendingGroundedTurn,
+          );
+
+          const groundedCaption = createGroundedLiveLearnerCaption(
+            epoch.finalText,
+            pendingGroundedTurn.sourceLanguage,
+          );
+          if (groundedCaption) {
+            next = applyLiveCaptionTurn(next, {
+              id: pending.learnerTurnId,
+              speaker: "you",
+              roman: groundedCaption.roman,
+              english: groundedCaption.english,
+              sourceLanguage: groundedCaption.sourceLanguage,
+              responseLatencyMs: pending.learnerResponseLatencyMs,
+            });
+            setLearnerDraft("");
+            pendingGroundedLearnerTurnsRef.current.delete(epoch.id);
+            if (pcm && priorMayuContext) {
+              assessmentRequest = {
+                turnId: pending.learnerTurnId,
+                pcm,
+                priorMayu: priorMayuContext,
+                checkedCaption: groundedCaption,
+              };
+            }
+          }
         }
       }
     }
@@ -1026,6 +1123,10 @@ export function useGeminiLive(
     learnerReplyWindowOpenedAtRef.current = null;
     mayuAudioEndedAtRef.current = null;
     mayuTurnCompleteRef.current = false;
+
+    if (!pending.parsed.replay && pending.isControlTurn) {
+      closingPlaybackPendingRef.current = true;
+    }
 
     const mayuTurn: LiveTranscriptTurn = {
       id: pending.toolCallId,
@@ -1109,9 +1210,12 @@ export function useGeminiLive(
         commitTranscript(
           applyLiveCaptionTurn(transcriptRef.current, fallbackTurn),
         );
+        const isControlTurn =
+          learnerTurnStateRef.current.controlTurnPending;
+        if (isControlTurn) closingPlaybackPendingRef.current = true;
         applyLearnerTurnEvent({
           type: "mayu-turn-presented",
-          expectsReply: !learnerTurnStateRef.current.controlTurnPending,
+          expectsReply: !isControlTurn,
         });
         activateTurn(fallbackTurn);
         mayuPresentationReadyRef.current = true;
@@ -1268,18 +1372,12 @@ export function useGeminiLive(
             repairLivePresentedTurnToolCall(call.args);
           if (!parsed) {
             return rejectToolCall(
-              "Provide every complete Mayu caption field and only present_turn fields. Use cueId, never sourceCueId or reviewedCueId, and use a lowercase learnerSourceLanguage. Include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage on every call: fill all four after learner input, or set all four to null for a control turn. For English input, learnerRoman must be a natural Telugu display in Latin letters, not copied English. Keep Telugu script out of learner-facing fields.",
+              "Provide every complete Mayu caption field and only present_turn fields. Use cueId, never sourceCueId or reviewedCueId, and use a lowercase learnerSourceLanguage. Include learnerTeluguInternal, learnerRoman, learnerEnglish, and learnerSourceLanguage on every call. Preserve English learner speech literally instead of translating it into Telugu, and set learnerTeluguInternal to null for entirely English speech. If learner words are unclear or this is a control turn, set all four learner fields to null. Keep Telugu script out of learner-facing fields.",
             );
           }
 
-          // High-confidence conversational transitions are normalized before
-          // acceptance so the caption and blocking audio continuation receive
-          // the same direct relationship-aware turn.
-          parsed = applyLiveConversationPolicy({
-            scenarioId: scenario.id,
-            relationship: activeRelationshipRef.current,
-            turn: parsed,
-          });
+          const isControlTurn =
+            learnerTurnStateRef.current.controlTurnPending;
           const isOpeningPresentation =
             transcriptRef.current.length === 0 &&
             !mayuPresentationReadyRef.current &&
@@ -1302,6 +1400,20 @@ export function useGeminiLive(
             learnerTurnStateRef.current,
             parsed.replay,
           );
+          const learnerEpoch = learnerTurnStateRef.current.currentEpoch;
+          const pendingLearnerTurn = [...transcriptRef.current]
+            .reverse()
+            .find((turn) => turn.speaker === "you" && !turn.final);
+          if (
+            needsLearnerCaption &&
+            (!learnerEpoch?.observedLearnerInput || !pendingLearnerTurn)
+          ) {
+            return rejectToolCall(
+              "No microphone evidence supports a learner reply yet. Do not infer an answer from silence, noise, or the expected conversation. Wait for real learner speech before responding.",
+              FunctionResponseScheduling.INTERRUPT,
+              true,
+            );
+          }
           if (!needsLearnerCaption && parsed.learner) {
             return rejectToolCall(
               "No learner reply exists for this turn. Remove every learner field, keep Mayu in her role, and continue from the already accepted opening.",
@@ -1309,6 +1421,30 @@ export function useGeminiLive(
               true,
             );
           }
+
+          const parsedLearnerCaption = parsed.learner;
+          const learnerCaption =
+            needsLearnerCaption &&
+            parsedLearnerCaption &&
+            !hasKnownLearnerMeaningMismatch(parsedLearnerCaption)
+              ? parsedLearnerCaption
+              : null;
+          parsed = {
+            ...parsed,
+            learner: learnerCaption,
+          };
+
+          // Deterministic conversation branches may use only the independent
+          // microphone transcript. A model-authored learner meaning can never
+          // decide what the learner said or what appears in the transcript.
+          parsed = applyLiveConversationPolicy({
+            scenarioId: scenario.id,
+            relationship: activeRelationshipRef.current,
+            turn: parsed,
+            groundedLearnerTranscript:
+              learnerEpoch?.finalText ?? pendingLearnerTurn?.provisionalRoman,
+            isControlTurn,
+          });
 
           if (hasForbiddenAudibleEnglish(parsed.mayu)) {
             return rejectToolCall(
@@ -1364,48 +1500,17 @@ export function useGeminiLive(
               ? claimedCue
               : null;
 
-          const parsedLearnerCaption = parsed.learner;
-          const reviewedLearnerCue = parsedLearnerCaption
-            ? resolveLivePhraseCue(
-                parsedLearnerCaption.teluguInternal ||
-                  parsedLearnerCaption.roman,
-                scenario.words,
-              )
-            : null;
-          const validLearnerCaption =
-            parsedLearnerCaption &&
-            !hasKnownLearnerMeaningMismatch(parsedLearnerCaption)
-              ? {
-                  ...parsedLearnerCaption,
-                  pronunciation:
-                    parsedLearnerCaption.pronunciation ??
-                    reviewedLearnerCue?.pronunciation,
-                }
-              : null;
-          if (needsLearnerCaption && !validLearnerCaption) {
-            return rejectToolCall(
-              "This turn follows a learner reply. Include the complete safe learner caption and source fields, matching only what the learner actually said, then call present_turn again before speaking.",
-            );
-          }
-          const learnerCaption = needsLearnerCaption
-            ? validLearnerCaption
-            : null;
-
           const toolCallId =
             call.id ??
             `tool-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const isControlTurn = learnerTurnStateRef.current.controlTurnPending;
           const learnerResponseLatencyMs =
             pendingLearnerResponseLatencyMsRef.current ?? undefined;
-          const learnerTurnId = [...transcriptRef.current]
-            .reverse()
-            .find((turn) => turn.speaker === "you" && !turn.final)?.id ??
-            `${toolCallId}-learner`;
+          const learnerTurnId =
+            pendingLearnerTurn?.id ?? `${toolCallId}-learner`;
 
-          // Keep the validated presentation private until its first audio
-          // chunk, then atomically expose its caption and release audio so the
-          // UI never pairs speech with stale text. The function response marks
-          // this as the same accepted turn before audio is released.
+          // Keep Mayu's validated presentation private until its first audio
+          // chunk. Learner words remain separate and can be promoted only by
+          // independent microphone transcription evidence.
           pendingPresentedTurnRef.current = {
             toolCallId,
             parsed,
@@ -1413,6 +1518,7 @@ export function useGeminiLive(
             learnerCaption,
             learnerTurnId,
             learnerResponseLatencyMs,
+            hasLearnerReply: needsLearnerCaption,
             isControlTurn,
           };
 
@@ -1504,10 +1610,15 @@ export function useGeminiLive(
           });
           // The learner-turn state accumulates final segments; render the
           // whole utterance so earlier segments are not overwritten.
-          applyLearnerTranscriptDraft(
-            learnerTurnStateRef.current.currentEpoch?.finalText ??
-              finalInput.text,
-          );
+          const finalEpoch = learnerTurnStateRef.current.currentEpoch;
+          const groundedTranscript = finalEpoch?.finalText ?? finalInput.text;
+          applyLearnerTranscriptDraft(groundedTranscript);
+          if (finalEpoch) {
+            finalizeGroundedLearnerTurn(
+              finalEpoch.id,
+              groundedTranscript,
+            );
+          }
           updatePhase("thinking");
         } else {
           applyLearnerTurnEvent({ type: "interim-transcription" });
@@ -1568,6 +1679,7 @@ export function useGeminiLive(
       clearDrainGraceTimer,
       clearStuckPresentationWatchdog,
       commitTranscript,
+      finalizeGroundedLearnerTurn,
       finalizePendingPresentation,
       getOutputCaptureGuard,
       markLearnerResponseStarted,
@@ -1945,6 +2057,7 @@ export function useGeminiLive(
     openingGreetingPendingRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
+    pendingGroundedLearnerTurnsRef.current.clear();
     outputTranscriptionTextRef.current = "";
     resumeHandleRef.current = null;
     resumeAttemptedRef.current = false;
@@ -1969,6 +2082,7 @@ export function useGeminiLive(
     setIsMuted(false);
     closingRequestedRef.current = false;
     closingQueuedRef.current = false;
+    closingPlaybackPendingRef.current = false;
     goAwayReceivedRef.current = false;
     latestUsageMetadataRef.current = undefined;
     learnerTurnFinishedAtRef.current = null;
@@ -2230,9 +2344,17 @@ export function useGeminiLive(
           isSessionPhase(phaseRef.current)
         ) {
           closingRequestedRef.current = true;
+          const learnerEpoch = learnerTurnStateRef.current.currentEpoch;
+          const hasLearnerReplyInFlight = Boolean(
+            learnerEpoch?.activityActive ||
+              (learnerEpoch?.observedLearnerInput &&
+                !learnerEpoch.captioned),
+          );
           if (
-            phaseRef.current === "listening" ||
-            phaseRef.current === "muted"
+            canSendClosingControlNow({
+              phase: phaseRef.current,
+              hasLearnerReplyInFlight,
+            })
           ) {
             applyLearnerTurnEvent({ type: "control-turn-requested" });
             prepareMayuResponse();
@@ -2247,13 +2369,23 @@ export function useGeminiLive(
           }
         }
 
-        if (now >= deadline) endSessionRef.current("limit");
+        const closingTurnInFlight =
+          closingRequestedRef.current ||
+          closingPlaybackPendingRef.current ||
+          Boolean(pendingPresentedTurnRef.current?.isControlTurn);
+        if (
+          now >= deadline &&
+          (!closingTurnInFlight ||
+            now >= deadline + CLOSING_PLAYBACK_GRACE_MS)
+        ) {
+          endSessionRef.current("limit");
+        }
       };
 
       deadlineCheckRef.current = updateDeadline;
       timerRef.current = window.setInterval(updateDeadline, 250);
       deadlineTimerRef.current = window.setTimeout(
-        () => endSessionRef.current("limit"),
+        () => deadlineCheckRef.current(),
         Math.max(0, sessionDeadline - Date.now()),
       );
       updateDeadline();
@@ -2419,6 +2551,7 @@ export function useGeminiLive(
     setIsMuted(false);
     closingRequestedRef.current = false;
     closingQueuedRef.current = false;
+    closingPlaybackPendingRef.current = false;
     goAwayReceivedRef.current = false;
     latestUsageMetadataRef.current = undefined;
     learnerTurnFinishedAtRef.current = null;
@@ -2436,6 +2569,7 @@ export function useGeminiLive(
     mayuPresentationReadyRef.current = false;
     pendingNativeAudioRef.current = [];
     pendingPresentedTurnRef.current = null;
+    pendingGroundedLearnerTurnsRef.current.clear();
     outputTranscriptionTextRef.current = "";
     resumeHandleRef.current = null;
     resumeAttemptedRef.current = false;

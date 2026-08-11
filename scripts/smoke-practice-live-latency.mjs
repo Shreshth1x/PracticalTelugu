@@ -116,17 +116,38 @@ async function inspectOpeningAudio(greeting) {
   };
 }
 
-function validateGeneratedTurn(parsed, relationship, turnNumber) {
-  if (!parsed?.learner) {
-    return "The generated turn did not caption the learner's reply.";
+function validateGeneratedTurn(parsed, relationship, turnNumber, rawArgs) {
+  if (!parsed) {
+    return "The generated turn did not satisfy the presentation contract.";
   }
-  if (parsed.learner.sourceLanguage !== "english") {
-    return "The learner source language was not preserved as English.";
+  const expectedLearnerWords = turnNumber === 1 ? "i am well" : "i ate";
+  const normalizeLearnerWords = (value) =>
+    String(value ?? "")
+      .normalize("NFKC")
+      .toLocaleLowerCase("en-US")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+
+  const learnerRoman = rawArgs?.learnerRoman;
+  const learnerEnglish = rawArgs?.learnerEnglish;
+  const hasLearnerContext =
+    normalizeLearnerWords(learnerRoman) ||
+    normalizeLearnerWords(learnerEnglish);
+  if (hasLearnerContext) {
+    if (rawArgs?.learnerSourceLanguage !== "english") {
+      return "The learner source language was not preserved as English.";
+    }
+    if (
+      normalizeLearnerWords(learnerRoman) !== expectedLearnerWords ||
+      normalizeLearnerWords(learnerEnglish) !== expectedLearnerWords
+    ) {
+      return `The model changed the learner's literal English words instead of preserving "${expectedLearnerWords}."`;
+    }
   }
   if (hasForbiddenAudibleEnglish(parsed.mayu)) {
     return "Mayu's generated turn contains audible English.";
   }
-  if (hasKnownLearnerMeaningMismatch(parsed.learner)) {
+  if (parsed.learner && hasKnownLearnerMeaningMismatch(parsed.learner)) {
     return "The learner caption has a known meaning mismatch.";
   }
   if (hasKnownMayuMeaningMismatch(parsed.mayu)) {
@@ -549,6 +570,7 @@ async function runSmoke(relationship, durationSeconds) {
               parsed,
               relationship,
               activeTurnNumber,
+              call.args,
             );
             if (validationError) {
               rejectedToolCalls.push({
@@ -571,7 +593,7 @@ async function runSmoke(relationship, durationSeconds) {
                     scheduling: FunctionResponseScheduling.INTERRUPT,
                     response: {
                       error:
-                        `${validationError} This turn follows learner input. Include the complete learner caption and source fields, use only Latin letters in every Roman, pronunciation, and English field, use native Telugu script only in the two TeluguInternal fields, and use learnerSourceLanguage "english". Tinnaavaa or tinnaaraa means did you eat or have you eaten, not breakfast. Then call present_turn again before speaking.`,
+                        `${validationError} This turn follows learner input. Learner context is optional; either leave every learner field null or preserve the learner's exact English words without translating, completing, or inferring them. Use only Latin letters in every Roman, pronunciation, and English field, and native Telugu script only in mayuTeluguInternal. Tinnaavaa or tinnaaraa means did you eat or have you eaten, not breakfast. Then call present_turn again before speaking.`,
                     },
                   },
                 ],
