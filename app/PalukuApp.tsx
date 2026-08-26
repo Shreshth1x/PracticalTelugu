@@ -779,9 +779,11 @@ function AppShell({
 function TodayView({
   state,
   notify,
+  showPronunciation,
 }: {
   state: SavedState;
   notify: (message: string) => void;
+  showPronunciation: boolean;
 }) {
   const path = resolvePracticePath(practicePacks, state.confidence);
   const activePack = practicePacks[path.packIndex];
@@ -858,7 +860,11 @@ function TodayView({
         <section className="home-guide" aria-labelledby="home-guide-title">
           <div className="home-guide-copy">
             <h2 id="home-guide-title">{guideTitle}</h2>
-            <PhraseStack word={nextWord} size="card" />
+            <PhraseStack
+              word={nextWord}
+              showPronunciation={showPronunciation}
+              size="card"
+            />
             <div className="home-guide-actions">
               <Link
                 href="/words/daily"
@@ -2590,7 +2596,11 @@ export default function PalukuApp({
     );
   } else {
     content = (
-      <TodayView state={state} notify={notify} />
+      <TodayView
+        state={state}
+        notify={notify}
+        showPronunciation={preferences.showPronunciation}
+      />
     );
   }
 

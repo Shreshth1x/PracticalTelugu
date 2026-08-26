@@ -18,10 +18,12 @@ import {
 } from "../app/practice-live/live-config.ts";
 import { findLivePhraseCue } from "../app/practice-live/live-follow-along.ts";
 import { applyLiveConversationPolicy } from "../app/practice-live/live-conversation-policy.ts";
+import { isLiveServerGenerationFinished } from "../app/practice-live/live-closing-completion.ts";
 import {
   applyOutputTranscriptionUpdate,
   isOutputTranscriptionReady,
 } from "./live-output-transcription.mjs";
+import { canAcceptLiveSmokeCompletion } from "./live-smoke-response-order.mjs";
 import {
   getLiveFamilyAteFollowup,
   getLiveOpeningGreeting,
@@ -90,6 +92,7 @@ const PRE_LEARNER_SILENCE_WINDOW_MS = 1_200;
 const POST_TURN_STABILITY_WINDOW_MS = 300;
 const RESPONSE_TIMEOUT_MS = 20_000;
 const OUTPUT_TRANSCRIPTION_SETTLE_MS = 1_000;
+const STALLED_RESPONSE_GRACE_MS = 5_000;
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -232,8 +235,18 @@ async function runSmoke(relationship, durationSeconds) {
   let secondOutputTranscriptionSettled = false;
   let firstOutputTranscriptionTimer;
   let secondOutputTranscriptionTimer;
+  let firstStalledResponseTimer;
+  let secondStalledResponseTimer;
   let serverTurnCompleteAt = 0;
   let secondServerTurnCompleteAt = 0;
+  let firstResponseCompleteAt = 0;
+  let secondResponseCompleteAt = 0;
+  let firstGenerationCompleteAt = 0;
+  let secondGenerationCompleteAt = 0;
+  let firstWaitingForInputAt = 0;
+  let secondWaitingForInputAt = 0;
+  let firstResponseRecovered = false;
+  let secondResponseRecovered = false;
   let acceptedTurn = null;
   let secondAcceptedTurn = null;
   let acceptedToolCallId = null;
@@ -284,10 +297,20 @@ async function runSmoke(relationship, durationSeconds) {
             secondAudiblePcmPeak,
             serverTurnComplete: Boolean(serverTurnCompleteAt),
             secondServerTurnComplete: Boolean(secondServerTurnCompleteAt),
+            firstGenerationComplete: Boolean(firstGenerationCompleteAt),
+            secondGenerationComplete: Boolean(secondGenerationCompleteAt),
+            firstWaitingForInput: Boolean(firstWaitingForInputAt),
+            secondWaitingForInput: Boolean(secondWaitingForInputAt),
             firstOutputTranscriptionFinished,
             secondOutputTranscriptionFinished,
+            firstOutputTranscriptionReceived: Boolean(outputTranscription),
+            secondOutputTranscriptionReceived: Boolean(
+              secondOutputTranscription,
+            ),
             firstOutputTranscriptionSettled,
             secondOutputTranscriptionSettled,
+            firstResponseRecovered,
+            secondResponseRecovered,
           },
         )}`,
       ),
@@ -302,7 +325,7 @@ async function runSmoke(relationship, durationSeconds) {
           finished: firstOutputTranscriptionFinished,
         },
         {
-          turnComplete: Boolean(serverTurnCompleteAt),
+          responseComplete: Boolean(firstResponseCompleteAt),
           settleElapsed: firstOutputTranscriptionSettled,
         },
       );
@@ -338,7 +361,7 @@ async function runSmoke(relationship, durationSeconds) {
         finished: secondOutputTranscriptionFinished,
       },
       {
-        turnComplete: Boolean(secondServerTurnCompleteAt),
+        responseComplete: Boolean(secondResponseCompleteAt),
         settleElapsed: secondOutputTranscriptionSettled,
       },
     );
@@ -379,10 +402,10 @@ async function runSmoke(relationship, durationSeconds) {
     const finished = isFirstTurn
       ? firstOutputTranscriptionFinished
       : secondOutputTranscriptionFinished;
-    const turnComplete = isFirstTurn
-      ? Boolean(serverTurnCompleteAt)
-      : Boolean(secondServerTurnCompleteAt);
-    if (!text || !turnComplete) return;
+    const responseComplete = isFirstTurn
+      ? Boolean(firstResponseCompleteAt)
+      : Boolean(secondResponseCompleteAt);
+    if (!text || !responseComplete) return;
 
     const currentTimer = isFirstTurn
       ? firstOutputTranscriptionTimer
@@ -411,6 +434,42 @@ async function runSmoke(relationship, durationSeconds) {
       firstOutputTranscriptionTimer = timer;
     } else {
       secondOutputTranscriptionTimer = timer;
+    }
+  };
+
+  const armStalledResponseRecovery = () => {
+    const isFirstTurn = activeTurnNumber === 1;
+    const currentTimer = isFirstTurn
+      ? firstStalledResponseTimer
+      : secondStalledResponseTimer;
+    clearTimeout(currentTimer);
+
+    const timer = setTimeout(() => {
+      const accepted = isFirstTurn ? acceptedTurn : secondAcceptedTurn;
+      const audibleBytes = isFirstTurn
+        ? audiblePcmBytes
+        : secondAudiblePcmBytes;
+      const audiblePeak = isFirstTurn ? audiblePcmPeak : secondAudiblePcmPeak;
+      const responseComplete = isFirstTurn
+        ? firstResponseCompleteAt
+        : secondResponseCompleteAt;
+      if (!accepted || !audibleBytes || !audiblePeak || responseComplete) return;
+
+      if (isFirstTurn) {
+        firstResponseCompleteAt = performance.now();
+        firstResponseRecovered = true;
+      } else {
+        secondResponseCompleteAt = performance.now();
+        secondResponseRecovered = true;
+      }
+      armOutputTranscriptionSettle();
+      resolveCompletedTurn();
+    }, STALLED_RESPONSE_GRACE_MS);
+
+    if (isFirstTurn) {
+      firstStalledResponseTimer = timer;
+    } else {
+      secondStalledResponseTimer = timer;
     }
   };
 
@@ -463,37 +522,7 @@ async function runSmoke(relationship, durationSeconds) {
           const modelParts = content?.modelTurn?.parts ?? [];
           const outputTranscriptionUpdate = content?.outputTranscription;
           const spokenTranscription = outputTranscriptionUpdate?.text;
-          if (outputTranscriptionUpdate) {
-            if (activeTurnNumber === 1) {
-              if (spokenTranscription) {
-                firstOutputTranscriptionAt ||= performance.now();
-              }
-              const updated = applyOutputTranscriptionUpdate(
-                {
-                  text: outputTranscription,
-                  finished: firstOutputTranscriptionFinished,
-                },
-                outputTranscriptionUpdate,
-              );
-              outputTranscription = updated.text;
-              firstOutputTranscriptionFinished = updated.finished;
-              firstOutputTranscriptionSettled = false;
-            } else {
-              if (spokenTranscription) {
-                secondOutputTranscriptionAt ||= performance.now();
-              }
-              const updated = applyOutputTranscriptionUpdate(
-                {
-                  text: secondOutputTranscription,
-                  finished: secondOutputTranscriptionFinished,
-                },
-                outputTranscriptionUpdate,
-              );
-              secondOutputTranscription = updated.text;
-              secondOutputTranscriptionFinished = updated.finished;
-              secondOutputTranscriptionSettled = false;
-            }
-          }
+          let acceptedPresentationThisMessage = false;
           const hasPrematureModelTurn = Boolean(
             modelParts.length ||
               content?.outputTranscription?.text ||
@@ -634,6 +663,7 @@ async function runSmoke(relationship, durationSeconds) {
               secondAcceptedToolCallId = call.id ?? null;
               secondToolResponseSentAt = performance.now();
             }
+            acceptedPresentationThisMessage = true;
             session?.sendToolResponse({
               functionResponses: [
                 {
@@ -662,6 +692,43 @@ async function runSmoke(relationship, durationSeconds) {
             return;
           }
 
+          // The blocking tool-call message belongs to the pre-continuation
+          // generation. Any response boundary on that same message cannot
+          // prove that the accepted spoken continuation completed.
+          if (acceptedPresentationThisMessage && content) return;
+
+          if (outputTranscriptionUpdate) {
+            if (activeTurnNumber === 1) {
+              if (spokenTranscription) {
+                firstOutputTranscriptionAt ||= performance.now();
+              }
+              const updated = applyOutputTranscriptionUpdate(
+                {
+                  text: outputTranscription,
+                  finished: firstOutputTranscriptionFinished,
+                },
+                outputTranscriptionUpdate,
+              );
+              outputTranscription = updated.text;
+              firstOutputTranscriptionFinished = updated.finished;
+              firstOutputTranscriptionSettled = false;
+            } else {
+              if (spokenTranscription) {
+                secondOutputTranscriptionAt ||= performance.now();
+              }
+              const updated = applyOutputTranscriptionUpdate(
+                {
+                  text: secondOutputTranscription,
+                  finished: secondOutputTranscriptionFinished,
+                },
+                outputTranscriptionUpdate,
+              );
+              secondOutputTranscription = updated.text;
+              secondOutputTranscriptionFinished = updated.finished;
+              secondOutputTranscriptionSettled = false;
+            }
+          }
+
           for (const part of modelParts) {
             const pcm = inspectInlinePcm(part);
             if (!pcm || pcm.peak === 0) continue;
@@ -679,16 +746,64 @@ async function runSmoke(relationship, durationSeconds) {
                 pcm.peak,
               );
             }
+            armStalledResponseRecovery();
           }
 
-          if (content?.turnComplete) {
+          const canAcceptCompletion = canAcceptLiveSmokeCompletion({
+            hasAcceptedTurn:
+              activeTurnNumber === 1
+                ? Boolean(acceptedTurn)
+                : Boolean(secondAcceptedTurn),
+            audiblePcmBytes:
+              activeTurnNumber === 1
+                ? audiblePcmBytes
+                : secondAudiblePcmBytes,
+            audiblePcmPeak:
+              activeTurnNumber === 1
+                ? audiblePcmPeak
+                : secondAudiblePcmPeak,
+          });
+
+          if (content?.turnComplete && canAcceptCompletion) {
             if (activeTurnNumber === 1) {
               serverTurnCompleteAt ||= performance.now();
             } else {
               secondServerTurnCompleteAt ||= performance.now();
             }
           }
-          if (outputTranscriptionUpdate || content?.turnComplete) {
+          if (content?.generationComplete && canAcceptCompletion) {
+            if (activeTurnNumber === 1) {
+              firstGenerationCompleteAt ||= performance.now();
+            } else {
+              secondGenerationCompleteAt ||= performance.now();
+            }
+          }
+          if (content?.waitingForInput && canAcceptCompletion) {
+            if (activeTurnNumber === 1) {
+              firstWaitingForInputAt ||= performance.now();
+            } else {
+              secondWaitingForInputAt ||= performance.now();
+            }
+          }
+          if (
+            content &&
+            canAcceptCompletion &&
+            isLiveServerGenerationFinished(content)
+          ) {
+            if (activeTurnNumber === 1) {
+              firstResponseCompleteAt ||= performance.now();
+              clearTimeout(firstStalledResponseTimer);
+            } else {
+              secondResponseCompleteAt ||= performance.now();
+              clearTimeout(secondStalledResponseTimer);
+            }
+          }
+          if (
+            outputTranscriptionUpdate ||
+            (content &&
+              canAcceptCompletion &&
+              isLiveServerGenerationFinished(content))
+          ) {
             armOutputTranscriptionSettle();
           }
           resolveCompletedTurn();
@@ -718,6 +833,10 @@ async function runSmoke(relationship, durationSeconds) {
                     secondServerTurnComplete: Boolean(
                       secondServerTurnCompleteAt,
                     ),
+                    firstGenerationComplete: Boolean(firstGenerationCompleteAt),
+                    secondGenerationComplete: Boolean(secondGenerationCompleteAt),
+                    firstWaitingForInput: Boolean(firstWaitingForInputAt),
+                    secondWaitingForInput: Boolean(secondWaitingForInputAt),
                     rejectedToolCalls: rejectedToolCalls.length,
                   },
                 )}`,
@@ -771,10 +890,13 @@ async function runSmoke(relationship, durationSeconds) {
       firstOutputTranscriptionMs: Math.round(
         firstOutputTranscriptionAt - learnerSentAt,
       ),
-      serverTurnCompleteMs: Math.round(
-        serverTurnCompleteAt - learnerSentAt,
+      serverTurnCompleteMs: serverTurnCompleteAt
+        ? Math.round(serverTurnCompleteAt - learnerSentAt)
+        : null,
+      firstResponseCompleteMs: Math.round(
+        firstResponseCompleteAt - learnerSentAt,
       ),
-      continuationMs: Math.round(serverTurnCompleteAt - toolResponseSentAt),
+      continuationMs: Math.round(firstResponseCompleteAt - toolResponseSentAt),
       acceptedToolCallId,
       secondGeneratedTurnMs: Math.round(
         secondGeneratedTurnAt - secondLearnerSentAt,
@@ -785,11 +907,14 @@ async function runSmoke(relationship, durationSeconds) {
       secondOutputTranscriptionMs: Math.round(
         secondOutputTranscriptionAt - secondLearnerSentAt,
       ),
-      secondServerTurnCompleteMs: Math.round(
-        secondServerTurnCompleteAt - secondLearnerSentAt,
+      secondServerTurnCompleteMs: secondServerTurnCompleteAt
+        ? Math.round(secondServerTurnCompleteAt - secondLearnerSentAt)
+        : null,
+      secondResponseCompleteMs: Math.round(
+        secondResponseCompleteAt - secondLearnerSentAt,
       ),
       secondContinuationMs: Math.round(
-        secondServerTurnCompleteAt - secondToolResponseSentAt,
+        secondResponseCompleteAt - secondToolResponseSentAt,
       ),
       secondAcceptedToolCallId,
       presentationBehavior: "BLOCKING",
@@ -807,16 +932,24 @@ async function runSmoke(relationship, durationSeconds) {
       outputTranscription,
       firstOutputTranscriptionFinished,
       firstOutputTranscriptionSettled,
+      firstGenerationComplete: Boolean(firstGenerationCompleteAt),
+      firstWaitingForInput: Boolean(firstWaitingForInputAt),
+      firstResponseRecovered,
       secondGeneratedTurn: secondParsed,
       secondOutputTranscription,
       secondOutputTranscriptionFinished,
       secondOutputTranscriptionSettled,
+      secondGenerationComplete: Boolean(secondGenerationCompleteAt),
+      secondWaitingForInput: Boolean(secondWaitingForInputAt),
+      secondResponseRecovered,
       rejectedToolCalls,
     };
   } finally {
     clearTimeout(timeout);
     clearTimeout(firstOutputTranscriptionTimer);
     clearTimeout(secondOutputTranscriptionTimer);
+    clearTimeout(firstStalledResponseTimer);
+    clearTimeout(secondStalledResponseTimer);
     expectedClose = true;
     session?.close();
   }
@@ -850,7 +983,9 @@ for (const combination of combinations) {
     } catch (error) {
       const transient =
         error instanceof Error &&
-        /(?:1011|temporarily unavailable|internal error)/iu.test(error.message);
+        /(?:1011|temporarily unavailable|internal error|did not finish two audible presented turns without closing)/iu.test(
+          error.message,
+        );
       if (!transient || attempts >= 2) throw error;
     }
   }

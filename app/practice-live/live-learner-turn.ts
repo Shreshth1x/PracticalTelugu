@@ -22,6 +22,7 @@ export type LearnerTurnState = {
   nextEpochId: number;
   currentEpoch: LearnerTurnEpoch | null;
   expectsLearnerResponse: boolean;
+  learnerReplyWindowOpen: boolean;
   controlTurnPending: boolean;
 };
 
@@ -34,6 +35,7 @@ export type LearnerTurnEvent =
   | { type: "model-output" }
   | { type: "model-turn-complete" }
   | { type: "mayu-turn-presented"; expectsReply: boolean }
+  | { type: "learner-reply-window-opened" }
   | { type: "control-turn-requested" };
 
 export type LearnerTurnEffects = {
@@ -60,6 +62,7 @@ export function createLearnerTurnState(): LearnerTurnState {
     nextEpochId: 1,
     currentEpoch: null,
     expectsLearnerResponse: false,
+    learnerReplyWindowOpen: false,
     controlTurnPending: false,
   };
 }
@@ -127,7 +130,10 @@ function beginObservedEpoch(
   };
 
   return {
-    state: setEpoch(state, nextEpoch),
+    state: setEpoch(
+      { ...state, learnerReplyWindowOpen: false },
+      nextEpoch,
+    ),
     epoch: nextEpoch,
     shouldBeginPending,
   };
@@ -145,19 +151,14 @@ function shouldStartDefiniteActivityEpoch(epoch: LearnerTurnEpoch | null) {
   );
 }
 
-function shouldStartTranscriptionFallbackEpoch(
+function shouldStartReplyWindowEpoch(
+  state: LearnerTurnState,
   epoch: LearnerTurnEpoch | null,
 ) {
-  if (!epoch) return true;
-
-  // Do not let an interim transcription that arrives after an early learner
-  // tool call reopen the settled epoch. Once its final transcription arrives,
-  // a later model-complete interim can safely begin the next fallback epoch.
-  return (
-    epoch.captioned &&
-    epoch.finalText !== null &&
-    epoch.modelTurnComplete
-  );
+  // Mayu's playback and acoustic tail have fully settled. The first observed
+  // learner signal after this explicit boundary belongs to the next reply,
+  // even when Gemini omitted both response audio and model completion events.
+  return Boolean(state.learnerReplyWindowOpen && epoch?.captioned);
 }
 
 function markCounted(
@@ -212,7 +213,11 @@ export function advanceLearnerTurn(
 
   if (event.type === "control-turn-requested") {
     return {
-      state: { ...state, controlTurnPending: true },
+      state: {
+        ...state,
+        learnerReplyWindowOpen: false,
+        controlTurnPending: true,
+      },
       effects,
     };
   }
@@ -222,7 +227,18 @@ export function advanceLearnerTurn(
       state: {
         ...state,
         expectsLearnerResponse: event.expectsReply,
+        learnerReplyWindowOpen: false,
         controlTurnPending: false,
+      },
+      effects,
+    };
+  }
+
+  if (event.type === "learner-reply-window-opened") {
+    return {
+      state: {
+        ...state,
+        learnerReplyWindowOpen: state.expectsLearnerResponse,
       },
       effects,
     };
@@ -230,7 +246,10 @@ export function advanceLearnerTurn(
 
   if (event.type === "activity-start") {
     let epoch = state.currentEpoch;
-    if (shouldStartDefiniteActivityEpoch(epoch)) {
+    if (
+      shouldStartReplyWindowEpoch(state, epoch) ||
+      shouldStartDefiniteActivityEpoch(epoch)
+    ) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
@@ -248,7 +267,13 @@ export function advanceLearnerTurn(
 
   if (event.type === "activity-end") {
     let epoch = state.currentEpoch;
-    if (!epoch) {
+    // Some SDK/provider paths omit activity-start. Once Mayu has audibly
+    // opened the next reply window, a lone activity-end still begins that
+    // learner's epoch instead of mutating the previous captioned response.
+    if (
+      !epoch ||
+      shouldStartReplyWindowEpoch(state, epoch)
+    ) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
@@ -266,7 +291,10 @@ export function advanceLearnerTurn(
 
   if (event.type === "interim-transcription") {
     let epoch = state.currentEpoch;
-    if (shouldStartTranscriptionFallbackEpoch(epoch)) {
+    if (
+      !epoch ||
+      shouldStartReplyWindowEpoch(state, epoch)
+    ) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
@@ -286,15 +314,21 @@ export function advanceLearnerTurn(
     if (!text) return { state, effects };
 
     let epoch = state.currentEpoch;
-    if (!epoch || shouldStartTranscriptionFallbackEpoch(epoch)) {
+    if (
+      !epoch ||
+      shouldStartReplyWindowEpoch(state, epoch)
+    ) {
       const created = createEpoch(state);
       state = created.state;
       epoch = created.epoch;
     }
 
     // Gemini Live emits final transcription as incremental segments. Segments
-    // accumulate within one learner epoch so a multi-part utterance keeps all
-    // of its words; a settled epoch above starts the next utterance fresh.
+    // can arrive after model output or its completion boundary, so they always
+    // accumulate within the current VAD-scoped epoch. A definite activity-start
+    // or an opened next-reply window starts the next utterance. An interim
+    // extension alone is not a boundary because transcription ordering is
+    // independent from model completion.
     const accumulatedText =
       epoch.finalText === null ? text : `${epoch.finalText} ${text}`;
 

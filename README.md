@@ -90,10 +90,12 @@ variable with `NEXT_PUBLIC_`: the permanent key is read only by the server-side
 token route. The browser receives a short-lived credential for each
 conversation instead.
 
-Practice Live speaks with Gemini's prebuilt Aoede voice. The conversation is
-full duplex: microphone audio keeps streaming while Mayu speaks, so the
-learner can interrupt naturally and Gemini's server-side voice activity
-detection handles the barge-in.
+Practice Live speaks with Gemini's prebuilt Aoede voice. The production
+conversation is deliberately half duplex: microphone capture stays open, but
+uploads pause while Mayu is audible and through a short acoustic tail so her
+speaker output cannot be mistaken for the learner. Browser echo cancellation
+is still requested, but interruption during Mayu's speech remains disabled
+until real device-route testing proves it is safe.
 
 Before starting, the learner chooses the listener relationship and a fixed
 one- or two-minute session. Respectful Telugu is the safe default for an elder

@@ -244,6 +244,11 @@ test("wires the output guard into every local voice path and microphone upload",
     hookSource,
     /session\.sendRealtimeInput\(\{ audioStreamEnd: true \}\);/,
   );
+  assert.match(
+    hookSource,
+    /learnerReplyWindowOpenedAtRef\.current =\s*mayuAudioEndedAtRef\.current \?\? performance\.now\(\);[\s\S]*applyLearnerTurnEvent\(\{ type: "learner-reply-window-opened" \}\);/,
+    "final-only ASR can begin a new epoch only after Mayu opens the next acoustic reply window",
+  );
   assert.doesNotMatch(
     hookSource,
     /fishSpeech|bufferFallback|playFish/,

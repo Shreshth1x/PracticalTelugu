@@ -110,9 +110,9 @@ test("treats the required all-null learner contract as an opening turn", () => {
 
 test("grounds visible learner words in microphone transcription, never the model claim", () => {
   const claimedCaption = parseLiveLearnerCaption({
-    learnerTeluguInternal: "బాగానే ఉన్నాను, మరి మీరు?",
-    learnerRoman: "baagaane unnaanu, mari meeru?",
-    learnerPronunciation: "baa-GAA-nay oo-NAA-noo",
+    learnerTeluguInternal: null,
+    learnerRoman: "I'm doing well, and you?",
+    learnerPronunciation: "I'm doing well, and you?",
     learnerEnglish: "I'm doing well, and you?",
     learnerSourceLanguage: "english",
   });
@@ -150,25 +150,24 @@ test("repairs Telugu script accidentally placed in Roman tool fields", () => {
   assert.equal(repaired?.learner?.roman, "tinnaanu.");
 });
 
-test("recovers a non-sensitive English caption missing only its internal script", () => {
+test("accepts literal English captions without an internal Telugu translation", () => {
   const providerSlip = { ...completePresentedTurnCall };
   delete providerSlip.learnerTeluguInternal;
   providerSlip.learnerSourceLanguage = "english";
-  providerSlip.learnerRoman = "baagaane unnaanu";
+  providerSlip.learnerRoman = "I am well.";
   providerSlip.learnerEnglish = "I am well.";
 
-  assert.equal(parseLivePresentedTurnToolCall(providerSlip), null);
-  const repaired = repairLivePresentedTurnToolCall(providerSlip);
-  assert.equal(repaired?.learner?.teluguInternal, "");
-  assert.equal(repaired?.learner?.roman, "baagaane unnaanu");
+  const parsed = parseLivePresentedTurnToolCall(providerSlip);
+  assert.equal(parsed?.learner?.teluguInternal, "");
+  assert.equal(parsed?.learner?.roman, "I am well.");
 
-  assert.equal(
-    repairLivePresentedTurnToolCall({
-      ...providerSlip,
-      learnerEnglish: "I am still hungry.",
-    }),
-    null,
-  );
+  const hungry = parseLivePresentedTurnToolCall({
+    ...providerSlip,
+    learnerRoman: "I am still hungry.",
+    learnerEnglish: "I am still hungry.",
+  });
+  assert.equal(hungry?.learner?.roman, "I am still hungry.");
+  assert.equal(hungry?.learner?.english, "I am still hungry.");
 });
 
 test("ignores English repeated in the internal Telugu learner field", () => {

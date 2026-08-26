@@ -13,14 +13,14 @@ test("waits for both the completed turn and the final transcription", () => {
 
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: false,
+      responseComplete: false,
       settleElapsed: false,
     }),
     false,
   );
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: true,
+      responseComplete: true,
       settleElapsed: false,
     }),
     false,
@@ -33,7 +33,7 @@ test("waits for both the completed turn and the final transcription", () => {
   assert.equal(state.text, "ఏం తిన్నారు?");
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: true,
+      responseComplete: true,
       settleElapsed: false,
     }),
     true,
@@ -49,14 +49,14 @@ test("uses a bounded post-turn settle when Gemini omits finished", () => {
   assert.equal(state.finished, false);
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: true,
+      responseComplete: true,
       settleElapsed: false,
     }),
     false,
   );
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: true,
+      responseComplete: true,
       settleElapsed: true,
     }),
     true,
@@ -71,7 +71,7 @@ test("a finished transcription still waits for the audio turn boundary", () => {
 
   assert.equal(
     isOutputTranscriptionReady(state, {
-      turnComplete: false,
+      responseComplete: false,
       settleElapsed: true,
     }),
     false,

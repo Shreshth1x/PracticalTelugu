@@ -403,6 +403,24 @@ const PLAIN_ATE_ENGLISH_REPLIES = new Set([
   "yes i have eaten",
   "yes i have already eaten",
 ]);
+const PLAIN_ATE_TELUGU_REPLIES = new Set([
+  "తిన్నాను",
+  "నేను తిన్నాను",
+  "అవును తిన్నాను",
+  "అవును నేను తిన్నాను",
+  "tinnaanu",
+  "tinnanu",
+  "nenu tinnaanu",
+  "nenu tinnanu",
+  "neenu tinnaanu",
+  "neenu tinnanu",
+  "avunu tinnaanu",
+  "avunu tinnanu",
+  "avunu nenu tinnaanu",
+  "avunu nenu tinnanu",
+  "avunu neenu tinnaanu",
+  "avunu neenu tinnanu",
+]);
 
 /**
  * Identifies only a bare completed-meal answer. Naming a food, saying the
@@ -413,7 +431,10 @@ export function isPlainAteReply(
   turn: Pick<ParsedLiveCaptionTurn, "english">,
 ) {
   const english = normalizeReviewedCaption(turn.english);
-  return PLAIN_ATE_ENGLISH_REPLIES.has(english);
+  return (
+    PLAIN_ATE_ENGLISH_REPLIES.has(english) ||
+    PLAIN_ATE_TELUGU_REPLIES.has(english)
+  );
 }
 
 /** Confirms that Gemini's audio transcript is the accepted Telugu turn. */
@@ -547,18 +568,21 @@ export function parseLiveLearnerCaption(
     args.learnerTeluguInternal,
   );
   const learnerSourceLanguage = sourceLanguage(args.learnerSourceLanguage);
+  const isEnglishOnly = learnerSourceLanguage === "english";
 
   if (
-    !learnerTeluguInternal ||
     !learnerRoman ||
     !learnerEnglish ||
-    !learnerSourceLanguage
+    !learnerSourceLanguage ||
+    (isEnglishOnly
+      ? hasMeaningfulField(args, "learnerTeluguInternal")
+      : !learnerTeluguInternal)
   ) {
     return null;
   }
 
   return {
-    teluguInternal: learnerTeluguInternal,
+    teluguInternal: isEnglishOnly ? "" : learnerTeluguInternal,
     roman: learnerRoman,
     ...(learnerPronunciation
       ? { pronunciation: learnerPronunciation }
@@ -627,10 +651,9 @@ export function repairLivePresentedTurnToolCall(value: unknown) {
     delete repaired.learnerTeluguInternal;
   }
 
-  // For an English learner turn, the native-script display cross-check is
-  // useful but not audible evidence. If that one internal-only field is the
-  // sole omission, preserve the safe Latin caption instead of looping the
-  // conversation. Meaning-sensitive cases such as hunger still fail closed.
+  // For an English learner turn, the native-script display cross-check is not
+  // audible evidence. If that one internal-only field is omitted, preserve the
+  // literal Latin caption instead of looping the conversation.
   if (
     Object.keys(repaired).some(
       (field) => !PRESENTED_TURN_TOOL_FIELDS.has(field),
@@ -652,8 +675,7 @@ export function repairLivePresentedTurnToolCall(value: unknown) {
     !mayuTurn ||
     !learnerRoman ||
     !learnerEnglish ||
-    learnerSourceLanguage !== "english" ||
-    /\bhungr(?:y|ier|iest)\b/iu.test(learnerEnglish)
+    learnerSourceLanguage !== "english"
   ) {
     return null;
   }

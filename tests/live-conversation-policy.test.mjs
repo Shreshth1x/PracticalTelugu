@@ -106,6 +106,39 @@ test("uses the microphone transcript instead of a conflicting model learner clai
     groundedBareReply.mayu.english,
     getLiveFamilyAteFollowup("respectful").english,
   );
+
+  for (const groundedLearnerTranscript of [
+    "తిన్నాను.",
+    "నేను తిన్నాను.",
+    "tinnaanu.",
+    "avunu, neenu tinnanu.",
+  ]) {
+    const groundedTeluguReply = applyLiveConversationPolicy({
+      ...policyTurn(learner("The model guessed something else.")),
+      groundedLearnerTranscript,
+    });
+    assert.equal(
+      groundedTeluguReply.mayu.english,
+      getLiveFamilyAteFollowup("respectful").english,
+      groundedLearnerTranscript,
+    );
+  }
+
+  for (const groundedLearnerTranscript of [
+    "తిన్నాను దోస.",
+    "tinnaanu dosa.",
+    "తినలేదు.",
+  ]) {
+    const input = {
+      ...policyTurn(learner("I ate.")),
+      groundedLearnerTranscript,
+    };
+    assert.equal(
+      applyLiveConversationPolicy(input),
+      input.turn,
+      groundedLearnerTranscript,
+    );
+  }
 });
 
 test("locks a closing control turn to a deterministic non-question farewell", () => {

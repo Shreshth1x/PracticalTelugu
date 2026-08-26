@@ -1585,6 +1585,14 @@ test("keeps prior progress while enforcing the practical Telugu product contract
   );
   assert.match(
     app,
+    /function TodayView\([\s\S]*showPronunciation:\s*boolean;[\s\S]*word=\{nextWord\}[\s\S]*showPronunciation=\{showPronunciation\}/,
+  );
+  assert.match(
+    app,
+    /<TodayView[\s\S]*showPronunciation=\{preferences\.showPronunciation\}/,
+  );
+  assert.match(
+    app,
     /\$\{word\.telugu\} \$\{word\.roman\} \$\{word\.pronunciation\} \$\{word\.english\}/,
   );
   assert.match(

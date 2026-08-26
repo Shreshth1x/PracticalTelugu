@@ -14,9 +14,9 @@ export function applyOutputTranscriptionUpdate(state, update) {
 
 export function isOutputTranscriptionReady(
   state,
-  { turnComplete, settleElapsed },
+  { responseComplete, settleElapsed },
 ) {
   return Boolean(
-    state.text && turnComplete && (state.finished || settleElapsed),
+    state.text && responseComplete && (state.finished || settleElapsed),
   );
 }

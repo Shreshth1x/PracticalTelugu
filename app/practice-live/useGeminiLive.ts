@@ -53,6 +53,7 @@ import {
 } from "./live-session-grading";
 import {
   canSendClosingControlNow,
+  isLiveServerTurnComplete,
   shouldCompleteClosingPlayback,
 } from "./live-closing-completion";
 import { isCalibratedLiveLearnerAssessment } from "./live-assessment";
@@ -875,7 +876,8 @@ export function useGeminiLive(
     resetLiveAssessmentAudioCapture(learnerAssessmentAudioRef.current);
     learnerReplyWindowOpenedAtRef.current =
       mayuAudioEndedAtRef.current ?? performance.now();
-  }, []);
+    applyLearnerTurnEvent({ type: "learner-reply-window-opened" });
+  }, [applyLearnerTurnEvent]);
 
   const markLearnerResponseStarted = useCallback(() => {
     if (
@@ -925,6 +927,12 @@ export function useGeminiLive(
       if (!mountedRef.current || activeSourcesRef.current.size) return;
 
       if (!mayuTurnCompleteRef.current) {
+        // Gemini may omit or significantly delay its realtime-playback
+        // turnComplete marker after all audio has drained. The acoustic tail
+        // has already elapsed, so open learner timing and assessment capture
+        // while giving late chunks a bounded window before local recovery.
+        openLearnerReplyWindow();
+        armStuckPresentationWatchdog();
         if (phaseRef.current === "speaking") updatePhase("thinking");
         return;
       }
@@ -1547,6 +1555,11 @@ export function useGeminiLive(
           pendingPresentedTurnRef.current
         ) {
           finalizePendingPresentation();
+        } else if (pendingPresentedTurnRef.current) {
+          // A valid blocking tool call can occasionally receive no continuation
+          // audio at all. Start the same bounded recovery used by the other
+          // provider-ordering stalls so the session cannot wait forever.
+          armStuckPresentationWatchdog();
         }
       }
 
@@ -1661,7 +1674,7 @@ export function useGeminiLive(
         }
       }
 
-      if (content.turnComplete || content.waitingForInput) {
+      if (isLiveServerTurnComplete(content)) {
         mayuTurnCompleteRef.current = true;
         applyLearnerTurnEvent({ type: "model-turn-complete" });
         clearStuckPresentationWatchdog();
@@ -1676,6 +1689,7 @@ export function useGeminiLive(
       applyLearnerTurnEvent,
       applyLearnerTranscriptDraft,
       armPendingAudioWatchdog,
+      armStuckPresentationWatchdog,
       clearDrainGraceTimer,
       clearStuckPresentationWatchdog,
       commitTranscript,

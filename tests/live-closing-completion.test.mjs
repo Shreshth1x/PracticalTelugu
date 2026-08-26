@@ -5,6 +5,8 @@ import test from "node:test";
 import { buildLiveSystemInstruction } from "../app/practice-live/live-config.ts";
 import {
   canSendClosingControlNow,
+  isLiveServerGenerationFinished,
+  isLiveServerTurnComplete,
   shouldCompleteClosingPlayback,
 } from "../app/practice-live/live-closing-completion.ts";
 import { getLiveScenario } from "../app/practice-live/live-scenarios.ts";
@@ -15,6 +17,23 @@ const drainedClosing = {
   mayuTurnComplete: true,
   hasPendingPresentation: false,
 };
+
+test("keeps generation completion distinct from the realtime turn boundary", () => {
+  assert.equal(isLiveServerGenerationFinished({ generationComplete: true }), true);
+  assert.equal(isLiveServerTurnComplete({ generationComplete: true }), false);
+  assert.equal(isLiveServerTurnComplete({ turnComplete: true }), true);
+  assert.equal(isLiveServerTurnComplete({ waitingForInput: true }), true);
+  assert.equal(isLiveServerGenerationFinished({ turnComplete: true }), true);
+  assert.equal(isLiveServerGenerationFinished({ waitingForInput: true }), true);
+  assert.equal(
+    isLiveServerTurnComplete({
+      generationComplete: false,
+      turnComplete: false,
+      waitingForInput: false,
+    }),
+    false,
+  );
+});
 
 test("completes only a fully drained closing presentation", () => {
   const cases = [
@@ -119,7 +138,7 @@ test("wires the trusted closing marker through playback drain and deadline grace
     "shouldCompleteClosingPlayback({",
   );
   const endAt = settleSource.indexOf('endSessionRef.current("limit")');
-  const replyWindowAt = settleSource.indexOf("openLearnerReplyWindow()");
+  const replyWindowAt = settleSource.lastIndexOf("openLearnerReplyWindow()");
   assert.ok(predicateAt >= 0, "playback settlement checks closing state");
   assert.ok(endAt > predicateAt, "a drained closing completes the session");
   assert.ok(
@@ -161,5 +180,20 @@ test("wires the trusted closing marker through playback drain and deadline grace
     hookSource,
     /deadlineTimerRef\.current = window\.setTimeout\(\s*\(\) => deadlineCheckRef\.current\(\)/,
     "the one-shot deadline uses the same drain-aware completion check",
+  );
+  assert.match(
+    hookSource,
+    /if \(!mayuTurnCompleteRef\.current\) \{[\s\S]*openLearnerReplyWindow\(\);[\s\S]*armStuckPresentationWatchdog\(\);/,
+    "a missing provider completion marker opens scored learner input before bounded recovery",
+  );
+  assert.match(
+    hookSource,
+    /if \(isLiveServerTurnComplete\(content\)\)/,
+    "only the realtime-playback boundary settles a model turn immediately",
+  );
+  assert.match(
+    hookSource,
+    /else if \(pendingPresentedTurnRef\.current\) \{[\s\S]*armStuckPresentationWatchdog\(\);/,
+    "an accepted blocking presentation with no continuation audio has bounded recovery",
   );
 });

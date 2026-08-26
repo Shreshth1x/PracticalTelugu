@@ -5,6 +5,36 @@ export type LiveClosingPlaybackState = {
   hasPendingPresentation: boolean;
 };
 
+export type LiveServerTurnState = {
+  generationComplete?: boolean;
+  turnComplete?: boolean;
+  waitingForInput?: boolean;
+};
+
+/**
+ * Gemini's generationComplete marker is earlier than its realtime-playback
+ * turn boundary. It is sufficient for server-side smoke validation, but the
+ * browser still waits for the later boundary or its bounded local fallback.
+ */
+export function isLiveServerGenerationFinished({
+  generationComplete,
+  turnComplete,
+  waitingForInput,
+}: LiveServerTurnState) {
+  return (
+    generationComplete === true ||
+    turnComplete === true ||
+    waitingForInput === true
+  );
+}
+
+export function isLiveServerTurnComplete({
+  turnComplete,
+  waitingForInput,
+}: LiveServerTurnState) {
+  return turnComplete === true || waitingForInput === true;
+}
+
 export function canSendClosingControlNow({
   phase,
   hasLearnerReplyInFlight,

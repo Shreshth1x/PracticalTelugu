@@ -97,6 +97,87 @@ test("accumulates incremental final transcription segments within one epoch", ()
   );
 });
 
+test("keeps late final segments together after the model turn completes", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "learner-caption" },
+    { type: "model-output" },
+    { type: "model-turn-complete" },
+    { type: "final-transcription", text: "naaku aakaligaa" },
+    { type: "final-transcription", text: "undi" },
+  ]);
+
+  assert.equal(result.pendingRows, 1);
+  assert.equal(result.appliedLearnerCaptions, 1);
+  assert.equal(result.countedTurns, 1);
+  assert.equal(result.state.currentEpoch.id, 1);
+  assert.equal(result.state.currentEpoch.finalText, "naaku aakaligaa undi");
+  assert.equal(
+    result.transitions[5].effects.beginPendingCaption,
+    false,
+    "an unordered ASR segment cannot manufacture a second learner row",
+  );
+});
+
+test("keeps a late interim extension in the same completed model epoch", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "learner-caption" },
+    { type: "model-output" },
+    { type: "model-turn-complete" },
+    { type: "final-transcription", text: "naaku" },
+    { type: "interim-transcription" },
+    { type: "final-transcription", text: "aakaligaa undi" },
+  ]);
+
+  assert.equal(result.pendingRows, 1);
+  assert.equal(result.appliedLearnerCaptions, 1);
+  assert.equal(result.countedTurns, 1);
+  assert.equal(result.state.currentEpoch.id, 1);
+  assert.equal(result.state.currentEpoch.finalText, "naaku aakaligaa undi");
+});
+
+test("starts a fresh epoch for a final-only reply after Mayu opens the next reply window", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "final-transcription", text: "nenu baagunnaanu" },
+    { type: "learner-caption" },
+    { type: "model-output" },
+    { type: "model-turn-complete" },
+    { type: "mayu-turn-presented", expectsReply: true },
+    { type: "learner-reply-window-opened" },
+    { type: "final-transcription", text: "tinnaanu" },
+    { type: "learner-caption" },
+  ]);
+
+  assert.equal(result.pendingRows, 2);
+  assert.equal(result.appliedLearnerCaptions, 2);
+  assert.equal(result.countedTurns, 2);
+  assert.equal(result.state.currentEpoch.id, 2);
+  assert.equal(result.state.currentEpoch.finalText, "tinnaanu");
+  assert.equal(result.state.currentEpoch.captioned, true);
+});
+
+test("starts the next reply after a caption-only Mayu recovery with no model boundary", () => {
+  const result = run([
+    { type: "activity-start" },
+    { type: "final-transcription", text: "first" },
+    { type: "learner-caption" },
+    { type: "mayu-turn-presented", expectsReply: true },
+    { type: "learner-reply-window-opened" },
+    { type: "activity-start" },
+    { type: "final-transcription", text: "second" },
+    { type: "learner-caption" },
+  ]);
+
+  assert.equal(result.pendingRows, 2);
+  assert.equal(result.appliedLearnerCaptions, 2);
+  assert.equal(result.countedTurns, 2);
+  assert.equal(result.state.currentEpoch.id, 2);
+  assert.equal(result.state.currentEpoch.finalText, "second");
+  assert.equal(result.state.currentEpoch.captioned, true);
+});
+
 test("final-before-tool fills the pending row without double-counting", () => {
   const result = run([
     { type: "activity-start" },
