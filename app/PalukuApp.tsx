@@ -58,6 +58,12 @@ type Step =
   | { type: "arrange"; word: TeluguWord; tokens: string[] };
 
 type ResultState = "idle" | "correct" | "wrong";
+type LessonStepState = {
+  result: ResultState;
+  selected: string | null;
+  matched: Set<number>;
+  arranged: number[];
+};
 type WordTab = "today" | "all" | "saved";
 type MayuVariant = "guide" | "success";
 
@@ -1424,6 +1430,29 @@ function PhrasebookView({
   );
 }
 
+function PracticeBackButton({
+  onClick,
+  disabled = false,
+  label,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="text-button practice-back"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+    >
+      <Icon name="arrow" />
+      Back
+    </button>
+  );
+}
+
 function DailySession({
   state,
   setState,
@@ -1481,6 +1510,7 @@ function DailySession({
 
   const markWord = (result: "learning" | "ready") => {
     interactedRef.current = true;
+    pauseActivePhraseAudio();
     if (current) {
       const key = phraseKey(current);
       setState((currentState) => ({
@@ -1499,7 +1529,33 @@ function DailySession({
     }));
   };
 
+  const goBack = () => {
+    if (position.wordIndex === 0 && position.packIndex === 0) return;
+
+    interactedRef.current = true;
+    pauseActivePhraseAudio();
+    setPosition((currentPosition) => {
+      if (currentPosition.wordIndex === 0 && currentPosition.packIndex === 0) {
+        return currentPosition;
+      }
+      if (currentPosition.wordIndex > 0) {
+        return { ...currentPosition, wordIndex: currentPosition.wordIndex - 1 };
+      }
+
+      const previousPackIndex = currentPosition.packIndex - 1;
+      return {
+        ...currentPosition,
+        packIndex: previousPackIndex,
+        wordIndex: practicePacks[previousPackIndex].words.length - 1,
+      };
+    });
+    setRevealed(false);
+    window.scrollTo({ top: 0 });
+  };
+
   const continuePath = () => {
+    interactedRef.current = true;
+    pauseActivePhraseAudio();
     const path = resolvePracticePath(practicePacks, state.confidence);
     const nextPackIndex = path.allComplete
       ? (position.packIndex + 1) % practicePacks.length
@@ -1587,6 +1643,7 @@ function DailySession({
             })}
           </div>
 
+          <PracticeBackButton onClick={goBack} label="Back to previous phrase" />
           <button
             className="primary-button recap-primary"
             onClick={continuePath}
@@ -1658,6 +1715,11 @@ function DailySession({
       </section>
 
       <footer className="focus-actions">
+        <PracticeBackButton
+          onClick={goBack}
+          disabled={position.wordIndex === 0 && position.packIndex === 0}
+          label="Back to previous phrase"
+        />
         {revealed ? (
           <div className="confidence-actions">
             <button
@@ -1676,7 +1738,10 @@ function DailySession({
         ) : (
           <button
             className="primary-button focus-primary"
-            onClick={() => setRevealed(true)}
+            onClick={() => {
+              interactedRef.current = true;
+              setRevealed(true);
+            }}
           >
             See when to use it
           </button>
@@ -2009,8 +2074,10 @@ function LessonView({
   const [stepIndex, setStepIndex] = useState(0);
   const [result, setResult] = useState<ResultState>("idle");
   const [selected, setSelected] = useState<string | null>(null);
-  const [correctCount, setCorrectCount] = useState(0);
-  const [gradedCount, setGradedCount] = useState(0);
+  const [stepResults, setStepResults] = useState<Record<number, boolean>>({});
+  const stepHistoryRef = useRef(new Map<number, LessonStepState>());
+  const correctCount = Object.values(stepResults).filter(Boolean).length;
+  const gradedCount = Object.keys(stepResults).length;
   const [matched, setMatched] = useState<Set<number>>(new Set());
   const [leftSelected, setLeftSelected] = useState<number | null>(null);
   const [rightSelected, setRightSelected] = useState<number | null>(null);
@@ -2038,25 +2105,49 @@ function LessonView({
     return () => playback?.audio.pause();
   }, [preferences.autoplay, step]);
 
-  const resetStepState = () => {
-    setResult("idle");
-    setSelected(null);
-    setMatched(new Set());
+  const resetStepState = (saved?: LessonStepState) => {
+    setResult(saved?.result ?? "idle");
+    setSelected(saved?.selected ?? null);
+    setMatched(new Set(saved?.matched));
     setLeftSelected(null);
     setRightSelected(null);
     setMismatch(null);
-    setArranged([]);
+    setArranged(saved?.arranged ?? []);
+  };
+
+  const saveStepState = () => {
+    stepHistoryRef.current.set(stepIndex, {
+      result,
+      selected,
+      matched: new Set(matched),
+      arranged: [...arranged],
+    });
+  };
+
+  const goBack = () => {
+    if (!finished && stepIndex === 0) return;
+
+    pauseActivePhraseAudio();
+    if (!finished) saveStepState();
+    const previousIndex = finished ? stepIndex : stepIndex - 1;
+    setFinished(false);
+    setStepIndex(previousIndex);
+    resetStepState(stepHistoryRef.current.get(previousIndex));
+    window.scrollTo({ top: 0 });
   };
 
   const restart = () => {
+    pauseActivePhraseAudio();
     setStepIndex(0);
-    setCorrectCount(0);
-    setGradedCount(0);
+    setStepResults({});
+    stepHistoryRef.current.clear();
     setFinished(false);
     resetStepState();
   };
 
   const advance = () => {
+    pauseActivePhraseAudio();
+    saveStepState();
     if (isLast) {
       setFinished(true);
       onComplete(lesson, correctCount, gradedCount);
@@ -2064,22 +2155,18 @@ function LessonView({
     }
 
     setStepIndex((current) => current + 1);
-    resetStepState();
+    resetStepState(stepHistoryRef.current.get(stepIndex + 1));
+    window.scrollTo({ top: 0 });
   };
 
   const recordResult = (correct: boolean) => {
-    setGradedCount((current) => current + 1);
-
-    if (correct) {
-      setCorrectCount((current) => current + 1);
-      setResult("correct");
-      return;
-    }
-
-    setResult("wrong");
+    if (result !== "idle") return;
+    setStepResults((current) => ({ ...current, [stepIndex]: correct }));
+    setResult(correct ? "correct" : "wrong");
   };
 
   const check = () => {
+    if (result !== "idle") return;
     if (step.type === "choice" && selected) {
       recordResult(selected === step.word.telugu);
     }
@@ -2133,6 +2220,7 @@ function LessonView({
             </span>
           </div>
 
+          <PracticeBackButton onClick={goBack} label="Back to last exercise" />
           <button
             className="primary-button completion-primary"
             onClick={passed ? onExit : restart}
@@ -2434,31 +2522,38 @@ function LessonView({
             )}
           </div>
 
-          {step.type === "introduce" ? (
-            <button className="primary-button" onClick={advance}>
-              Continue
-            </button>
-          ) : step.type === "matching" ? (
-            <button
-              className="primary-button"
-              disabled={!matchingDone}
-              onClick={advance}
-            >
-              Continue
-            </button>
-          ) : result === "idle" ? (
-            <button
-              className="primary-button"
-              disabled={checkDisabled}
-              onClick={check}
-            >
-              Check answer
-            </button>
-          ) : (
-            <button className="primary-button" onClick={advance}>
-              {isLast ? "Finish practice" : "Continue"}
-            </button>
-          )}
+          <div className="lesson-footer-actions">
+            <PracticeBackButton
+              onClick={goBack}
+              disabled={stepIndex === 0}
+              label="Back to previous exercise"
+            />
+            {step.type === "introduce" ? (
+              <button className="primary-button" onClick={advance}>
+                Continue
+              </button>
+            ) : step.type === "matching" ? (
+              <button
+                className="primary-button"
+                disabled={!matchingDone}
+                onClick={advance}
+              >
+                Continue
+              </button>
+            ) : result === "idle" ? (
+              <button
+                className="primary-button"
+                disabled={checkDisabled}
+                onClick={check}
+              >
+                Check answer
+              </button>
+            ) : (
+              <button className="primary-button" onClick={advance}>
+                {isLast ? "Finish practice" : "Continue"}
+              </button>
+            )}
+          </div>
         </div>
       </footer>
     </div>

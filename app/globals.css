@@ -1757,8 +1757,29 @@ svg {
   display: flex;
   min-height: 112px;
   align-items: center;
+  flex-direction: column;
   justify-content: center;
+  gap: 12px;
   padding: 22px;
+}
+
+.practice-back {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+}
+
+.practice-back svg {
+  transform: rotate(180deg);
+}
+
+.practice-back:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 .focus-primary {
@@ -2905,7 +2926,13 @@ svg {
   font-weight: 800;
 }
 
-.lesson-footer-inner > .primary-button {
+.lesson-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.lesson-footer-actions > .primary-button {
   min-width: 170px;
 }
 
@@ -3354,8 +3381,9 @@ svg {
     min-height: 40px;
   }
 
-  .lesson-footer-inner > .primary-button {
-    width: 100%;
+  .lesson-footer-actions > .primary-button {
+    min-width: 0;
+    flex: 1;
   }
 
   .phrase-feedback {

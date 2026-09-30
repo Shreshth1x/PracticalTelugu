@@ -185,6 +185,47 @@ test("focused word and lesson sessions omit global navigation", async () => {
   }
 });
 
+test("practice sessions render Back beside the first action and disable it on the first item", async () => {
+  const cases = [
+    ["/words/daily", "Back to previous phrase", "See when to use it"],
+    ["/lesson/hello-goodbye", "Back to previous exercise", "Continue"],
+  ];
+  const responses = await Promise.all(
+    cases.map(([pathname]) => render(pathname)),
+  );
+
+  for (const [index, [pathname, backLabel, primaryLabel]] of cases.entries()) {
+    const html = await responses[index].text();
+    const buttons = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
+      .map(([, attributes, content]) => ({
+        attributes,
+        text: content.replace(/<[^>]*>/g, "").trim(),
+      }));
+    const backButtons = buttons.filter(({ attributes }) =>
+      attributes.includes(`aria-label="${backLabel}"`),
+    );
+
+    assert.equal(backButtons.length, 1, `${pathname}: one accessible Back control`);
+    const back = backButtons[0];
+    assert.equal(back.text, "Back", `${pathname}: visible Back label`);
+    assert.match(back.attributes, /\btype="button"/, pathname);
+    assert.match(back.attributes, /(?:^|\s)disabled(?:\s|=|$)/, pathname);
+    assert.doesNotMatch(
+      back.attributes,
+      /(?:^|\s)hidden(?:\s|=|$)|aria-hidden="true"/,
+      `${pathname}: Back is not hidden`,
+    );
+
+    const primary = buttons.find(({ text }) => text === primaryLabel);
+    assert.ok(primary, `${pathname}: ${primaryLabel} remains available`);
+    assert.doesNotMatch(
+      primary.attributes,
+      /(?:^|\s)disabled(?:\s|=|$)/,
+      `${pathname}: first forward action is enabled`,
+    );
+  }
+});
+
 test("puts Practice Live in the public navigation and marks its route", async () => {
   const response = await render("/practice-live");
   const html = await response.text();
