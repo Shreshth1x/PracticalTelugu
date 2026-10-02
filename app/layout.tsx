@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import { LearningProvider } from "./LearningProvider";
 import "./globals.css";
+import "./practice-hub.css";
 
 /* eslint-disable @next/next/no-page-custom-font */
 

@@ -89,6 +89,9 @@ function cloneSnapshot(snapshot: LearningSnapshot): LearningSnapshot {
     state: {
       completed: [...snapshot.state.completed],
       confidence: { ...snapshot.state.confidence },
+      ...(snapshot.state.reviewDays
+        ? { reviewDays: Object.fromEntries(Object.entries(snapshot.state.reviewDays).map(([day, result]) => [day, { ...result }])) }
+        : {}),
     },
     preferences: { ...snapshot.preferences },
     savedWords: [...snapshot.savedWords],
@@ -206,7 +209,13 @@ function serializeSnapshot(snapshot: LearningSnapshot) {
 
   return JSON.stringify({
     ...normalized,
-    state: { ...normalized.state, confidence },
+    state: {
+      ...normalized.state,
+      confidence,
+      ...(normalized.state.reviewDays
+        ? { reviewDays: Object.fromEntries(Object.entries(normalized.state.reviewDays).sort(([a], [b]) => a.localeCompare(b))) }
+        : {}),
+    },
   });
 }
 
@@ -822,6 +831,22 @@ export function LearningProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // The in-memory flag still covers this session.
       }
+    }
+    try {
+      const learnerId = user?.id ?? "anonymous";
+      const quizPrefix = `palukulu.quiz-draft.v1:${learnerId}:`;
+      const sentenceKey = `palukulu.sentence-draft.v1:${learnerId}`;
+      const lessonPrefix = `palukulu.lesson-session.v1.${learnerId}.`;
+      const localKeys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index));
+      for (const key of localKeys) {
+        if (key && (key.startsWith(quizPrefix) || key === sentenceKey)) window.localStorage.removeItem(key);
+      }
+      const sessionKeys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index));
+      for (const key of sessionKeys) {
+        if (key?.startsWith(lessonPrefix)) window.sessionStorage.removeItem(key);
+      }
+    } catch {
+      // Reset still clears saved progress when browser draft storage is unavailable.
     }
     setState({ completed: [], confidence: {} });
   }, [user]);

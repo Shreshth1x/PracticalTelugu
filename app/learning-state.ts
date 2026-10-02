@@ -3,6 +3,7 @@ export type Confidence = "learning" | "ready";
 export type SavedState = {
   completed: string[];
   confidence: Record<string, Confidence>;
+  reviewDays?: Record<string, { score: number; total: 10 }>;
 };
 
 export type Preferences = {
@@ -94,6 +95,35 @@ function confidenceFrom(value: unknown): Record<string, Confidence> {
   return confidence;
 }
 
+function reviewDaysFrom(value: unknown): NonNullable<SavedState["reviewDays"]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const days: NonNullable<SavedState["reviewDays"]> = {};
+  for (const [day, result] of Object.entries(value)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    const date = new Date(`${day}T12:00:00Z`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== day) continue;
+    if (!result || typeof result !== "object" || Array.isArray(result)) continue;
+    const candidate = result as Record<string, unknown>;
+    if (candidate.total !== 10 || typeof candidate.score !== "number" || !Number.isInteger(candidate.score) || candidate.score < 0 || candidate.score > 10) continue;
+    days[day] = { score: candidate.score, total: 10 };
+  }
+  return days;
+}
+
+function reviewFields(value: unknown): Pick<SavedState, "reviewDays"> {
+  const reviewDays = reviewDaysFrom(value);
+  return Object.keys(reviewDays).length ? { reviewDays } : {};
+}
+
+function mergedReviewFields(a: SavedState, b: SavedState): Pick<SavedState, "reviewDays"> {
+  const days = reviewDaysFrom(a.reviewDays);
+  for (const [day, result] of Object.entries(reviewDaysFrom(b.reviewDays))) {
+    // Concurrent devices keep one completion per day with deterministic merging.
+    if (!days[day] || result.score > days[day].score) days[day] = result;
+  }
+  return reviewFields(days);
+}
+
 export function parseCurrentProgress(value: unknown): SavedState | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
 
@@ -101,6 +131,7 @@ export function parseCurrentProgress(value: unknown): SavedState | null {
   return {
     completed: uniqueStrings(candidate.completed),
     confidence: confidenceFrom(candidate.confidence),
+    ...reviewFields(candidate.reviewDays),
   };
 }
 
@@ -147,6 +178,7 @@ export function normalizeLearningSnapshot(
     state: {
       completed: uniqueStrings(snapshot.state.completed),
       confidence: confidenceFrom(snapshot.state.confidence),
+      ...reviewFields(snapshot.state.reviewDays),
     },
     preferences: parsePreferences(snapshot.preferences),
     savedWords: parseSavedWords(snapshot.savedWords),
@@ -246,6 +278,7 @@ export function mergeSnapshots(
         ...local.state.completed,
       ]),
       confidence,
+      ...mergedReviewFields(local.state, cloud.state),
     },
     preferences:
       options?.preferences === "cloud"
@@ -273,6 +306,7 @@ export function snapshotAdditionsSince(
             baseline.state.confidence[phraseId] !== confidence,
         ),
       ),
+      ...reviewFields(Object.fromEntries(Object.entries(reviewDaysFrom(current.state.reviewDays)).filter(([day, result]) => baseline.state.reviewDays?.[day]?.score !== result.score))),
     },
     preferences: { ...current.preferences },
     savedWords: current.savedWords.filter(
@@ -306,12 +340,13 @@ export function applySnapshotChanges(
   options?: { explicitReset?: boolean },
 ): LearningSnapshot {
   if (options?.explicitReset) {
-    // A confirmed reset clears the learning path everywhere while keeping
-    // saved phrases, exactly as the reset dialog promises.
+    // The current state already reflects the confirmed reset. Retain any
+    // practice earned afterward while replacing the old cloud learning path.
     return {
       state: {
-        completed: [],
-        confidence: {},
+        completed: uniqueStrings(current.state.completed),
+        confidence: confidenceFrom(current.state.confidence),
+        ...reviewFields(current.state.reviewDays),
       },
       preferences: { ...current.preferences },
       savedWords: applyListChanges(
@@ -329,6 +364,7 @@ export function applySnapshotChanges(
       state: {
         completed: [...target.state.completed],
         confidence: { ...target.state.confidence },
+        ...reviewFields(target.state.reviewDays),
       },
       preferences: { ...target.preferences },
       savedWords: [...target.savedWords],
@@ -360,6 +396,7 @@ export function applySnapshotChanges(
         target.state.completed,
       ),
       confidence,
+      ...mergedReviewFields(current.state, target.state),
     },
     preferences: { ...current.preferences },
     savedWords: applyListChanges(
@@ -374,6 +411,7 @@ export function hasLearningData(snapshot: LearningSnapshot): boolean {
   return (
     snapshot.state.completed.length > 0 ||
     Object.keys(snapshot.state.confidence).length > 0 ||
+    Object.keys(snapshot.state.reviewDays ?? {}).length > 0 ||
     snapshot.savedWords.length > 0
   );
 }

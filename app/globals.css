@@ -110,6 +110,32 @@ svg {
   min-height: 100vh;
 }
 
+.home-review {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px 0;
+  margin: 32px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.home-review h2 { margin: 0 0 8px; font-family: var(--font-display); }
+.home-review p { margin: 0; max-width: 52ch; color: var(--muted); }
+.home-review-streak { display: block; margin-top: 8px; font-weight: 800; color: var(--green); }
+.home-review-actions { display: grid; justify-items: start; gap: 12px; flex-shrink: 0; }
+.focus-header.practice-header-with-exit,
+.lesson-header.practice-header-with-exit { grid-template-columns: auto minmax(0, 1fr) auto; }
+.practice-exit { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.practice-exit svg { width: 18px; height: 18px; transform: rotate(180deg); }
+@media (max-width: 760px) {
+  .home-review { align-items: flex-start; flex-direction: column; }
+  .focus-header.practice-header-with-exit,
+  .lesson-header.practice-header-with-exit { grid-template-columns: minmax(0, 1fr) auto; }
+  .practice-exit { grid-column: 1 / -1; justify-self: start; min-height: 32px; font-size: 13px; }
+}
+
 .top-header {
   position: sticky;
   z-index: 30;
@@ -7144,5 +7170,20 @@ svg {
   .recorder-seal-ring,
   .recorder-progress-track > span {
     transition: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .top-nav {
+    gap: 8px;
+    justify-content: space-between;
+    overflow-x: auto;
+  }
+
+  .top-nav-link {
+    flex: 0 0 auto;
+    padding-right: 0;
+    padding-left: 0;
+    font-size: 12px;
   }
 }

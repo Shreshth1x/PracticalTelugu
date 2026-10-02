@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
+import { transpileModule, ModuleKind, JsxEmit, ScriptTarget } from "typescript";
 import {
   allLessons,
   findLesson,
@@ -187,15 +189,21 @@ test("focused word and lesson sessions omit global navigation", async () => {
 
 test("practice sessions render Back beside the first action and disable it on the first item", async () => {
   const cases = [
-    ["/words/daily", "Back to previous phrase", "See when to use it"],
-    ["/lesson/hello-goodbye", "Back to previous exercise", "Continue"],
+    ["/words/daily", "Back to previous phrase", "See when to use it", "Back to phrasebook"],
+    ["/lesson/hello-goodbye", "Back to previous exercise", "Continue", "Back to situations"],
   ];
   const responses = await Promise.all(
     cases.map(([pathname]) => render(pathname)),
   );
 
-  for (const [index, [pathname, backLabel, primaryLabel]] of cases.entries()) {
+  for (const [index, [pathname, backLabel, primaryLabel, exitLabel]] of cases.entries()) {
     const html = await responses[index].text();
+    const exit = html.match(/<(?:button|a)\b[^>]*aria-label="Leave practice"[^>]*>[\s\S]*?<\/(?:button|a)>/);
+    assert.ok(exit, `${pathname}: unfinished practice has an exit`);
+    assert.match(exit[0], new RegExp(exitLabel), `${pathname}: exit has a visible destination`);
+    assert.doesNotMatch(exit[0], /\sdisabled(?:\s|=|>)/, `${pathname}: exit works on the first item`);
+    if (pathname === "/words/daily") assert.match(exit[0], /href="\/words"/);
+    else assert.match(exit[0], /Your place is saved for this browser session/);
     const buttons = [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
       .map(([, attributes, content]) => ({
         attributes,
@@ -224,6 +232,306 @@ test("practice sessions render Back beside the first action and disable it on th
       `${pathname}: first forward action is enabled`,
     );
   }
+});
+
+// Exercise the actual component handlers without audio, network, or a browser.
+// The hook runner rerenders after effects and events, and shares tab storage
+// between mounts so route exits are covered as well as in-component Back.
+async function createPracticeNavigationHarness(componentName, options = {}) {
+  const source = await readFile(new URL("../app/PalukuApp.tsx", import.meta.url), "utf8");
+  const start = source.indexOf(componentName === "LessonView"
+    ? "type LessonSession ="
+    : "function DailySession(");
+  const end = source.indexOf(componentName === "LessonView"
+    ? "function MissingLesson("
+    : "function SwitchRow(", start);
+  const compiled = transpileModule(source.slice(start, end), {
+    compilerOptions: { module: ModuleKind.CommonJS, jsx: JsxEmit.ReactJSX, target: ScriptTarget.ES2022 },
+  }).outputText;
+  const storage = options.storage ?? new Map();
+  const slots = [];
+  let cursor = 0;
+  let dirty = false;
+  let effects = [];
+  let tree;
+  const runtime = {
+    user: options.user ?? null,
+    authReady: options.authReady ?? true,
+    cloudReady: options.cloudReady ?? true,
+    exits: 0,
+    audioPauses: 0,
+    completions: [],
+    storage,
+  };
+  const props = componentName === "LessonView" ? {
+    lesson: options.lesson,
+    onExit: () => { runtime.exits += 1; },
+    onComplete: (lesson, correct, graded) => {
+      runtime.completions.push({ lessonId: lesson.id, correct, graded });
+    },
+    preferences: { autoplay: false, showPronunciation: true },
+    notify() {},
+  } : {
+    state: options.state ?? { completed: [], confidence: {} },
+    setState: (update) => {
+      props.state = typeof update === "function" ? update(props.state) : update;
+      dirty = true;
+    },
+    preferences: { autoplay: false, showPronunciation: true },
+    notify() {},
+  };
+  const jsx = (type, nodeProps) => ({ type, props: nodeProps ?? {} });
+  const hooks = {
+    useState(initial) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = {
+        value: typeof initial === "function" ? initial() : initial,
+      };
+      return [slots[index].value, (update) => {
+        const value = typeof update === "function"
+          ? update(slots[index].value)
+          : update;
+        if (!Object.is(value, slots[index].value)) {
+          slots[index].value = value;
+          dirty = true;
+        }
+      }];
+    },
+    useRef(initial) {
+      const index = cursor++;
+      if (!slots[index]) slots[index] = { current: initial };
+      return slots[index];
+    },
+    useMemo(compute, dependencies) {
+      const index = cursor++;
+      if (!slots[index] || dependencies.some((value, i) =>
+        !Object.is(value, slots[index].dependencies[i]),
+      )) slots[index] = { value: compute(), dependencies };
+      return slots[index].value;
+    },
+    useEffect(effect, dependencies) {
+      const index = cursor++;
+      if (!slots[index] || dependencies.some((value, i) =>
+        !Object.is(value, slots[index].dependencies[i]),
+      )) {
+        slots[index] = { dependencies };
+        effects.push(effect);
+      }
+    },
+  };
+  const componentStubs = Object.fromEntries([
+    "MayuImage", "PracticeBackButton", "Icon", "ProgressBar", "PhraseStack",
+    "AudioButton", "RegisterAlternatives", "SpokenGuide", "MatchingExercise", "Link",
+  ].map((name) => [name, name]));
+  const context = {
+    ...hooks,
+    ...componentStubs,
+    Map,
+    Set,
+    URLSearchParams,
+    exports: {},
+    require: () => ({ jsx, jsxs: jsx, Fragment: "fragment" }),
+    useLearning: () => runtime,
+    buildSteps: () => options.steps,
+    normalize: (text) => text.toLowerCase().trim().replace(/\s+/g, " "),
+    practicePacks,
+    phraseKey,
+    resolvePracticePath,
+    pauseActivePhraseAudio: () => { runtime.audioPauses += 1; },
+    startPhraseAudio: () => null,
+    window: {
+      location: { search: options.search ?? "" },
+      sessionStorage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: (key) => storage.delete(key),
+      },
+      scrollTo() {},
+    },
+  };
+  runInNewContext(compiled, context);
+  const nodes = (node) => {
+    if (Array.isArray(node)) return node.flatMap((child) => nodes(child));
+    if (!node || typeof node !== "object") return [];
+    return [node, ...nodes(node.props.children)];
+  };
+  const content = (node) => {
+    if (Array.isArray(node)) return node.map(content).join("");
+    if (node == null || typeof node === "boolean") return "";
+    if (typeof node !== "object") return String(node);
+    return content(node.props.children);
+  };
+  const renderComponent = () => {
+    let attempts = 0;
+    do {
+      assert.ok(attempts++ < 12, "component updates settle");
+      dirty = false;
+      effects = [];
+      cursor = 0;
+      tree = context[componentName](props);
+      effects.forEach((effect) => effect());
+    } while (dirty);
+    return tree;
+  };
+  const find = (predicate) => {
+    const match = nodes(tree).find(predicate);
+    assert.ok(match, "requested practice control is rendered");
+    return match;
+  };
+  const click = (node) => {
+    assert.ok(!node.props.disabled, "practice control is enabled");
+    node.props.onClick();
+    renderComponent();
+  };
+  renderComponent();
+  return {
+    runtime,
+    props,
+    render: renderComponent,
+    find,
+    click,
+    button: (text) => find((node) => node.type === "button" && content(node) === text),
+    back: () => find((node) => node.type === "PracticeBackButton"),
+    text: () => content(tree),
+  };
+}
+
+test("unfinished lessons restore answers across exits and score each check once", async () => {
+  const lesson = findLesson("names-introductions");
+  const [firstWord, secondWord] = lesson.words;
+  const steps = [
+    { type: "introduce", word: firstWord },
+    { type: "choice", word: firstWord, options: [firstWord, secondWord] },
+    { type: "arrange", word: { ...secondWord, roman: "my name" }, tokens: ["name", "my"] },
+  ];
+  const options = { lesson, steps, storage: new Map() };
+  let practice = await createPracticeNavigationHarness("LessonView", options);
+  assert.match(practice.text(), /Back to situations/);
+  assert.equal(practice.find((node) => node.props["aria-label"] === "Leave practice").props.title,
+    "Your place is saved for this browser session");
+  practice.click(practice.button("Continue"));
+  practice.click(practice.button(secondWord.telugu));
+  practice.click(practice.button("Check answer"));
+  practice.click(practice.back());
+  practice.click(practice.button("Continue"));
+  assert.match(practice.text(), /Keep this phrase close/);
+  assert.equal(practice.button(secondWord.telugu).props.disabled, true);
+  practice.click(practice.find((node) => node.props["aria-label"] === "Leave practice"));
+  assert.equal(practice.runtime.exits, 1);
+  assert.ok(practice.runtime.audioPauses > 0);
+
+  practice = await createPracticeNavigationHarness("LessonView", options);
+  assert.match(practice.text(), /Keep this phrase close/);
+  practice.click(practice.button("Continue"));
+  practice.click(practice.button("my"));
+  practice.click(practice.find((node) => node.props["aria-label"] === "Leave practice"));
+  practice = await createPracticeNavigationHarness("LessonView", options);
+  const answer = practice.find((node) => node.props["aria-label"] === "Your answer");
+  assert.equal(answer.props.children[0].props.children, "my");
+  practice.click(practice.back());
+  practice.click(practice.button("Continue"));
+  practice.click(practice.button("name"));
+  practice.click(practice.button("Check answer"));
+  practice.click(practice.button("Finish practice"));
+  assert.deepEqual(practice.runtime.completions, [
+    { lessonId: lesson.id, correct: 1, graded: 2 },
+  ]);
+  assert.equal(options.storage.size, 0, "completed attempts do not resume at their recap");
+  practice.click(practice.back());
+  practice.click(practice.button("Finish practice"));
+  assert.equal(practice.runtime.completions.length, 1, "recap Back cannot record completion twice");
+  practice.click(practice.button("Practice again"));
+  practice.click(practice.button("Continue"));
+  assert.equal(practice.button(secondWord.telugu).props.disabled, false);
+  assert.equal(practice.button("Check answer").props.disabled, true);
+});
+
+test("partial matching survives lesson exits and remains ungraded", async () => {
+  const lesson = findLesson("hello-goodbye");
+  const words = lesson.words.slice(0, 2);
+  const steps = [
+    { type: "introduce", word: words[0] },
+    { type: "matching", words, rightOrder: [1, 0] },
+    { type: "true-false", word: words[0], shownMeaning: words[0].english, answer: true },
+  ];
+  const options = { lesson, steps, storage: new Map() };
+  let practice = await createPracticeNavigationHarness("LessonView", options);
+  practice.click(practice.button("Continue"));
+  practice.find((node) => node.type === "MatchingExercise").props.setMatched(new Set([0]));
+  practice.render();
+  practice.click(practice.back());
+  practice.click(practice.button("Continue"));
+  practice.click(practice.find((node) => node.props["aria-label"] === "Leave practice"));
+  practice = await createPracticeNavigationHarness("LessonView", options);
+  const matching = practice.find((node) => node.type === "MatchingExercise");
+  assert.deepEqual([...matching.props.matched], [0]);
+  assert.equal(practice.button("Continue").props.disabled, true);
+  matching.props.setMatched(new Set([0, 1]));
+  practice.render();
+  practice.click(practice.button("Continue"));
+  practice.click(practice.button("Yesఅవును"));
+  practice.click(practice.button("Check answer"));
+  practice.click(practice.button("Finish practice"));
+  assert.deepEqual(practice.runtime.completions, [
+    { lessonId: lesson.id, correct: 1, graded: 1 },
+  ]);
+});
+
+test("lesson drafts stay with their account and early interaction survives authentication", async () => {
+  const lesson = findLesson("hello-goodbye");
+  const word = lesson.words[0];
+  const steps = [
+    { type: "introduce", word },
+    { type: "choice", word, options: [word] },
+  ];
+  const storage = new Map();
+  const practice = await createPracticeNavigationHarness("LessonView", {
+    lesson, steps, storage, user: { id: "first-learner" },
+  });
+  practice.click(practice.button("Continue"));
+  practice.click(practice.button(word.telugu));
+  practice.runtime.user = { id: "second-learner" };
+  practice.render();
+  assert.match(practice.text(), /Say this out loud/);
+  practice.runtime.user = { id: "first-learner" };
+  practice.render();
+  assert.equal(practice.button(word.telugu).props["aria-pressed"], true);
+
+  const early = await createPracticeNavigationHarness("LessonView", {
+    lesson, steps, storage, user: { id: "first-learner" }, authReady: false,
+  });
+  early.click(early.button("Continue"));
+  early.runtime.authReady = true;
+  early.render();
+  assert.equal(early.button(word.telugu).props["aria-pressed"], false,
+    "early practice takes precedence over an older selected answer");
+});
+
+test("daily set links stay open and Back keeps revealed phrases and learning history", async () => {
+  const selectedPack = practicePacks[2];
+  const practice = await createPracticeNavigationHarness("DailySession", {
+    search: `?pack=${selectedPack.id}`,
+    state: { completed: [], confidence: {}, reviewDays: { "2026-10-01": { score: 8, total: 10 } } },
+  });
+  assert.match(practice.text(), new RegExp(`Set 3: ${selectedPack.title}`));
+  assert.match(practice.text(), /Back to phrasebook/);
+  assert.equal(practice.find((node) => node.props["aria-label"] === "Leave practice").props.href, "/words");
+  practice.click(practice.button("See when to use it"));
+  practice.click(practice.button("Ready to use"));
+  practice.click(practice.back());
+  assert.match(practice.text(), /Use it here/);
+  assert.deepEqual(practice.props.state.reviewDays, { "2026-10-01": { score: 8, total: 10 } });
+  assert.equal(practice.props.state.confidence[phraseKey(selectedPack.words[0])], "ready");
+  practice.click(practice.back());
+  assert.match(practice.text(), new RegExp(`Set 2: ${practicePacks[1].title}`));
+  assert.match(practice.text(), /5 of 5/);
+
+  const invalid = await createPracticeNavigationHarness("DailySession", {
+    search: "?pack=unavailable-set",
+    state: { completed: [], confidence: {} },
+  });
+  assert.match(invalid.text(), /Set 1: Your first five/);
+  assert.equal(invalid.back().props.disabled, true);
 });
 
 test("puts Practice Live in the public navigation and marks its route", async () => {
@@ -1665,7 +1973,8 @@ test("keeps prior progress while enforcing the practical Telugu product contract
     productCopy,
     /from beginning|full course|telugu script & sounds|foundationLessons|selectedTrack/i,
   );
-  assert.doesNotMatch(app, /\b(?:xp|streak|energy|dailyGoal)\b/i);
+  // Daily review now has an explicitly requested completion streak.
+  assert.doesNotMatch(app, /\b(?:xp|energy|dailyGoal)\b/i);
   assert.doesNotMatch(app, /showOnboarding|onboarding-screen/);
 
   const exactDisplayFontEmbed =

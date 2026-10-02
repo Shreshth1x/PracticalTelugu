@@ -109,6 +109,26 @@ same conversation instead of ending it. The learner's one- or two-minute limit
 begins only after the browser connects, so setup time cannot consume practice
 time.
 
+The `/practice` space connects a topic-based vocabulary bank, sentence practice,
+and a daily ten-question quiz. The bank reuses the course's recorded phrases,
+bookmarks, and listener guidance. Sentence practice works in both directions
+with word tiles or a typed model answer; it accepts known romanized and Telugu
+script alternatives. It practices the curated phrases rather than evaluating
+arbitrary new sentences. Practice Live remains available for conversation.
+
+Daily quizzes mix meaning, translation, recorded-audio comprehension, and
+explicit familiar/respectful listener comparisons. They prioritize practiced
+and saved phrases, with a starter pool for new learners. The question set and
+unfinished answers stay stable in an account-scoped draft on the device.
+Answering all ten questions earns one activity day, regardless of score;
+logging in or repeating the quiz does not earn extra days. Streaks use local
+calendar dates. Completed quiz days sync in the existing progress JSON when
+signed in; unfinished drafts remain on the device. Lessons also keep an
+account-scoped draft for the current browser session, so learners can leave
+and return without completing the lesson. Every phrase pack is open from the
+home roadmap. Reset progress clears quiz history and streaks along with the
+learning path, while retaining saved phrases.
+
 The token route includes same-origin, request-size, and per-instance rate-limit
 guards (the in-memory IP trackers are capped so spoofed addresses cannot grow
 them without bound). For an open public launch, add a durable platform rate

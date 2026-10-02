@@ -34,6 +34,8 @@ import {
 } from "./learning-state";
 import { useLearning } from "./LearningProvider";
 import PracticeLive from "./practice-live/PracticeLive";
+import PracticeHub from "./PracticeHub";
+import { localDay, streakForDays } from "./review-data";
 import { Wordmark } from "./Wordmark";
 
 export type AppScreen =
@@ -41,6 +43,7 @@ export type AppScreen =
   | "learn"
   | "words"
   | "practice-live"
+  | "practice"
   | "daily"
   | "settings"
   | "lesson";
@@ -694,12 +697,13 @@ function AudioButton({
 const navItems: {
   screen: Extract<
     AppScreen,
-    "today" | "practice-live" | "learn" | "words"
+    "today" | "practice" | "practice-live" | "learn" | "words"
   >;
   href: string;
   label: string;
 }[] = [
   { screen: "today", href: "/", label: "Today" },
+  { screen: "practice", href: "/practice", label: "Practice" },
   { screen: "practice-live", href: "/practice-live", label: "Practice Live" },
   { screen: "learn", href: "/learn", label: "Situations" },
   { screen: "words", href: "/words", label: "Phrasebook" },
@@ -716,7 +720,9 @@ function AppShell({
   const returnPath =
     screen === "learn"
       ? "/learn"
-      : screen === "practice-live"
+      : screen === "practice"
+        ? "/practice"
+        : screen === "practice-live"
         ? "/practice-live"
         : screen === "words"
           ? "/words"
@@ -792,6 +798,15 @@ function TodayView({
   showPronunciation: boolean;
 }) {
   const path = resolvePracticePath(practicePacks, state.confidence);
+  const [reviewDay, setReviewDay] = useState<string | null>(null);
+  useEffect(() => {
+    const update = () => setReviewDay(localDay());
+    update();
+    const timer = window.setInterval(update, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const reviewDone = Boolean(reviewDay && state.reviewDays?.[reviewDay]);
+  const streak = reviewDay ? streakForDays(state.reviewDays, reviewDay) : 0;
   const activePack = practicePacks[path.packIndex];
   const pathPhraseCount = practicePacks.reduce(
     (total, pack) => total + pack.words.length,
@@ -893,6 +908,19 @@ function TodayView({
           </div>
         </section>
 
+        <section className="home-review" aria-labelledby="home-review-title">
+          <div>
+            <h2 id="home-review-title">Make it stick.</h2>
+            <p>{reviewDone ? "Today’s quiz is complete. Keep using your phrases." : "Ten questions a day. Revisit your words, then put them into sentences."}</p>
+            {streak > 0 ? <span className="home-review-streak">{streak} day{streak === 1 ? "" : "s"} in a row</span> : null}
+          </div>
+          <div className="home-review-actions">
+            <Link href="/practice/quiz" className="primary-button">{reviewDone ? "Review today’s quiz" : "Take today’s quiz"}</Link>
+            <Link href="/practice" className="text-link">Open your practice space</Link>
+            <Link href="/practice/sentences" className="text-link">Build a sentence</Link>
+          </div>
+        </section>
+
         <section className="home-roadmap" aria-labelledby="home-roadmap-title">
           <div className="roadmap-heading">
             <div>
@@ -953,20 +981,12 @@ function TodayView({
                     step.status === "current" ? "step" : undefined
                   }
                 >
-                  {step.status === "current" ? (
                     <Link
-                      href="/words/daily"
+                      href={`/words/daily?pack=${step.id}`}
                       aria-label={`Set ${step.index + 1}, ${step.title}, ${accessibleStatus}`}
                     >
                       {stepContent}
                     </Link>
-                  ) : (
-                    <div
-                      aria-label={`Set ${step.index + 1}, ${step.title}, ${accessibleStatus}`}
-                    >
-                      {stepContent}
-                    </div>
-                  )}
                 </li>
               );
             })}
@@ -1244,6 +1264,7 @@ function PhrasebookView({
         <header className="page-header">
           <h1>Find what you need to say.</h1>
           <p>Search, hear, and save the Telugu you actually reach for.</p>
+          <Link href="/practice" className="text-link">Use your vocabulary bank to build sentences and review</Link>
         </header>
 
         <div
@@ -1474,11 +1495,27 @@ function DailySession({
     };
   });
   const [revealed, setRevealed] = useState(false);
+  const revealedPhrasesRef = useRef(new Set<string>());
   const interactedRef = useRef(false);
   const confidenceRef = useRef(state.confidence);
   const pack = practicePacks[position.packIndex];
   const finished = position.wordIndex >= pack.words.length;
   const current = finished ? null : pack.words[position.wordIndex];
+
+  useEffect(() => {
+    // Every set stays open for review, even if an earlier set is unfinished.
+    const selectedPackId = new URLSearchParams(window.location.search).get("pack");
+    const selectedPackIndex = practicePacks.findIndex(
+      (candidate) => candidate.id === selectedPackId,
+    );
+    if (selectedPackIndex < 0) return;
+
+    interactedRef.current = true;
+    // Read the browser URL after hydration so server and client markup agree.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPosition({ packIndex: selectedPackIndex, wordIndex: 0, reviewing: true });
+    setRevealed(false);
+  }, []);
 
   useEffect(() => {
     confidenceRef.current = state.confidence;
@@ -1514,6 +1551,7 @@ function DailySession({
     if (current) {
       const key = phraseKey(current);
       setState((currentState) => ({
+        ...currentState,
         completed: currentState.completed,
         confidence: {
           ...currentState.confidence,
@@ -1522,7 +1560,9 @@ function DailySession({
       }));
     }
 
-    setRevealed(false);
+    if (current && revealed) revealedPhrasesRef.current.add(phraseKey(current));
+    const nextWord = pack.words[position.wordIndex + 1];
+    setRevealed(Boolean(nextWord && revealedPhrasesRef.current.has(phraseKey(nextWord))));
     setPosition((currentPosition) => ({
       ...currentPosition,
       wordIndex: currentPosition.wordIndex + 1,
@@ -1534,22 +1574,20 @@ function DailySession({
 
     interactedRef.current = true;
     pauseActivePhraseAudio();
-    setPosition((currentPosition) => {
-      if (currentPosition.wordIndex === 0 && currentPosition.packIndex === 0) {
-        return currentPosition;
-      }
-      if (currentPosition.wordIndex > 0) {
-        return { ...currentPosition, wordIndex: currentPosition.wordIndex - 1 };
-      }
-
-      const previousPackIndex = currentPosition.packIndex - 1;
-      return {
-        ...currentPosition,
-        packIndex: previousPackIndex,
-        wordIndex: practicePacks[previousPackIndex].words.length - 1,
-      };
+    if (current && revealed) revealedPhrasesRef.current.add(phraseKey(current));
+    const previousPackIndex = position.wordIndex > 0
+      ? position.packIndex
+      : position.packIndex - 1;
+    const previousWordIndex = position.wordIndex > 0
+      ? position.wordIndex - 1
+      : practicePacks[previousPackIndex].words.length - 1;
+    const previousWord = practicePacks[previousPackIndex].words[previousWordIndex];
+    setPosition({
+      ...position,
+      packIndex: previousPackIndex,
+      wordIndex: previousWordIndex,
     });
-    setRevealed(false);
+    setRevealed(revealedPhrasesRef.current.has(phraseKey(previousWord)));
     window.scrollTo({ top: 0 });
   };
 
@@ -1596,13 +1634,16 @@ function DailySession({
 
     return (
       <main className="focus-session recap-session">
-        <header className="focus-header">
+        <header className="focus-header practice-header-with-exit">
           <Link
-            href="/"
-            className="icon-button"
+            href="/words"
+            className="text-button practice-exit"
             aria-label="Leave practice"
+            title="Your marked phrases are saved. You can leave at any time."
+            onClick={pauseActivePhraseAudio}
           >
-            <Icon name="close" />
+            <Icon name="arrow" />
+            <span>Back to phrasebook</span>
           </Link>
           <strong>{pack.title}</strong>
           <span className="focus-header-space" aria-hidden="true" />
@@ -1662,13 +1703,16 @@ function DailySession({
 
   return (
     <main className="focus-session">
-      <header className="focus-header">
+      <header className="focus-header practice-header-with-exit">
         <Link
-          href="/"
-          className="icon-button"
+          href="/words"
+          className="text-button practice-exit"
           aria-label="Leave practice"
+          title="Your marked phrases are saved. You can leave at any time."
+          onClick={pauseActivePhraseAudio}
         >
-          <Icon name="close" />
+          <Icon name="arrow" />
+          <span>Back to phrasebook</span>
         </Link>
         <div className="focus-progress-wrap">
           <strong>
@@ -1740,6 +1784,7 @@ function DailySession({
             className="primary-button focus-primary"
             onClick={() => {
               interactedRef.current = true;
+              revealedPhrasesRef.current.add(phraseKey(current));
               setRevealed(true);
             }}
           >
@@ -1910,8 +1955,8 @@ function SettingsView({
           <div>
             <h2 id="reset-settings">Practice history</h2>
             <p>
-              Clear your practical path, completed situations, and phrase
-              confidence {user ? "on this device and in your backup." : "on this device."}
+              Clear your practical path, completed situations, phrase
+              confidence, daily quizzes, and streak {user ? "on this device and in your backup." : "on this device."}
             </p>
           </div>
           <button
@@ -1934,7 +1979,7 @@ function SettingsView({
           >
             <h2 id="reset-title">Clear your practice history?</h2>
             <p>
-              This removes path progress, completed situations, and confidence
+              This removes path progress, completed situations, confidence, daily quizzes, and your streak
               {user
                 ? " from this device and your account. Saved phrases stay saved."
                 : " stored in this browser. Saved phrases stay saved."}
@@ -2057,6 +2102,66 @@ function MatchingExercise({
   );
 }
 
+type LessonSession = {
+  stepIndex: number;
+  completionRecorded: boolean;
+  history: Map<number, LessonStepState>;
+};
+
+function readLessonSession(storageKey: string, steps: Step[]): LessonSession | null {
+  try {
+    const raw = window.sessionStorage.getItem(storageKey);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (
+      saved.signature !== JSON.stringify(steps) ||
+      !Number.isInteger(saved.stepIndex) ||
+      saved.stepIndex < 0 ||
+      saved.stepIndex >= steps.length ||
+      !Array.isArray(saved.history)
+    ) return null;
+
+    const history = new Map<number, LessonStepState>();
+    for (const entry of saved.history) {
+      const step = steps[entry.index];
+      if (
+        !step ||
+        !Number.isInteger(entry.index) ||
+        !["idle", "correct", "wrong"].includes(entry.result) ||
+        !(entry.selected === null || typeof entry.selected === "string") ||
+        !Array.isArray(entry.arranged) ||
+        !Array.isArray(entry.matched)
+      ) return null;
+      const tokenCount = step.type === "arrange" ? step.tokens.length : 0;
+      const pairCount = step.type === "matching" ? step.words.length : 0;
+      if (
+        entry.arranged.some((index: unknown) =>
+          !Number.isInteger(index) || (index as number) < 0 || (index as number) >= tokenCount,
+        ) ||
+        new Set(entry.arranged).size !== entry.arranged.length ||
+        entry.matched.some((index: unknown) =>
+          !Number.isInteger(index) || (index as number) < 0 || (index as number) >= pairCount,
+        ) ||
+        new Set(entry.matched).size !== entry.matched.length
+      ) return null;
+      history.set(entry.index, {
+        result: entry.result,
+        selected: entry.selected,
+        matched: new Set<number>(entry.matched),
+        arranged: entry.arranged,
+      });
+    }
+    return {
+      stepIndex: saved.stepIndex,
+      completionRecorded: saved.completionRecorded === true,
+      history,
+    };
+  } catch {
+    // Practice remains usable when session storage is unavailable or stale.
+    return null;
+  }
+}
+
 function LessonView({
   lesson,
   onExit,
@@ -2070,7 +2175,11 @@ function LessonView({
   notify: (message: string) => void;
   preferences: Preferences;
 }) {
+  const { user, authReady } = useLearning();
   const steps = useMemo(() => buildSteps(lesson), [lesson]);
+  const sessionKey = `palukulu.lesson-session.v1.${user?.id ?? "anonymous"}.${lesson.id}`;
+  const [restoredSessionKey, setRestoredSessionKey] = useState<string | null>(null);
+  const completionRecordedRef = useRef(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [result, setResult] = useState<ResultState>("idle");
   const [selected, setSelected] = useState<string | null>(null);
@@ -2087,6 +2196,76 @@ function LessonView({
 
   const step = steps[stepIndex];
   const isLast = stepIndex === steps.length - 1;
+
+  useEffect(() => {
+    if (!authReady) return;
+    const saved = readLessonSession(sessionKey, steps);
+    const alreadyStarted = stepIndex > 0 || result !== "idle" || selected !== null ||
+      arranged.length > 0 || matched.size > 0 || finished;
+    // Starting before authentication settles takes precedence over an older draft.
+    if (saved && !(restoredSessionKey === null && alreadyStarted)) {
+      stepHistoryRef.current = saved.history;
+      completionRecordedRef.current = saved.completionRecorded;
+      const active = saved.history.get(saved.stepIndex);
+      const results: Record<number, boolean> = {};
+      saved.history.forEach((snapshot, index) => {
+        if (snapshot.result !== "idle") results[index] = snapshot.result === "correct";
+      });
+      // Browser storage is reconciled after the learner's account is known.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStepResults(results);
+      setStepIndex(saved.stepIndex);
+      setResult(active?.result ?? "idle");
+      setSelected(active?.selected ?? null);
+      setMatched(new Set(active?.matched));
+      setArranged(active?.arranged ?? []);
+      setLeftSelected(null);
+      setRightSelected(null);
+      setMismatch(null);
+      setFinished(false);
+    } else if (restoredSessionKey !== null && restoredSessionKey !== sessionKey) {
+      // Switching accounts cannot carry another learner's unfinished answers over.
+      stepHistoryRef.current.clear();
+      completionRecordedRef.current = false;
+      setStepResults({});
+      setStepIndex(0);
+      setResult("idle");
+      setSelected(null);
+      setMatched(new Set());
+      setArranged([]);
+      setLeftSelected(null);
+      setRightSelected(null);
+      setMismatch(null);
+      setFinished(false);
+    }
+    setRestoredSessionKey(sessionKey);
+    // A session restores once per account/lesson; later answer changes save it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authReady, sessionKey, steps]);
+
+  useEffect(() => {
+    if (restoredSessionKey !== sessionKey) return;
+    try {
+      if (finished) {
+        window.sessionStorage.removeItem(sessionKey);
+        return;
+      }
+      const history = new Map(stepHistoryRef.current);
+      history.set(stepIndex, { result, selected, matched, arranged });
+      window.sessionStorage.setItem(sessionKey, JSON.stringify({
+        signature: JSON.stringify(steps),
+        stepIndex,
+        completionRecorded: completionRecordedRef.current,
+        history: [...history].map(([index, snapshot]) => ({
+          index,
+          ...snapshot,
+          matched: [...snapshot.matched],
+        })),
+      }));
+    } catch {
+      // In-session Back still works if the browser disables session storage.
+    }
+  }, [restoredSessionKey, sessionKey, steps, stepIndex, result, selected, matched, arranged, finished]);
 
   useEffect(() => {
     if (
@@ -2140,6 +2319,7 @@ function LessonView({
     pauseActivePhraseAudio();
     setStepIndex(0);
     setStepResults({});
+    completionRecordedRef.current = false;
     stepHistoryRef.current.clear();
     setFinished(false);
     resetStepState();
@@ -2150,7 +2330,10 @@ function LessonView({
     saveStepState();
     if (isLast) {
       setFinished(true);
-      onComplete(lesson, correctCount, gradedCount);
+      if (!completionRecordedRef.current) {
+        completionRecordedRef.current = true;
+        onComplete(lesson, correctCount, gradedCount);
+      }
       return;
     }
 
@@ -2163,6 +2346,12 @@ function LessonView({
     if (result !== "idle") return;
     setStepResults((current) => ({ ...current, [stepIndex]: correct }));
     setResult(correct ? "correct" : "wrong");
+  };
+
+  const leavePractice = () => {
+    pauseActivePhraseAudio();
+    saveStepState();
+    onExit();
   };
 
   const check = () => {
@@ -2223,7 +2412,7 @@ function LessonView({
           <PracticeBackButton onClick={goBack} label="Back to last exercise" />
           <button
             className="primary-button completion-primary"
-            onClick={passed ? onExit : restart}
+            onClick={passed ? leavePractice : restart}
           >
             {passed ? "Back to situations" : "Practice again"}
           </button>
@@ -2256,13 +2445,17 @@ function LessonView({
 
   return (
     <div className="lesson-shell">
-      <header className="lesson-header">
+      <header className="lesson-header practice-header-with-exit">
         <button
-          onClick={onExit}
-          className="icon-button"
+          type="button"
+          onClick={leavePractice}
+          className="text-button practice-exit"
           aria-label="Leave practice"
+          title="Your place is saved for this browser session"
         >
-          <Icon name="close" />
+          <Icon name="arrow" />
+          <span>Back to situations</span>
+          <span className="sr-only">. Your place is saved for this browser session.</span>
         </button>
         <div className="lesson-header-center">
           <strong>{lesson.title}</strong>
@@ -2575,9 +2768,11 @@ function MissingLesson({ onExit }: { onExit: () => void }) {
 export default function PalukuApp({
   screen = "today",
   initialLessonId,
+  initialPracticeTab,
 }: {
   screen?: AppScreen;
   initialLessonId?: string;
+  initialPracticeTab?: "bank" | "sentences" | "quiz";
 }) {
   const router = useRouter();
   const {
@@ -2632,6 +2827,7 @@ export default function PalukuApp({
     if (!passed) return;
 
     setState((current) => ({
+      ...current,
       completed: current.completed.includes(lesson.id)
         ? current.completed
         : [...current.completed, lesson.id],
@@ -2644,7 +2840,7 @@ export default function PalukuApp({
   if (screen === "lesson") {
     content = activeLesson ? (
       <LessonView
-        key={`${activeLesson.id}-${hydrated ? "restored" : "initial"}`}
+        key={activeLesson.id}
         lesson={activeLesson}
         onExit={goToSituations}
         onComplete={completeLesson}
@@ -2676,6 +2872,8 @@ export default function PalukuApp({
         notify={notify}
       />
     );
+  } else if (screen === "practice") {
+    content = <AppShell screen="practice"><PracticeHub notify={notify} initialTab={initialPracticeTab} /></AppShell>;
   } else if (screen === "practice-live") {
     content = (
       <AppShell screen="practice-live">
